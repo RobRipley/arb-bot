@@ -1,0 +1,2 @@
+[workspace]
+members = ["src/arb_bot"]

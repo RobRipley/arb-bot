@@ -1,0 +1,14 @@
+service : {
+  get_config: () -> (record {
+    owner: principal;
+    rumi_amm: principal;
+    rumi_3pool: principal;
+    icpswap_pool: principal;
+    icp_ledger: principal;
+    ckusdc_ledger: principal;
+    three_usd_ledger: principal;
+    min_spread_bps: nat32;
+    max_trade_size_usd: nat64;
+    paused: bool;
+  }) query;
+}

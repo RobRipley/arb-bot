@@ -1,0 +1,15 @@
+{
+  "canisters": {
+    "arb_bot": {
+      "type": "rust",
+      "package": "arb_bot",
+      "candid": "src/arb_bot/arb_bot.did"
+    }
+  },
+  "defaults": {
+    "build": {
+      "packtool": ""
+    }
+  },
+  "version": 1
+}
