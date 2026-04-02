@@ -190,3 +190,34 @@ async fn manual_arb_cycle() {
     require_owner();
     arb::run_arb_cycle().await;
 }
+
+// ─── HTTP Dashboard ───
+
+#[derive(CandidType, Deserialize)]
+pub struct HttpRequest {
+    pub method: String,
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+#[derive(CandidType)]
+pub struct HttpResponse {
+    pub status_code: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+const DASHBOARD_HTML: &str = include_str!("dashboard.html");
+
+#[query]
+fn http_request(_req: HttpRequest) -> HttpResponse {
+    HttpResponse {
+        status_code: 200,
+        headers: vec![
+            ("Content-Type".to_string(), "text/html; charset=utf-8".to_string()),
+            ("Cache-Control".to_string(), "no-cache".to_string()),
+        ],
+        body: DASHBOARD_HTML.as_bytes().to_vec(),
+    }
+}
