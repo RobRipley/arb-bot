@@ -1,14 +1,86 @@
-service : {
-  get_config: () -> (record {
-    owner: principal;
-    rumi_amm: principal;
-    rumi_3pool: principal;
-    icpswap_pool: principal;
-    icp_ledger: principal;
-    ckusdc_ledger: principal;
-    three_usd_ledger: principal;
-    min_spread_bps: nat32;
-    max_trade_size_usd: nat64;
-    paused: bool;
-  }) query;
+type BotConfig = record {
+  owner: principal;
+  rumi_amm: principal;
+  rumi_3pool: principal;
+  icpswap_pool: principal;
+  icp_ledger: principal;
+  ckusdc_ledger: principal;
+  three_usd_ledger: principal;
+  min_spread_bps: nat32;
+  max_trade_size_usd: nat64;
+  paused: bool;
+};
+
+type Direction = variant {
+  RumiToIcpswap;
+  IcpswapToRumi;
+};
+
+type Token = variant {
+  ThreeUSD;
+  CkUSDC;
+};
+
+type TradeRecord = record {
+  timestamp: nat64;
+  direction: Direction;
+  icp_amount: nat64;
+  input_amount: nat64;
+  input_token: Token;
+  output_amount: nat64;
+  output_token: Token;
+  virtual_price: nat64;
+  ledger_fees_usd: int64;
+  net_profit_usd: int64;
+  spread_bps: nat32;
+};
+
+type TradeSummary = record {
+  total_trades: nat64;
+  total_net_profit_usd: int64;
+  total_ledger_fees_usd: int64;
+  avg_profit_per_trade_usd: int64;
+  rumi_to_icpswap_count: nat64;
+  rumi_to_icpswap_profit: int64;
+  icpswap_to_rumi_count: nat64;
+  icpswap_to_rumi_profit: int64;
+};
+
+type ErrorRecord = record {
+  timestamp: nat64;
+  message: text;
+};
+
+type HttpRequest = record {
+  method: text;
+  url: text;
+  headers: vec record { text; text };
+  body: blob;
+};
+
+type HttpResponse = record {
+  status_code: nat16;
+  headers: vec record { text; text };
+  body: blob;
+};
+
+type InitArgs = record {
+  config: BotConfig;
+};
+
+service : (InitArgs) -> {
+  // Query methods
+  get_config: () -> (BotConfig) query;
+  get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;
+  get_summary: () -> (TradeSummary) query;
+  get_errors: (nat64, nat64) -> (vec ErrorRecord) query;
+  http_request: (HttpRequest) -> (HttpResponse) query;
+
+  // Admin methods
+  set_config: (BotConfig) -> ();
+  pause: () -> ();
+  resume: () -> ();
+  setup_approvals: () -> ();
+  withdraw: (principal, principal, nat64) -> ();
+  manual_arb_cycle: () -> ();
 }
