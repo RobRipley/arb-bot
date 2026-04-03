@@ -5,14 +5,17 @@ use serde::Serialize;
 
 #[derive(CandidType, Deserialize, Debug)]
 pub enum AmmError {
-    PoolNotFound,
-    InsufficientLiquidity,
-    SlippageExceeded,
-    ZeroAmount,
-    TransferFailed(String),
-    Unauthorized,
+    InsufficientOutput { actual: Nat, expected_min: Nat },
     PoolPaused,
+    PoolCreationClosed,
+    PoolNotFound,
+    ZeroAmount,
+    DisproportionateLiquidity,
+    FeeBpsOutOfRange,
+    InvalidToken,
+    InsufficientLpShares { available: Nat, required: Nat },
     MathOverflow,
+    TransferFailed { token: String, reason: String },
 }
 
 #[derive(CandidType, Deserialize, Debug)]
@@ -26,14 +29,22 @@ pub enum AmmResult<T> {
 // ─── Rumi 3Pool Types ───
 
 #[derive(CandidType, Deserialize, Debug, Clone)]
+pub struct TokenInfo {
+    pub decimals: u8,
+    pub precision_mul: u64,
+    pub ledger_id: Principal,
+    pub symbol: String,
+}
+
+#[derive(CandidType, Deserialize, Debug, Clone)]
 pub struct PoolStatus {
     pub balances: Vec<Nat>,
     pub lp_total_supply: Nat,
-    pub current_a: Nat,
+    pub current_a: u64,
     pub virtual_price: Nat,
-    pub swap_fee_bps: Nat,
-    pub admin_fee_bps: Nat,
-    pub tokens: Vec<Principal>,
+    pub swap_fee_bps: u64,
+    pub admin_fee_bps: u64,
+    pub tokens: Vec<TokenInfo>,
 }
 
 #[derive(CandidType, Deserialize, Debug)]
@@ -70,8 +81,11 @@ pub enum IcpSwapResult {
 }
 
 #[derive(CandidType, Deserialize, Debug)]
-pub struct IcpSwapError {
-    pub message: String,
+pub enum IcpSwapError {
+    CommonError,
+    InsufficientFunds,
+    InternalError(String),
+    UnsupportedToken(String),
 }
 
 // ─── Price Data ───
@@ -83,11 +97,15 @@ pub struct PriceData {
 }
 
 impl PriceData {
+    /// Convert Rumi's 3USD-denominated ICP price to USD with 6 decimals.
+    /// rumi_icp_price_3usd_native is in 8 decimals (3USD per 1 ICP).
+    /// virtual_price is in 18 decimals (≈1.057e18 means 1 3USD = $1.057).
+    /// Result: (3usd_amount * vp) / 1e18 gives USD in 8 decimals, then / 100 for 6 decimals.
     pub fn rumi_price_usd_6dec(&self) -> u64 {
         let usd_e8s = self.rumi_icp_price_3usd_native as u128
             * self.virtual_price as u128
-            / 100_000_000;
-        (usd_e8s / 100) as u64
+            / 1_000_000_000_000_000_000; // divide by 1e18 (VP precision)
+        (usd_e8s / 100) as u64 // 8-dec → 6-dec
     }
 
     pub fn icpswap_price_usd_6dec(&self) -> u64 {
@@ -151,7 +169,7 @@ pub async fn fetch_icpswap_price(
     let result: Result<(IcpSwapResult,), _> = ic_cdk::call(icpswap_pool, "quote", (args,)).await;
     match result {
         Ok((IcpSwapResult::Ok(amount),)) => Ok(nat_to_u64(&amount)),
-        Ok((IcpSwapResult::Err(e),)) => Err(format!("ICPSwap quote error: {}", e.message)),
+        Ok((IcpSwapResult::Err(e),)) => Err(format!("ICPSwap quote error: {:?}", e)),
         Err((code, msg)) => Err(format!("ICPSwap call failed ({:?}): {}", code, msg)),
     }
 }
@@ -176,6 +194,107 @@ pub async fn fetch_all_prices(
     })
 }
 
+/// Like fetch_rumi_price but with a custom input amount instead of hardcoded 1 ICP.
+/// token_in is the ledger of the token being sold (e.g. 3USD ledger or ICP ledger).
+pub async fn fetch_rumi_quote_for_amount(
+    rumi_amm: Principal,
+    pool_id: &str,
+    token_in: Principal,
+    amount: u64,
+) -> Result<u64, String> {
+    let amount_in = Nat::from(amount);
+    let result: Result<(AmmResult<Nat>,), _> = ic_cdk::call(
+        rumi_amm, "get_quote", (pool_id.to_string(), token_in, amount_in),
+    ).await;
+    match result {
+        Ok((AmmResult::Ok(amount_out),)) => Ok(nat_to_u64(&amount_out)),
+        Ok((AmmResult::Err(e),)) => Err(format!("Rumi AMM quote error: {:?}", e)),
+        Err((code, msg)) => Err(format!("Rumi AMM call failed ({:?}): {}", code, msg)),
+    }
+}
+
+/// Like fetch_icpswap_price but with a custom input amount.
+pub async fn fetch_icpswap_quote_for_amount(
+    icpswap_pool: Principal,
+    amount: u64,
+    zero_for_one: bool,
+) -> Result<u64, String> {
+    #[derive(CandidType, Serialize)]
+    struct SwapArgs {
+        #[serde(rename = "amountIn")]
+        amount_in: String,
+        #[serde(rename = "zeroForOne")]
+        zero_for_one: bool,
+        #[serde(rename = "amountOutMinimum")]
+        amount_out_minimum: String,
+    }
+    let args = SwapArgs {
+        amount_in: amount.to_string(),
+        zero_for_one,
+        amount_out_minimum: "0".to_string(),
+    };
+    let result: Result<(IcpSwapResult,), _> = ic_cdk::call(icpswap_pool, "quote", (args,)).await;
+    match result {
+        Ok((IcpSwapResult::Ok(out),)) => Ok(nat_to_u64(&out)),
+        Ok((IcpSwapResult::Err(e),)) => Err(format!("ICPSwap quote error: {:?}", e)),
+        Err((code, msg)) => Err(format!("ICPSwap call failed ({:?}): {}", code, msg)),
+    }
+}
+
 pub fn nat_to_u64(n: &Nat) -> u64 {
     n.0.to_string().parse::<u64>().unwrap_or(0)
+}
+
+// ─── ICPSwap Pool Metadata ───
+
+#[derive(CandidType, Deserialize, Debug, Clone)]
+pub struct IcpSwapToken {
+    pub address: String,
+    pub standard: String,
+}
+
+#[derive(CandidType, Deserialize, Debug, Clone)]
+#[allow(non_snake_case)]
+pub struct PoolMetadata {
+    pub token0: IcpSwapToken,
+    pub token1: IcpSwapToken,
+    pub fee: Nat,
+    pub key: String,
+    pub liquidity: Nat,
+    pub sqrtPriceX96: Nat,
+    pub tick: candid::Int,
+}
+
+#[derive(CandidType, Deserialize, Debug)]
+pub enum IcpSwapMetadataResult {
+    #[serde(rename = "ok")]
+    Ok(PoolMetadata),
+    #[serde(rename = "err")]
+    Err(IcpSwapError),
+}
+
+/// Query ICPSwap pool metadata to determine if ICP is token0 or token1
+pub async fn fetch_icpswap_token_ordering(
+    icpswap_pool: Principal,
+    icp_ledger: Principal,
+) -> Result<bool, String> {
+    let result: Result<(IcpSwapMetadataResult,), _> =
+        ic_cdk::call(icpswap_pool, "metadata", ()).await;
+    match result {
+        Ok((IcpSwapMetadataResult::Ok(meta),)) => {
+            let icp_text = icp_ledger.to_text();
+            if meta.token0.address == icp_text {
+                Ok(true) // ICP is token0
+            } else if meta.token1.address == icp_text {
+                Ok(false) // ICP is token1
+            } else {
+                Err(format!(
+                    "ICP ledger {} not found in pool tokens: token0={}, token1={}",
+                    icp_text, meta.token0.address, meta.token1.address
+                ))
+            }
+        }
+        Ok((IcpSwapMetadataResult::Err(e),)) => Err(format!("ICPSwap metadata error: {:?}", e)),
+        Err((code, msg)) => Err(format!("ICPSwap metadata call failed ({:?}): {}", code, msg)),
+    }
 }

@@ -3,7 +3,7 @@ use serde::Serialize;
 use icrc_ledger_types::icrc1::account::Account;
 use icrc_ledger_types::icrc2::approve::{ApproveArgs, ApproveError};
 
-use crate::prices::{self, AmmResult, nat_to_u64};
+use crate::prices::{self, nat_to_u64};
 
 #[derive(Debug)]
 pub enum SwapError {
@@ -37,9 +37,15 @@ struct IcpSwapDepositAndSwapArgs {
 }
 
 #[derive(CandidType, Deserialize, Debug)]
-struct SwapResult {
+struct SwapOutput {
     amount_out: Nat,
     fee: Nat,
+}
+
+#[derive(CandidType, Deserialize, Debug)]
+enum RumiSwapResult {
+    Ok(SwapOutput),
+    Err(prices::AmmError),
 }
 
 pub async fn rumi_swap(
@@ -49,13 +55,13 @@ pub async fn rumi_swap(
     amount_in: u64,
     min_amount_out: u64,
 ) -> Result<u64, SwapError> {
-    let result: Result<(AmmResult<SwapResult>,), _> = ic_cdk::call(
+    let result: Result<(RumiSwapResult,), _> = ic_cdk::call(
         rumi_amm, "swap",
         (pool_id.to_string(), token_in, Nat::from(amount_in), Nat::from(min_amount_out)),
     ).await;
     match result {
-        Ok((AmmResult::Ok(r),)) => Ok(nat_to_u64(&r.amount_out)),
-        Ok((AmmResult::Err(e),)) => Err(SwapError::SwapFailed(format!("{:?}", e))),
+        Ok((RumiSwapResult::Ok(r),)) => Ok(nat_to_u64(&r.amount_out)),
+        Ok((RumiSwapResult::Err(e),)) => Err(SwapError::SwapFailed(format!("{:?}", e))),
         Err((code, msg)) => Err(SwapError::SwapFailed(format!("{:?}: {}", code, msg))),
     }
 }
@@ -80,8 +86,66 @@ pub async fn icpswap_swap(
     ).await;
     match result {
         Ok((prices::IcpSwapResult::Ok(amount),)) => Ok(nat_to_u64(&amount)),
-        Ok((prices::IcpSwapResult::Err(e),)) => Err(SwapError::SwapFailed(format!("ICPSwap: {}", e.message))),
+        Ok((prices::IcpSwapResult::Err(e),)) => Err(SwapError::SwapFailed(format!("ICPSwap: {:?}", e))),
         Err((code, msg)) => Err(SwapError::SwapFailed(format!("ICPSwap call ({:?}): {}", code, msg))),
+    }
+}
+
+// ─── 3pool Operations ───
+
+pub async fn pool_add_liquidity(
+    rumi_3pool: Principal,
+    amounts: Vec<Nat>,
+    min_lp: u64,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "add_liquidity", (amounts, Nat::from(min_lp))).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(lp_minted),)) => Ok(nat_to_u64(&lp_minted)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool add_liquidity error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool add_liquidity call failed ({:?}): {}", code, msg)),
+    }
+}
+
+pub async fn pool_remove_one_coin(
+    rumi_3pool: Principal,
+    lp_amount: u64,
+    coin_index: u8,
+    min_out: u64,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "remove_one_coin", (Nat::from(lp_amount), coin_index, Nat::from(min_out))).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(amount_out),)) => Ok(nat_to_u64(&amount_out)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool remove_one_coin error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool remove_one_coin call failed ({:?}): {}", code, msg)),
+    }
+}
+
+pub async fn pool_calc_deposit(
+    rumi_3pool: Principal,
+    amounts: Vec<Nat>,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "calc_add_liquidity_query", (amounts, Nat::from(0u64))).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(lp_out),)) => Ok(nat_to_u64(&lp_out)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool calc error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool calc call failed ({:?}): {}", code, msg)),
+    }
+}
+
+pub async fn pool_calc_redeem(
+    rumi_3pool: Principal,
+    lp_amount: u64,
+    coin_index: u8,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "calc_remove_one_coin_query", (Nat::from(lp_amount), coin_index)).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(amount_out),)) => Ok(nat_to_u64(&amount_out)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool calc error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool calc call failed ({:?}): {}", code, msg)),
     }
 }
 

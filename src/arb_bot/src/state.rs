@@ -14,6 +14,11 @@ pub struct BotConfig {
     pub min_spread_bps: u32,
     pub max_trade_size_usd: u64,
     pub paused: bool,
+    /// Whether ICP is token0 in the ICPSwap pool (resolved from pool metadata at init)
+    pub icpswap_icp_is_token0: bool,
+    /// Additional admin principals (e.g. Internet Identity) that can call admin methods
+    #[serde(default)]
+    pub admins: Vec<Principal>,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -49,11 +54,22 @@ pub struct ErrorRecord {
     pub message: String,
 }
 
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub struct ActivityRecord {
+    pub timestamp: u64,
+    pub category: String,
+    pub message: String,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct BotState {
     pub config: BotConfig,
     pub trades: Vec<TradeRecord>,
     pub errors: Vec<ErrorRecord>,
+    #[serde(default)]
+    pub activity_log: Vec<ActivityRecord>,
+    #[serde(default)]
+    pub token_ordering_resolved: bool,
 }
 
 impl Default for BotState {
@@ -70,9 +86,13 @@ impl Default for BotState {
                 min_spread_bps: 50,
                 max_trade_size_usd: 100_000_000,
                 paused: true,
+                icpswap_icp_is_token0: true,
+                admins: Vec::new(),
             },
             trades: Vec::new(),
             errors: Vec::new(),
+            activity_log: Vec::new(),
+            token_ordering_resolved: false,
         }
     }
 }
@@ -89,6 +109,16 @@ where F: FnOnce(&mut BotState) -> R {
 pub fn read_state<F, R>(f: F) -> R
 where F: FnOnce(&BotState) -> R {
     STATE.with(|s| f(s.borrow().as_ref().expect("State not initialized")))
+}
+
+pub fn log_activity(category: &str, message: &str) {
+    mutate_state(|s| {
+        s.activity_log.push(ActivityRecord {
+            timestamp: ic_cdk::api::time(),
+            category: category.to_string(),
+            message: message.to_string(),
+        });
+    });
 }
 
 pub fn init_state(state: BotState) {

@@ -9,6 +9,8 @@ type BotConfig = record {
   min_spread_bps: nat32;
   max_trade_size_usd: nat64;
   paused: bool;
+  icpswap_icp_is_token0: bool;
+  admins: vec principal;
 };
 
 type Direction = variant {
@@ -51,6 +53,12 @@ type ErrorRecord = record {
   message: text;
 };
 
+type ActivityRecord = record {
+  timestamp: nat64;
+  category: text;
+  message: text;
+};
+
 type HttpRequest = record {
   method: text;
   url: text;
@@ -64,6 +72,40 @@ type HttpResponse = record {
   body: blob;
 };
 
+type PriceInfo = record {
+  rumi_icp_price_3usd: nat64;
+  rumi_icp_price_usd_6dec: nat64;
+  icpswap_icp_price_ckusdc: nat64;
+  virtual_price: nat64;
+  spread_bps: int32;
+};
+
+type CandidateResult = record {
+  input_amount: nat64;
+  icp_amount: nat64;
+  output_amount: nat64;
+  profit_usd: int64;
+};
+
+type DryRunResult = record {
+  should_trade: bool;
+  direction: opt Direction;
+  spread_bps: int32;
+  rumi_price_usd: nat64;
+  icpswap_price_usd: nat64;
+  virtual_price: nat64;
+  optimal_input_amount: nat64;
+  optimal_input_token: opt Token;
+  expected_icp_amount: nat64;
+  expected_output_amount: nat64;
+  expected_output_token: opt Token;
+  expected_profit_usd: int64;
+  candidates_evaluated: vec CandidateResult;
+  balance_3usd: nat64;
+  balance_ckusdc: nat64;
+  message: text;
+};
+
 type InitArgs = record {
   config: BotConfig;
 };
@@ -74,13 +116,29 @@ service : (InitArgs) -> {
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;
   get_summary: () -> (TradeSummary) query;
   get_errors: (nat64, nat64) -> (vec ErrorRecord) query;
+  get_activity_log: (nat64, nat64) -> (vec ActivityRecord) query;
   http_request: (HttpRequest) -> (HttpResponse) query;
+
+  // Auth
+  is_admin: (principal) -> (bool) query;
+  add_admin: (principal) -> ();
+  remove_admin: (principal) -> ();
+
+  // Prices
+  get_prices: () -> (PriceInfo);
 
   // Admin methods
   set_config: (BotConfig) -> ();
   pause: () -> ();
   resume: () -> ();
-  setup_approvals: () -> ();
+  setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
   manual_arb_cycle: () -> ();
+  dry_run_arb_cycle: () -> (DryRunResult);
+
+  // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
+  pool_deposit: (nat8, nat64, nat64) -> ();
+  pool_redeem: (nat8, nat64, nat64) -> ();
+  pool_quote_deposit: (nat8, nat64) -> (record { estimated_output: nat64 });
+  pool_quote_redeem: (nat8, nat64) -> (record { estimated_output: nat64 });
 }
