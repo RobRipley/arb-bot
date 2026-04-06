@@ -199,6 +199,7 @@ pub struct PriceInfo {
 
 #[update]
 async fn get_prices() -> PriceInfo {
+    require_admin();
     let config = state::read_state(|s| s.config.clone());
     let pool_id = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
     let strategy_a_fut = prices::fetch_all_prices(
@@ -241,7 +242,12 @@ async fn get_prices() -> PriceInfo {
 #[update]
 fn set_config(config: BotConfig) {
     require_admin();
-    state::mutate_state(|s| s.config = config);
+    state::mutate_state(|s| {
+        let original_owner = s.config.owner;
+        s.config = config;
+        // Preserve owner — only the canister controller can change ownership
+        s.config.owner = original_owner;
+    });
 }
 
 #[update]
@@ -425,6 +431,7 @@ async fn pool_redeem(coin_index: u8, lp_amount: u64, min_out: u64) {
 /// Quote how much 3USD LP you'd get from depositing a stablecoin.
 #[update]
 async fn pool_quote_deposit(coin_index: u8, amount: u64) -> PoolQuote {
+    require_admin();
     if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
 
     let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
@@ -440,6 +447,7 @@ async fn pool_quote_deposit(coin_index: u8, amount: u64) -> PoolQuote {
 /// Quote how much stablecoin you'd get from redeeming 3USD LP.
 #[update]
 async fn pool_quote_redeem(coin_index: u8, lp_amount: u64) -> PoolQuote {
+    require_admin();
     if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
 
     let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);

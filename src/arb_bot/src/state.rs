@@ -163,6 +163,14 @@ pub fn log_activity(category: &str, message: &str) {
             category: category.to_string(),
             message: message.to_string(),
         });
+        // Prune old "arb_skip" entries (the every-3-min "no profitable trade" noise)
+        // while keeping all meaningful activity (trades, drains, admin actions, etc.)
+        let skip_count = s.activity_log.iter().filter(|a| a.category == "arb_skip").count();
+        if skip_count > 500 {
+            s.activity_log.retain(|a| a.category != "arb_skip");
+            // Keep only the most recent batch by re-adding nothing — they were just removed.
+            // The next 500 skips will accumulate naturally.
+        }
     });
 }
 
@@ -202,6 +210,13 @@ pub fn load_from_stable_memory() {
     }
     let mut bytes = vec![0u8; len];
     ic_cdk::api::stable::stable64_read(8, &mut bytes);
-    let state: BotState = serde_json::from_slice(&bytes).expect("Failed to deserialize state");
-    init_state(state);
+    match serde_json::from_slice::<BotState>(&bytes) {
+        Ok(state) => init_state(state),
+        Err(e) => {
+            // Don't panic — a bricked canister is worse than lost history.
+            // Log the raw error bytes so we can diagnose, then start fresh.
+            ic_cdk::println!("WARNING: stable memory deserialization failed: {}. Starting with default state.", e);
+            init_state(BotState::default());
+        }
+    }
 }

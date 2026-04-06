@@ -211,6 +211,7 @@ pub async fn run_arb_cycle() {
             Direction::IcpswapToRumi => execute_ckusdc_to_icusd(&config, &dry_run).await,
         }
     }
+
 }
 
 // ─── Dry Run: Compute Optimal Trade ───
@@ -319,9 +320,11 @@ async fn find_optimal_rumi_to_icpswap(
     }
 
     // Round 2: Quote ICPSwap (ICP→ckUSDC) for all ICP amounts in parallel
+    // Subtract ICP transfer fees: output fee from leg 1 + input fee for leg 2
     let icpswap_futs: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
+        let usable = icp_amount.saturating_sub(ICP_FEE * 2);
         prices::fetch_icpswap_quote_for_amount(
-            config.icpswap_pool, icp_amount, config.icpswap_icp_is_token0,
+            config.icpswap_pool, usable, config.icpswap_icp_is_token0,
         )
     }).collect();
     let icpswap_results = futures::future::join_all(icpswap_futs).await;
@@ -407,9 +410,11 @@ async fn find_optimal_icpswap_to_rumi(
     }
 
     // Round 2: Quote Rumi (ICP→3USD) for all ICP amounts in parallel
+    // Subtract ICP transfer fees: output fee from leg 1 + input fee for leg 2
     let rumi_futs: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
+        let usable = icp_amount.saturating_sub(ICP_FEE * 2);
         prices::fetch_rumi_quote_for_amount(
-            config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, icp_amount,
+            config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, usable,
         )
     }).collect();
     let rumi_results = futures::future::join_all(rumi_futs).await;
@@ -560,9 +565,11 @@ async fn find_optimal_icusd_to_ckusdc(
     }
 
     // Round 2: Quote ckUSDC/ICP pool (ICP→ckUSDC)
+    // Subtract ICP transfer fees between legs
     let futs2: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
+        let usable = icp_amount.saturating_sub(ICP_FEE * 2);
         prices::fetch_icpswap_quote_for_amount(
-            config.icpswap_pool, icp_amount, config.icpswap_icp_is_token0,
+            config.icpswap_pool, usable, config.icpswap_icp_is_token0,
         )
     }).collect();
     let results2 = futures::future::join_all(futs2).await;
@@ -649,9 +656,11 @@ async fn find_optimal_ckusdc_to_icusd(
     }
 
     // Round 2: Quote icUSD/ICP pool (ICP→icUSD)
+    // Subtract ICP transfer fees between legs
     let futs2: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
+        let usable = icp_amount.saturating_sub(ICP_FEE * 2);
         prices::fetch_icpswap_quote_for_amount(
-            config.icpswap_icusd_pool, icp_amount, config.icpswap_icusd_icp_is_token0,
+            config.icpswap_icusd_pool, usable, config.icpswap_icusd_icp_is_token0,
         )
     }).collect();
     let results2 = futures::future::join_all(futs2).await;
@@ -840,7 +849,7 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, dry_run: &DryRunResu
     ));
 
     // Fetch VP for 3USD USD valuation
-    let vp = prices::fetch_virtual_price(config.rumi_3pool).await.unwrap_or(100_000_000_000_000_000_0);
+    let vp = prices::fetch_virtual_price(config.rumi_3pool).await.unwrap_or(1_000_000_000_000_000_000);
 
     let three_usd_out = match swaps::rumi_swap(
         config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, usable_icp, min_3usd_out,
@@ -1086,6 +1095,17 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     let (rumi_res, icpswap_res, vp_res) =
         futures::future::join3(rumi_quote, icpswap_quote, vp).await;
 
+    // Compute slippage-protected min outputs from quotes BEFORE consuming Results.
+    // Quotes are for 1 ICP; scale to drain_amount and apply slippage tolerance.
+    let rumi_min_out = rumi_res.as_ref().ok().map(|&quote_per_icp| {
+        let scaled = quote_per_icp as u128 * drain_amount as u128 / 100_000_000;
+        (scaled * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64
+    }).unwrap_or(0);
+    let icpswap_min_out = icpswap_res.as_ref().ok().map(|&quote_per_icp| {
+        let scaled = quote_per_icp as u128 * drain_amount as u128 / 100_000_000;
+        (scaled * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64
+    }).unwrap_or(0);
+
     let rumi_usd = rumi_res.ok().and_then(|r| {
         vp_res.as_ref().ok().map(|vp| (r as u128 * *vp as u128 / VP_PRECISION / 100) as u64)
     });
@@ -1111,15 +1131,15 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     }
 
     // Compute VP for 3USD valuation (use 1.0 as fallback)
-    let vp_val = vp_res.as_ref().copied().unwrap_or(100_000_000_000_000_000_0);
+    let vp_val = vp_res.as_ref().copied().unwrap_or(1_000_000_000_000_000_000);
 
     // Try best-rate DEX first, fall back to the other on failure
-    let try_rumi = |amt: u64| swaps::rumi_swap(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, amt, 0);
-    let try_icpswap = |amt: u64| swaps::icpswap_swap(config.icpswap_pool, amt, config.icpswap_icp_is_token0, 0, ICP_FEE, CKUSDC_FEE);
+    let try_rumi = |amt: u64, min_out: u64| swaps::rumi_swap(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, amt, min_out);
+    let try_icpswap = |amt: u64, min_out: u64| swaps::icpswap_swap(config.icpswap_pool, amt, config.icpswap_icp_is_token0, min_out, ICP_FEE, CKUSDC_FEE);
 
     match (rumi_usd, icpswap_usd) {
         (Some(r), Some(i)) if r >= i => {
-            match try_rumi(drain_amount).await {
+            match try_rumi(drain_amount, rumi_min_out).await {
                 Ok(out) => {
                     let usd_out = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
                     record_drain_leg("Rumi", drain_amount, "3USD", out, usd_out, 0);
@@ -1127,9 +1147,11 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
                 Err(e) => {
                     state::log_activity("drain", &format!("Rumi drain failed ({}), falling back to ICPSwap", e));
                     let remaining = fetch_balance(config.icp_ledger).await.unwrap_or(0);
-                    if remaining > ICP_FEE * 2 {
-                        let fallback_amount = remaining - ICP_FEE;
-                        match try_icpswap(fallback_amount).await {
+                    let fallback_drainable = remaining.saturating_sub(ICP_RESERVE);
+                    if fallback_drainable > ICP_FEE * 2 {
+                        let fallback_amount = fallback_drainable - ICP_FEE;
+                        // Use 0 slippage for fallback — we already failed once, just get out
+                        match try_icpswap(fallback_amount, 0).await {
                             Ok(out) => record_drain_leg("ICPSwap", fallback_amount, "ckUSDC", out, out as i64, CKUSDC_FEE as i64),
                             Err(e2) => state::log_activity("drain", &format!("ICPSwap fallback also failed: {}", e2)),
                         }
@@ -1138,13 +1160,13 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
             }
         }
         (_, Some(_)) => {
-            match try_icpswap(drain_amount).await {
+            match try_icpswap(drain_amount, icpswap_min_out).await {
                 Ok(out) => record_drain_leg("ICPSwap", drain_amount, "ckUSDC", out, out as i64, CKUSDC_FEE as i64),
                 Err(e) => state::log_activity("drain", &format!("Drain via ICPSwap failed: {}", e)),
             }
         }
         (Some(_), None) => {
-            match try_rumi(drain_amount).await {
+            match try_rumi(drain_amount, rumi_min_out).await {
                 Ok(out) => {
                     let usd_out = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
                     record_drain_leg("Rumi", drain_amount, "3USD", out, usd_out, 0);
