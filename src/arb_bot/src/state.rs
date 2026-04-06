@@ -74,6 +74,29 @@ pub struct ActivityRecord {
     pub message: String,
 }
 
+/// Snapshot of all prices, balances, and spreads captured every arb cycle.
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub struct CycleSnapshot {
+    pub timestamp: u64,
+    // Strategy A prices
+    pub rumi_icp_price_3usd: u64,        // 3USD per 1 ICP (8 dec)
+    pub rumi_icp_price_usd: u64,         // USD per 1 ICP (6 dec)
+    pub icpswap_icp_price_ckusdc: u64,   // ckUSDC per 1 ICP (6 dec)
+    pub virtual_price: u64,              // 3pool VP (18 dec)
+    pub spread_a_bps: i32,               // Strategy A spread
+    // Strategy B prices
+    pub icpswap_icp_price_icusd: u64,    // icUSD per 1 ICP (8 dec), 0 if N/A
+    pub spread_b_bps: i32,               // Strategy B spread, 0 if N/A
+    // Balances (native decimals)
+    pub balance_icp: u64,
+    pub balance_3usd: u64,
+    pub balance_ckusdc: u64,
+    pub balance_icusd: u64,
+    // Trade activity
+    pub traded: bool,
+    pub strategy_used: String,           // "", "A", or "B"
+}
+
 /// Per-leg trade record. Each swap (Leg 1, Leg 2, drain) gets its own entry.
 /// P&L is computed by summing stablecoin inflows vs outflows across all legs.
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -110,6 +133,8 @@ pub struct BotState {
     pub icusd_token_ordering_resolved: bool,
     #[serde(default)]
     pub trade_legs: Vec<TradeLeg>,
+    #[serde(default)]
+    pub snapshots: Vec<CycleSnapshot>,
 }
 
 impl Default for BotState {
@@ -138,6 +163,7 @@ impl Default for BotState {
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             trade_legs: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 }

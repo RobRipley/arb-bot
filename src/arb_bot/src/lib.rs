@@ -6,7 +6,7 @@ mod prices;
 mod swaps;
 mod arb;
 
-use state::{BotConfig, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord};
+use state::{BotConfig, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord, CycleSnapshot};
 
 #[derive(CandidType, Deserialize)]
 pub struct InitArgs {
@@ -180,6 +180,16 @@ fn get_activity_log(offset: u64, limit: u64) -> Vec<ActivityRecord> {
         let start = (len as u64).saturating_sub(offset + limit) as usize;
         let end = (len as u64).saturating_sub(offset) as usize;
         s.activity_log[start..end].to_vec()
+    })
+}
+
+#[query]
+fn get_snapshots(offset: u64, limit: u64) -> Vec<CycleSnapshot> {
+    state::read_state(|s| {
+        let len = s.snapshots.len();
+        let start = (len as u64).saturating_sub(offset + limit) as usize;
+        let end = (len as u64).saturating_sub(offset) as usize;
+        s.snapshots[start..end].to_vec()
     })
 }
 

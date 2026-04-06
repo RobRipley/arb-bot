@@ -5,488 +5,754 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Rumi Arb Bot</title>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap');
+
     :root {
-      --bg: #0d1117;
-      --bg2: #161b22;
-      --bg3: #21262d;
-      --border: #30363d;
-      --text: #e6edf3;
-      --text-muted: #8b949e;
-      --green: #3fb950;
-      --red: #f85149;
-      --blue: #58a6ff;
-      --yellow: #d29922;
-      --purple: #bc8cff;
+      /* Surfaces — cold blue-black, shifting only lightness */
+      --base: #0c0e14;
+      --surface-1: #12151e;
+      --surface-2: #181c28;
+      --surface-3: #1e2333;
+      --surface-input: #0a0c11;
+
+      /* Borders — rgba, disappear when you're not looking */
+      --border: rgba(255, 255, 255, 0.06);
+      --border-emphasis: rgba(255, 255, 255, 0.10);
+      --border-focus: rgba(0, 212, 170, 0.4);
+
+      /* Text — four levels */
+      --text-primary: #e8ecf4;
+      --text-secondary: #8b93a8;
+      --text-tertiary: #5a6278;
+      --text-muted: #3d4456;
+
+      /* Accent — electric teal */
+      --accent: #00d4aa;
+      --accent-dim: rgba(0, 212, 170, 0.15);
+      --accent-hover: #00eabc;
+
+      /* Semantic */
+      --profit: #00d4aa;
+      --loss: #ff4757;
+      --warning: #f0b232;
+      --info: #5b8af0;
+
+      /* Typography */
+      --font-ui: 'IBM Plex Sans', -apple-system, sans-serif;
+      --font-data: 'IBM Plex Mono', 'SF Mono', monospace;
+
+      /* Spacing — 4px base */
+      --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px;
+      --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+      /* Radii — sharp, technical */
+      --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px;
     }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
+
     body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      line-height: 1.5;
-      padding: 20px;
-      max-width: 1200px;
-      margin: 0 auto;
+      background: var(--base);
+      color: var(--text-primary);
+      font-family: var(--font-ui);
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      height: 100vh;
     }
-    header {
+
+    /* Noise grain overlay */
+    body::before {
+      content: '';
+      pointer-events: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      background: var(--base);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+    .sidebar-brand {
+      font-family: var(--font-ui);
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-primary);
+      padding: var(--sp-6);
+    }
+    .nav-item {
+      display: block;
+      padding: 10px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      cursor: pointer;
+      border-left: 2px solid transparent;
+      transition: 0.15s;
+      text-decoration: none;
+    }
+    .nav-item:hover {
+      color: var(--text-primary);
+      background: rgba(255, 255, 255, 0.03);
+    }
+    .nav-item.active {
+      color: var(--accent);
+      border-left-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .sidebar-bottom {
+      padding: var(--sp-4);
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-3);
+    }
+    .sidebar-status {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      display: inline-block;
+      background: var(--text-muted);
+    }
+    .status-dot.running { background: var(--profit); }
+    .status-dot.paused { background: var(--warning); }
+    .sidebar-principal {
+      font-family: var(--font-data);
+      font-size: 11px;
+      color: var(--text-tertiary);
+      word-break: break-all;
+      cursor: pointer;
+    }
+
+    /* ── Content ── */
+    .content {
+      overflow-y: auto;
+      padding: var(--sp-6);
+    }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: var(--sp-5);
+    }
+    .card-header {
+      font-family: var(--font-ui);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-tertiary);
+      margin-bottom: var(--sp-3);
+    }
+    .stat-row {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 16px 0;
-      border-bottom: 1px solid var(--border);
-      margin-bottom: 24px;
-      flex-wrap: wrap;
-      gap: 12px;
+      padding: var(--sp-1) 0;
     }
-    header h1 { font-size: 1.4em; }
-    .status-badge {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 0.85em;
-      font-weight: 600;
+    .stat-label {
+      font-family: var(--font-ui);
+      font-size: 12px;
+      color: var(--text-secondary);
     }
-    .status-running { background: var(--green); color: #000; }
-    .status-paused { background: var(--yellow); color: #000; }
-    .status-unknown { background: var(--bg3); color: var(--text-muted); }
+    .stat-value {
+      font-family: var(--font-data);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-primary);
+    }
 
     /* ── Buttons ── */
-    button, .btn {
-      background: var(--bg3);
-      color: var(--text);
-      border: 1px solid var(--border);
+    .btn {
+      background: var(--surface-2);
+      color: var(--text-primary);
+      border: 1px solid var(--border-emphasis);
       padding: 8px 16px;
-      border-radius: 8px;
+      border-radius: var(--radius-md);
       cursor: pointer;
-      font-size: 0.9em;
+      font-family: var(--font-ui);
+      font-size: 13px;
       font-weight: 500;
-      transition: all 0.15s ease;
-      position: relative;
+      transition: 0.15s;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
       min-height: 36px;
     }
-    button:hover:not(:disabled) { background: var(--border); transform: translateY(-1px); }
-    button:active:not(:disabled) { transform: translateY(0); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    button.primary { background: var(--blue); color: #000; border-color: var(--blue); font-weight: 600; }
-    button.primary:hover:not(:disabled) { background: #79b8ff; }
-    button.danger { background: var(--red); color: #fff; border-color: var(--red); }
-    button.danger:hover:not(:disabled) { background: #ff6e6e; }
-    button.success { background: var(--green); color: #000; border-color: var(--green); font-weight: 600; }
-    button.success:hover:not(:disabled) { background: #56d364; }
-    .btn-sm { padding: 5px 12px; font-size: 0.8em; min-height: 30px; }
+    .btn:hover:not(:disabled) {
+      background: var(--surface-3);
+      border-color: var(--border-emphasis);
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: var(--accent); color: #0c0e14; border-color: var(--accent); font-weight: 600; }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-danger { background: var(--loss); color: #fff; border-color: var(--loss); }
+    .btn-success { background: var(--profit); color: #0c0e14; border-color: var(--profit); }
+    .btn-sm { padding: 5px 12px; font-size: 12px; min-height: 30px; }
+    .btn-ghost { background: transparent; border-color: var(--border); }
     .btn-block { width: 100%; }
-    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: currentColor; border-radius: 50%; animation: spin 0.6s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* ── Cards & Layout ── */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .card {
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .card h2 {
-      font-size: 0.8em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      margin-bottom: 12px;
-      letter-spacing: 0.08em;
-    }
-    .stat-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 4px 0;
-    }
-    .stat-label { color: var(--text-muted); font-size: 0.9em; }
-    .stat-value { font-family: 'SF Mono', 'Menlo', monospace; font-weight: 600; }
-    .positive { color: var(--green); }
-    .negative { color: var(--red); }
-    .divider { border-top: 1px solid var(--border); margin: 10px 0; }
 
     /* ── Forms ── */
     select, input[type="text"], input[type="number"] {
-      background: var(--bg);
+      background: var(--surface-input);
       border: 1px solid var(--border);
-      color: var(--text);
+      color: var(--text-primary);
       padding: 10px 12px;
-      border-radius: 8px;
-      font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 0.9em;
+      border-radius: var(--radius-md);
+      font-family: var(--font-data);
+      font-size: 13px;
       width: 100%;
       transition: border-color 0.15s;
     }
-    select:focus, input:focus { outline: none; border-color: var(--blue); }
-    label { font-size: 0.8em; color: var(--text-muted); display: block; margin-bottom: 4px; }
-
-    /* ── Swap Widget ── */
-    .swap-box {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 8px;
+    select:focus, input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-dim);
     }
-    .swap-box-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    .swap-box-header span { font-size: 0.8em; color: var(--text-muted); }
-    .swap-box-header .balance-link {
-      cursor: pointer;
-      font-family: 'SF Mono', 'Menlo', monospace;
-      font-size: 0.8em;
-      color: var(--blue);
-    }
-    .swap-box-header .balance-link:hover { text-decoration: underline; }
-    .swap-input-row {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-    }
-    .swap-input-row input {
-      flex: 1;
-      font-size: 1.3em;
-      background: transparent;
-      border: none;
-      padding: 4px 0;
-    }
-    .swap-input-row input:focus { outline: none; border: none; }
-    .swap-input-row select {
-      width: auto;
-      min-width: 110px;
-      font-size: 0.95em;
-      padding: 8px 10px;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    label {
+      font-family: var(--font-ui);
+      font-size: 11px;
       font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-tertiary);
+      display: block;
+      margin-bottom: var(--sp-1);
     }
-    .swap-arrow {
-      display: flex;
-      justify-content: center;
-      margin: -4px 0;
-      position: relative;
-      z-index: 1;
-    }
-    .swap-arrow button {
-      width: 36px; height: 36px;
-      border-radius: 10px;
-      padding: 0;
-      font-size: 1.1em;
-      background: var(--bg2);
-      border: 2px solid var(--border);
-      min-height: unset;
-    }
-    .swap-quote {
-      text-align: center;
-      padding: 8px;
-      font-size: 0.85em;
-      color: var(--text-muted);
-      min-height: 32px;
-    }
-    .swap-quote strong { color: var(--text); }
 
     /* ── Table ── */
-    table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-    th {
-      text-align: left; padding: 8px; border-bottom: 2px solid var(--border);
-      color: var(--text-muted); font-weight: 600; white-space: nowrap;
+    .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .data-table th {
+      text-align: left;
+      padding: var(--sp-2);
+      border-bottom: 1px solid var(--border-emphasis);
+      font-family: var(--font-ui);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-tertiary);
+      white-space: nowrap;
     }
-    td {
-      padding: 8px; border-bottom: 1px solid var(--border);
-      font-family: 'SF Mono', 'Menlo', monospace; font-size: 0.95em;
+    .data-table td {
+      padding: var(--sp-2);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-data);
+      font-size: 12px;
     }
     .table-wrap { overflow-x: auto; }
-    .pagination { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+    .pagination {
+      display: flex;
+      gap: var(--sp-2);
+      justify-content: center;
+      align-items: center;
+      margin-top: var(--sp-3);
+    }
 
-    /* ── Collapsible ── */
-    .collapsible-header {
-      cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+    /* ── Chips ── */
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 5px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: var(--font-ui);
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-secondary);
+      transition: 0.15s;
     }
-    .collapsible-header:hover { color: var(--blue); }
-    .collapsible-body { display: none; margin-top: 12px; }
-    .collapsible-body.open { display: block; }
-    .error-entry {
-      padding: 8px; margin-bottom: 4px; background: var(--bg); border-radius: 6px;
-      font-family: 'SF Mono', 'Menlo', monospace; font-size: 0.8em; word-break: break-all;
-    }
-    .error-ts { color: var(--text-muted); margin-right: 8px; }
-
-    /* ── Admin ── */
-    #admin-section { display: none; }
-    #admin-section.visible { display: block; }
-    .admin-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
-    }
-    .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip:hover { border-color: var(--border-emphasis); color: var(--text-primary); }
+    .chip.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0, 212, 170, 0.3); }
+    .chip-sm { padding: 3px 10px; font-size: 11px; }
 
     /* ── Toast ── */
     #toast {
-      position: fixed; bottom: 20px; right: 20px;
-      background: var(--bg2); border: 1px solid var(--border);
-      padding: 14px 24px; border-radius: 10px;
-      display: none; font-size: 0.9em; z-index: 100;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--surface-1);
+      border: 1px solid var(--border);
+      padding: 14px 24px;
+      border-radius: var(--radius-lg);
+      display: none;
+      font-size: 13px;
+      z-index: 100;
       max-width: 400px;
     }
-    #toast.error { border-color: var(--red); background: #1a0f0f; }
-    #toast.success { border-color: var(--green); background: #0f1a0f; }
+    #toast.error { border-color: var(--loss); background: #1a0f0f; }
+    #toast.success { border-color: var(--accent); background: #0f1a14; }
 
-    #login-info { font-size: 0.85em; color: var(--text-muted); cursor: pointer; }
-    .my-wallet { border-top: 1px solid var(--border); margin-top: 12px; padding-top: 12px; display: none; }
-    .my-wallet.visible { display: block; }
+    /* ── Spinner ── */
+    .spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Utilities ── */
+    .positive { color: var(--profit); }
+    .negative { color: var(--loss); }
+    .collapsible-header {
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .collapsible-body { display: none; }
+    .collapsible-body.open { display: block; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+    .admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--sp-4); }
+    .btn-group { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+    .divider { border-top: 1px solid var(--border); margin: var(--sp-3) 0; }
+
+    /* ── Hero Strip ── */
+    .hero-strip-content { display: flex; justify-content: space-between; align-items: center; }
+    .hero-number { font-family: var(--font-data); font-size: 36px; font-weight: 600; letter-spacing: -0.02em; }
+    .hero-right { display: flex; flex-direction: column; gap: var(--sp-1); text-align: right; }
+    .hero-stat { display: flex; gap: var(--sp-4); justify-content: flex-end; align-items: center; }
+
+    /* ── Spread Thermometer ── */
+    .spread-row { }
+    .spread-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }
+    .spread-label { font-family: var(--font-ui); font-size: 12px; color: var(--text-secondary); }
+    .spread-value { font-family: var(--font-data); font-size: 13px; font-weight: 500; }
+    .spread-gauge-track { height: 6px; background: var(--surface-3); border-radius: 3px; position: relative; }
+    .spread-gauge-fill { height: 100%; border-radius: 3px; position: absolute; top: 0; transition: all 0.4s ease; background: var(--text-muted); }
+    .spread-gauge-center { position: absolute; left: 50%; top: -3px; width: 1px; height: 12px; background: var(--text-muted); }
+    .spread-gauge-threshold { position: absolute; top: -4px; width: 1px; height: 14px; background: var(--text-tertiary); }
+    .chart-tabs, .chart-ranges { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+
+    /* ── Activity Entries ── */
+    .activity-entry {
+      padding: var(--sp-2);
+      margin-bottom: 2px;
+      background: var(--surface-input);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-data);
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .activity-ts { color: var(--text-tertiary); margin-right: var(--sp-2); }
+    .activity-cat { font-weight: 600; margin-right: var(--sp-2); font-size: 10px; text-transform: uppercase; font-family: var(--font-ui); }
+
+    /* ── Skeleton Shimmer ── */
+    .skeleton {
+      background: linear-gradient(90deg, var(--surface-2) 25%, var(--surface-3) 50%, var(--surface-2) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+      border-radius: var(--radius-sm);
+      display: inline-block;
+    }
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .skeleton-text { width: 80px; height: 14px; }
+    .skeleton-lg { width: 120px; height: 36px; }
+
+    /* ── Content Header ── */
+    .content-header {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: var(--sp-2);
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+      }
+      .sidebar {
+        flex-direction: row;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        overflow-x: auto;
+      }
+      .sidebar-brand { display: none; }
+      .sidebar-top { display: flex; align-items: center; }
+      .sidebar-nav { display: flex; flex-direction: row; }
+      .nav-item {
+        border-left: none;
+        border-bottom: 2px solid transparent;
+        padding: 10px 16px;
+        white-space: nowrap;
+      }
+      .nav-item.active {
+        border-left-color: transparent;
+        border-bottom-color: var(--accent);
+      }
+      .sidebar-bottom {
+        display: none;
+      }
+      .overview-grid { grid-template-columns: 1fr !important; }
+      .admin-grid { grid-template-columns: 1fr !important; }
+      .data-table-wrap { overflow-x: auto; }
+      #chart-container { height: 350px !important; }
+      .hero-strip-content { flex-direction: column; gap: var(--sp-4); }
+      .hero-right { flex-direction: row; gap: var(--sp-6); }
+    }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Rumi Arb Bot</h1>
-      <span id="bot-status" class="status-badge status-unknown">loading...</span>
+  <aside class="sidebar">
+    <div class="sidebar-top">
+      <div class="sidebar-brand">Rumi Arb Bot</div>
+      <nav class="sidebar-nav">
+        <a class="nav-item active" data-view="overview">Overview</a>
+        <a class="nav-item" data-view="charts">Charts</a>
+        <a class="nav-item" data-view="trades">Trades</a>
+        <a class="nav-item" data-view="admin" id="nav-admin" style="display:none">Admin</a>
+      </nav>
     </div>
-    <div style="display:flex;gap:12px;align-items:center;">
-      <span id="login-info" title="Click to copy" onclick="copyPrincipal()"></span>
-      <button id="login-btn" onclick="doLogin()">Login with II</button>
+    <div class="sidebar-bottom">
+      <div class="sidebar-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-label">Loading...</span>
+      </div>
+      <div id="principal-display" class="sidebar-principal"></div>
+      <button class="btn btn-sm btn-ghost" id="auth-btn" style="width:100%">Login with II</button>
     </div>
-  </header>
+  </aside>
 
-  <main>
-    <!-- Stats row -->
-    <div class="grid">
-      <div class="card">
-        <h2>Bot Balances</h2>
-        <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
-        <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
-        <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
-        <div class="my-wallet" id="my-wallet-section">
-          <h2>Your II Wallet</h2>
-          <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="my-bal-3usd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="my-bal-ckusdc">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="my-bal-ckusdt">--</span></div>
-          <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="my-bal-icusd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="my-bal-icp">--</span></div>
-          <div class="btn-group" style="margin-top:10px;">
-            <button class="btn-sm" onclick="doDeposit('3usd')">Deposit 3USD</button>
-            <button class="btn-sm" onclick="doDeposit('ckusdc')">Deposit ckUSDC</button>
-            <button class="btn-sm" onclick="doDeposit('ckusdt')">Deposit ckUSDT</button>
-            <button class="btn-sm" onclick="doDeposit('icusd')">Deposit icUSD</button>
-            <button class="btn-sm" onclick="doDeposit('icp')">Deposit ICP</button>
+  <main class="content">
+    <div class="content-header">
+      <span id="last-updated" class="text-muted" style="font-size:11px;font-family:var(--font-data);color:var(--text-tertiary)"></span>
+    </div>
+    <section class="view active" id="view-overview">
+      <!-- Hero P&L Strip -->
+      <div class="card hero-strip">
+        <div class="card-header">NET P&L</div>
+        <div class="hero-strip-content">
+          <div class="hero-left">
+            <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
+          </div>
+          <div class="hero-right">
+            <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">DEXes</span><span class="stat-value" id="hero-dex"><span class="skeleton skeleton-text"></span></span></div>
           </div>
         </div>
       </div>
 
-      <div class="card">
-        <h2>Live Prices</h2>
-        <div style="font-size:0.75em;color:var(--text-muted);margin-bottom:6px;">STRATEGY A &mdash; Rumi vs ICPSwap</div>
-        <div class="stat-row"><span class="stat-label">Rumi ICP/3USD</span><span class="stat-value" id="price-rumi-3usd">--</span></div>
-        <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-rumi-usd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap">--</span></div>
-        <div class="stat-row"><span class="stat-label">3pool Virtual Price</span><span class="stat-value" id="price-vp">--</span></div>
-        <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value" id="price-spread">--</span></div>
-        <div class="divider"></div>
-        <div style="font-size:0.75em;color:var(--text-muted);margin-bottom:6px;">STRATEGY B &mdash; icUSD/ICP vs ckUSDC/ICP</div>
-        <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-icusd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap-b">--</span></div>
-        <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value" id="price-spread-b">--</span></div>
+      <!-- Spread Thermometer -->
+      <div class="card" style="margin-top:var(--sp-4)">
+        <div class="card-header">SPREAD</div>
+        <div class="spread-row">
+          <div class="spread-meta">
+            <span class="spread-label">Strategy A — Rumi vs ICPSwap</span>
+            <span class="spread-value" id="spread-a-value">--</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-a-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-a-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-a-thresh-r"></div>
+          </div>
+        </div>
+        <div class="spread-row" style="margin-top:var(--sp-4)">
+          <div class="spread-meta">
+            <span class="spread-label">Strategy B — icUSD vs ckUSDC</span>
+            <span class="spread-value" id="spread-b-value">--</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-b-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-b-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-b-thresh-r"></div>
+          </div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Performance</h2>
-        <div class="stat-row"><span class="stat-label">Net P&amp;L</span><span class="stat-value" id="sum-pnl">--</span></div>
-        <div class="stat-row"><span class="stat-label">USD In (cost)</span><span class="stat-value" id="sum-usd-in">--</span></div>
-        <div class="stat-row"><span class="stat-label">USD Out (revenue)</span><span class="stat-value" id="sum-usd-out">--</span></div>
-        <div class="stat-row"><span class="stat-label">Total Fees</span><span class="stat-value" id="sum-fees">--</span></div>
-        <div class="divider"></div>
-        <div class="stat-row"><span class="stat-label">Leg 1 / Leg 2 / Drain</span><span class="stat-value" id="sum-legs">--</span></div>
-        <div class="stat-row"><span class="stat-label">Rumi / ICPSwap</span><span class="stat-value" id="sum-dex">--</span></div>
-      </div>
-    </div>
+      <!-- Live Prices + Balances -->
+      <div class="grid-2" style="margin-top:var(--sp-4)">
+        <div class="card">
+          <div class="card-header">LIVE PRICES</div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy A</div>
+          <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-rumi-usd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap">--</span></div>
+          <div class="stat-row"><span class="stat-label">3pool Virtual Price</span><span class="stat-value" id="price-vp">--</span></div>
+          <div class="divider"></div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy B</div>
+          <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-icusd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap-b">--</span></div>
+          <div id="prices-login-hint" style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-3)">Login to refresh prices ↻</div>
+        </div>
 
-    <!-- Trade history -->
-    <div class="card" style="margin-bottom:24px;">
-      <h2>Trade History</h2>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th>
-            <th>USD In</th><th>USD Out</th><th>Fees</th><th>Profit</th>
-          </tr></thead>
-          <tbody id="trades-body">
-            <tr><td colspan="9" style="text-align:center;color:var(--text-muted);">Loading...</td></tr>
-          </tbody>
-        </table>
+        <div class="card">
+          <div class="card-header">BALANCES</div>
+          <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
+          <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
+          <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
+          <div class="divider"></div>
+          <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
+        </div>
       </div>
-      <div class="pagination">
-        <button class="btn-sm" id="trades-prev" onclick="tradesPrev()" disabled>&laquo; Prev</button>
-        <span id="trades-page" style="line-height:30px;color:var(--text-muted);font-size:0.85em;">Page 1</span>
-        <button class="btn-sm" id="trades-next" onclick="tradesNext()">Next &raquo;</button>
-      </div>
-    </div>
 
-    <!-- Errors -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="collapsible-header" onclick="toggleErrors()">
-        <h2 style="margin:0;">Error Log</h2>
-        <span id="errors-toggle">&#9650;</span>
+      <!-- Recent Trades -->
+      <div class="card" style="margin-top:var(--sp-4)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+          <div class="card-header" style="margin-bottom:0">RECENT TRADES</div>
+          <span style="font-size:12px;color:var(--accent);cursor:pointer" onclick="switchView('trades')">View all →</span>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th><th>Profit</th></tr></thead>
+            <tbody id="recent-trades-body">
+              <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-      <div class="collapsible-body open" id="errors-body">
-        <div id="errors-list" style="max-height:400px;overflow-y:auto;">
-          <div style="color:var(--text-muted);">Loading...</div>
+    </section>
+    <section class="view" id="view-charts">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--sp-3);margin-bottom:var(--sp-4)">
+        <div class="chart-tabs">
+          <button class="chip active" data-chart="spread" onclick="switchChart('spread')">Spread</button>
+          <button class="chip" data-chart="prices" onclick="switchChart('prices')">Prices</button>
+          <button class="chip" data-chart="pnl" onclick="switchChart('pnl')">P&amp;L</button>
+          <button class="chip" data-chart="balances" onclick="switchChart('balances')">Balances</button>
+          <button class="chip" data-chart="vp" onclick="switchChart('vp')">Virtual Price</button>
+        </div>
+        <div class="chart-ranges">
+          <button class="chip chip-sm" data-range="3600" onclick="switchRange(3600)">1H</button>
+          <button class="chip chip-sm" data-range="21600" onclick="switchRange(21600)">6H</button>
+          <button class="chip chip-sm active" data-range="86400" onclick="switchRange(86400)">24H</button>
+          <button class="chip chip-sm" data-range="604800" onclick="switchRange(604800)">7D</button>
+          <button class="chip chip-sm" data-range="2592000" onclick="switchRange(2592000)">30D</button>
+          <button class="chip chip-sm" data-range="0" onclick="switchRange(0)">All</button>
+        </div>
+      </div>
+      <div class="card" style="padding:var(--sp-3)">
+        <div id="chart-container" style="height:500px;width:100%"></div>
+      </div>
+      <div id="chart-footer" style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-2);text-align:right"></div>
+      <div id="chart-empty" style="display:none;text-align:center;padding:var(--sp-10);color:var(--text-tertiary)">
+        <div style="font-size:24px;margin-bottom:var(--sp-3)">📊</div>
+        <div style="font-size:14px;font-weight:500;color:var(--text-secondary);margin-bottom:var(--sp-2)">Collecting data...</div>
+        <div style="font-size:12px">The bot records prices, balances, and spreads every 3 minutes.<br>Charts will appear as data accumulates.</div>
+      </div>
+    </section>
+    <section class="view" id="view-trades">
+      <!-- Filter chips -->
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:var(--sp-3);margin-bottom:var(--sp-4)">
+        <div style="display:flex;gap:var(--sp-2)">
+          <button class="chip active" data-legfilter="all" onclick="filterLegs('all')">All</button>
+          <button class="chip" data-legfilter="Leg1" onclick="filterLegs('Leg1')">Leg 1</button>
+          <button class="chip" data-legfilter="Leg2" onclick="filterLegs('Leg2')">Leg 2</button>
+          <button class="chip" data-legfilter="Drain" onclick="filterLegs('Drain')">Drain</button>
+        </div>
+        <span style="font-size:12px;color:var(--text-tertiary)" id="trades-count"></span>
+      </div>
+
+      <!-- Trade legs table -->
+      <div class="card" style="margin-bottom:var(--sp-6)">
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead><tr>
+              <th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th>
+              <th>USD In</th><th>USD Out</th><th>Fees</th><th>Profit</th>
+            </tr></thead>
+            <tbody id="trades-body">
+              <tr><td colspan="9" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+            </tbody>
+          </table>
         </div>
         <div class="pagination">
-          <button class="btn-sm" id="errors-prev" onclick="errorsPrev()" disabled>&laquo; Prev</button>
-          <span id="errors-page" style="line-height:30px;color:var(--text-muted);font-size:0.85em;">Page 1</span>
-          <button class="btn-sm" id="errors-next" onclick="errorsNext()">Next &raquo;</button>
+          <button class="btn btn-sm btn-ghost" id="trades-prev" onclick="tradesPrev()" disabled>← Prev</button>
+          <span id="trades-page" style="font-size:12px;color:var(--text-tertiary)">Page 1</span>
+          <button class="btn btn-sm btn-ghost" id="trades-next" onclick="tradesNext()">Next →</button>
         </div>
       </div>
-    </div>
 
-    <!-- Activity Log -->
-    <div class="card" style="margin-bottom:24px;">
-      <div class="collapsible-header" onclick="toggleActivity()">
-        <h2 style="margin:0;">Activity Log</h2>
-        <span id="activity-toggle">&#9650;</span>
-      </div>
-      <div class="collapsible-body open" id="activity-body">
-        <div style="margin-bottom:10px;">
-          <select id="activity-filter" onchange="loadActivity()" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:0.85em;">
-            <option value="">All</option>
-            <option value="trade">Trades</option>
-            <option value="swap">Swaps</option>
-            <option value="error">Errors</option>
-            <option value="admin">Admin</option>
-            <option value="withdraw">Withdrawals</option>
-            <option value="pool_deposit">Pool Deposits</option>
-            <option value="pool_redeem">Pool Redeems</option>
-            <option value="approval">Approvals</option>
-            <option value="arb_skip">Arb Skips</option>
-            <option value="arb_start">Arb Starts</option>
-            <option value="drain">Drain</option>
-          </select>
+      <!-- Activity Log -->
+      <div class="card">
+        <div class="collapsible-header" onclick="toggleActivity()">
+          <div class="card-header" style="margin-bottom:0">ACTIVITY LOG</div>
+          <span id="activity-toggle" style="color:var(--text-tertiary)">▾</span>
         </div>
-        <div id="activity-list" style="max-height:500px;overflow-y:auto;">
-          <div style="color:var(--text-muted);">Loading...</div>
-        </div>
-        <div class="pagination">
-          <button class="btn-sm" id="activity-prev" onclick="activityPrev()" disabled>&laquo; Prev</button>
-          <span id="activity-page" style="line-height:30px;color:var(--text-muted);font-size:0.85em;">Page 1</span>
-          <button class="btn-sm" id="activity-next" onclick="activityNext()">Next &raquo;</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- ═══════ ADMIN SECTION ═══════ -->
-    <div id="admin-section">
-      <div class="admin-grid">
-
-        <!-- Bot Controls -->
-        <div class="card">
-          <h2>Bot Controls</h2>
-          <div class="btn-group" style="margin-bottom:16px;">
-            <button id="pause-btn" onclick="doAction(this, () => authenticatedActor.pause(), 'Bot paused')" class="danger">Pause</button>
-            <button id="resume-btn" onclick="doAction(this, () => authenticatedActor.resume(), 'Bot resumed')" class="success">Resume</button>
-          </div>
-          <div class="btn-group" style="margin-bottom:16px;">
-            <button onclick="doAction(this, async () => { const msg = await authenticatedActor.setup_approvals(); showToast(msg, 'success'); }, null)">Setup Approvals</button>
-            <button onclick="doAction(this, () => authenticatedActor.manual_arb_cycle(), 'Arb cycle complete')">Manual Arb</button>
-          </div>
-          <button id="dryrun-btn" onclick="doDryRun(this)" class="primary btn-block">Dry Run</button>
-          <div id="dryrun-result" style="display:none;margin-top:16px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:16px;">
-            <div id="dryrun-content"></div>
-          </div>
-        </div>
-
-        <!-- Swap Widget -->
-        <div class="card">
-          <h2>Swap</h2>
-          <div style="font-size:0.75em;color:var(--text-muted);margin:-8px 0 12px;" id="swap-route-info"></div>
-          <!-- From -->
-          <div class="swap-box">
-            <div class="swap-box-header">
-              <span>From</span>
-              <span class="balance-link" id="swap-from-bal" onclick="swapSetMax()">Balance: --</span>
-            </div>
-            <div class="swap-input-row">
-              <input type="text" id="swap-from-amount" placeholder="0.00" oninput="swapQuote()">
-              <select id="swap-from-token" onchange="swapTokenChanged()">
-                <option value="icp">ICP</option>
-                <option value="3usd">3USD</option>
-                <option value="ckusdc">ckUSDC</option>
-                <option value="ckusdt">ckUSDT</option>
-                <option value="icusd">icUSD</option>
-              </select>
-            </div>
-          </div>
-          <!-- Arrow -->
-          <div class="swap-arrow">
-            <button onclick="swapFlip()">&#8645;</button>
-          </div>
-          <!-- To -->
-          <div class="swap-box">
-            <div class="swap-box-header">
-              <span>To (estimated)</span>
-              <span style="font-family:'SF Mono','Menlo',monospace;font-size:0.8em;color:var(--text-muted);" id="swap-to-bal">Balance: --</span>
-            </div>
-            <div class="swap-input-row">
-              <input type="text" id="swap-to-amount" placeholder="0.00" readonly style="color:var(--text-muted);">
-              <select id="swap-to-token" onchange="swapTokenChanged()">
-                <option value="3usd">3USD</option>
-                <option value="icp">ICP</option>
-                <option value="ckusdc">ckUSDC</option>
-                <option value="ckusdt">ckUSDT</option>
-                <option value="icusd">icUSD</option>
-              </select>
-            </div>
-          </div>
-          <!-- Quote info -->
-          <div class="swap-quote" id="swap-quote-info"></div>
-          <!-- Execute -->
-          <button id="swap-execute-btn" class="primary btn-block" onclick="swapExecute(this)" style="margin-top:4px;">Swap</button>
-        </div>
-
-        <!-- Withdraw -->
-        <div class="card">
-          <h2>Withdraw from Bot</h2>
-          <div style="margin-bottom:12px;">
-            <label>Token</label>
-            <select id="w-token">
-              <option value="icp">ICP</option>
-              <option value="ckusdc">ckUSDC</option>
-              <option value="3usd">3USD</option>
-              <option value="ckusdt">ckUSDT</option>
-              <option value="icusd">icUSD</option>
+        <div class="collapsible-body open" id="activity-body">
+          <div style="margin:var(--sp-3) 0">
+            <select id="activity-filter" onchange="loadActivity()" style="background:var(--surface-input);color:var(--text-primary);border:1px solid var(--border);border-radius:var(--radius-md);padding:6px 10px;font-size:12px;font-family:var(--font-ui)">
+              <option value="">All</option>
+              <option value="trade">Trades</option>
+              <option value="swap">Swaps</option>
+              <option value="error">Errors</option>
+              <option value="admin">Admin</option>
+              <option value="withdraw">Withdrawals</option>
+              <option value="pool_deposit">Pool Deposits</option>
+              <option value="pool_redeem">Pool Redeems</option>
+              <option value="approval">Approvals</option>
+              <option value="arb_skip">Arb Skips</option>
+              <option value="arb_start">Arb Starts</option>
+              <option value="drain">Drain</option>
             </select>
           </div>
-          <div style="margin-bottom:12px;">
-            <label>Recipient</label>
-            <input id="w-to" type="text" placeholder="Principal ID" />
+          <div id="activity-list" style="max-height:500px;overflow-y:auto">
+            <div style="color:var(--text-tertiary)">Loading...</div>
           </div>
-          <div style="margin-bottom:12px;">
-            <label>Amount</label>
-            <input id="w-amount" type="text" placeholder="0.00" />
+          <div class="pagination">
+            <button class="btn btn-sm btn-ghost" id="activity-prev" onclick="activityPrev()" disabled>← Prev</button>
+            <span id="activity-page" style="font-size:12px;color:var(--text-tertiary)">Page 1</span>
+            <button class="btn btn-sm btn-ghost" id="activity-next" onclick="activityNext()">Next →</button>
           </div>
-          <button class="danger btn-block" onclick="doWithdraw(this)">Withdraw</button>
+        </div>
+      </div>
+    </section>
+    <section class="view" id="view-admin">
+  <div class="admin-grid">
+
+    <!-- Bot Controls -->
+    <div class="card">
+      <div class="card-header">BOT CONTROLS</div>
+      <div class="btn-group" style="margin-bottom:var(--sp-4)">
+        <button class="btn btn-danger" id="pause-btn" onclick="doAction(this, () => authenticatedActor.pause(), 'Bot paused')">Pause</button>
+        <button class="btn btn-success" id="resume-btn" onclick="doAction(this, () => authenticatedActor.resume(), 'Bot resumed')">Resume</button>
+      </div>
+      <div class="btn-group" style="margin-bottom:var(--sp-4)">
+        <button class="btn" onclick="doAction(this, async () => { const msg = await authenticatedActor.setup_approvals(); showToast(msg, 'success'); }, null)">Setup Approvals</button>
+        <button class="btn" onclick="doAction(this, () => authenticatedActor.manual_arb_cycle(), 'Arb cycle complete')">Manual Arb</button>
+      </div>
+      <button class="btn btn-primary btn-block" id="dryrun-btn" onclick="doDryRun(this)">Dry Run</button>
+      <div id="dryrun-result" style="display:none;margin-top:var(--sp-4);background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4)">
+        <div id="dryrun-content"></div>
+      </div>
+    </div>
+
+    <!-- Swap Widget -->
+    <div class="card">
+      <div class="card-header">SWAP</div>
+      <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)" id="swap-route-info"></div>
+      <!-- From -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-bottom:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">From</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--accent);cursor:pointer" id="swap-from-bal" onclick="swapSetMax()">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="swap-from-amount" placeholder="0.00" oninput="swapQuote()" style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data)">
+          <select id="swap-from-token" onchange="swapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="icp">ICP</option>
+            <option value="3usd">3USD</option>
+            <option value="ckusdc">ckUSDC</option>
+            <option value="ckusdt">ckUSDT</option>
+            <option value="icusd">icUSD</option>
+          </select>
+        </div>
+      </div>
+      <!-- Arrow -->
+      <div style="display:flex;justify-content:center;margin:-4px 0;position:relative;z-index:1">
+        <button class="btn btn-sm" onclick="swapFlip()" style="width:36px;height:36px;padding:0;font-size:14px;border-radius:var(--radius-md);background:var(--surface-2);border:2px solid var(--border)">&#8597;</button>
+      </div>
+      <!-- To -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-top:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">To (estimated)</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--text-tertiary)" id="swap-to-bal">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="swap-to-amount" placeholder="0.00" readonly style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data);color:var(--text-secondary)">
+          <select id="swap-to-token" onchange="swapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="3usd">3USD</option>
+            <option value="icp">ICP</option>
+            <option value="ckusdc">ckUSDC</option>
+            <option value="ckusdt">ckUSDT</option>
+            <option value="icusd">icUSD</option>
+          </select>
+        </div>
+      </div>
+      <div id="swap-quote-info" style="text-align:center;padding:var(--sp-2);font-size:12px;color:var(--text-tertiary);min-height:28px"></div>
+      <button class="btn btn-primary btn-block" id="swap-execute-btn" onclick="swapExecute(this)">Swap</button>
+    </div>
+
+    <!-- Withdraw -->
+    <div class="card">
+      <div class="card-header">WITHDRAW FROM BOT</div>
+      <div style="margin-bottom:var(--sp-3)">
+        <label>Token</label>
+        <select id="w-token">
+          <option value="icp">ICP</option>
+          <option value="ckusdc">ckUSDC</option>
+          <option value="3usd">3USD</option>
+          <option value="ckusdt">ckUSDT</option>
+          <option value="icusd">icUSD</option>
+        </select>
+      </div>
+      <div style="margin-bottom:var(--sp-3)">
+        <label>Recipient</label>
+        <input id="w-to" type="text" placeholder="Principal ID">
+      </div>
+      <div style="margin-bottom:var(--sp-3)">
+        <label>Amount</label>
+        <input id="w-amount" type="text" placeholder="0.00">
+      </div>
+      <button class="btn btn-danger btn-block" onclick="doWithdraw(this)">Withdraw</button>
+    </div>
+  </div>
+
+  <!-- Deposit section (below grid) -->
+  <div class="card" id="deposit-section" style="margin-top:var(--sp-4);display:none">
+    <div class="card-header">DEPOSIT FROM YOUR WALLET</div>
+    <div class="grid-2">
+      <div>
+        <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="my-bal-3usd">--</span></div>
+        <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="my-bal-ckusdc">--</span></div>
+        <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="my-bal-ckusdt">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="my-bal-icusd">--</span></div>
+        <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="my-bal-icp">--</span></div>
+      </div>
+      <div>
+        <div class="btn-group" style="flex-direction:column">
+          <button class="btn btn-sm" onclick="doDeposit('3usd')">Deposit 3USD</button>
+          <button class="btn btn-sm" onclick="doDeposit('ckusdc')">Deposit ckUSDC</button>
+          <button class="btn btn-sm" onclick="doDeposit('ckusdt')">Deposit ckUSDT</button>
+          <button class="btn btn-sm" onclick="doDeposit('icusd')">Deposit icUSD</button>
+          <button class="btn btn-sm" onclick="doDeposit('icp')">Deposit ICP</button>
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- Config display -->
+  <div class="card" style="margin-top:var(--sp-4)">
+    <div class="card-header">CONFIGURATION</div>
+    <div id="config-display" style="font-family:var(--font-data);font-size:12px;color:var(--text-secondary)">Loading...</div>
+  </div>
+</section>
   </main>
 
   <div id="toast"></div>
 
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script type="importmap">
     {
       "imports": {
@@ -521,6 +787,14 @@
     const DryRunResult = IDL.Record({ should_trade: IDL.Bool, direction: IDL.Opt(Direction), spread_bps: IDL.Int32, rumi_price_usd: IDL.Nat64, icpswap_price_usd: IDL.Nat64, virtual_price: IDL.Nat64, optimal_input_amount: IDL.Nat64, optimal_input_token: IDL.Opt(TokenVariant), expected_icp_amount: IDL.Nat64, expected_output_amount: IDL.Nat64, expected_output_token: IDL.Opt(TokenVariant), expected_profit_usd: IDL.Int64, candidates_evaluated: IDL.Vec(CandidateResult), balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, message: IDL.Text });
     const PoolQuoteResult = IDL.Record({ estimated_output: IDL.Nat64 });
 
+    const CycleSnapshot = IDL.Record({
+      timestamp: IDL.Nat64, rumi_icp_price_3usd: IDL.Nat64, rumi_icp_price_usd: IDL.Nat64,
+      icpswap_icp_price_ckusdc: IDL.Nat64, virtual_price: IDL.Nat64, spread_a_bps: IDL.Int32,
+      icpswap_icp_price_icusd: IDL.Nat64, spread_b_bps: IDL.Int32,
+      balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_icusd: IDL.Nat64,
+      traded: IDL.Bool, strategy_used: IDL.Text,
+    });
+
     const idlFactory = ({ IDL: I }) => I.Service({
       get_config: I.Func([], [BotConfig], ['query']),
       get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
@@ -529,6 +803,7 @@
       get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
       get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
       get_prices: I.Func([], [PriceInfo], []),
+      get_snapshots: I.Func([I.Nat64, I.Nat64], [I.Vec(CycleSnapshot)], ['query']),
       is_admin: I.Func([I.Principal], [I.Bool], ['query']),
       add_admin: I.Func([I.Principal], [], []),
       remove_admin: I.Func([I.Principal], [], []),
@@ -597,7 +872,12 @@
     let loggedInPrincipalText = '';
     let tradesPage = 0, errorsPage = 0, activityPage = 0;
     const PAGE_SIZE = 20;
+    const ACTIVITY_PAGE_SIZE = 50;
+    let currentLegFilter = 'all';
     let quoteTimer = null;
+    let snapshotCache = [];
+    let snapshotsLoaded = false;
+    let chartsRefreshInterval = null;
 
     // ═══════ Helpers ═══════
 
@@ -659,13 +939,8 @@
 
     function showPrincipal(text) {
       loggedInPrincipalText = text;
-      const el = document.getElementById('login-info');
+      const el = document.getElementById('principal-display');
       el.textContent = text;
-      el.title = 'Click to copy';
-      el.style.fontSize = '0.7em';
-      el.style.fontFamily = "'SF Mono','Menlo',monospace";
-      el.style.wordBreak = 'break-all';
-      el.style.maxWidth = '300px';
     }
 
     window.copyPrincipal = async function() {
@@ -675,7 +950,7 @@
     };
 
     window.doLogin = async function() {
-      const btn = document.getElementById('login-btn');
+      const btn = document.getElementById('auth-btn');
       btnLoading(btn, 'Connecting...');
       try {
         authClient = await AuthClient.create();
@@ -694,20 +969,20 @@
         const agent = await HttpAgent.create({ host: IC_HOST, identity });
         authenticatedActor = Actor.createActor(idlFactory, { agent, canisterId });
         showPrincipal(p);
-        btn.innerHTML = 'Logout';
-        btn.onclick = doLogout;
+        btn.textContent = 'Logout';
         btn.disabled = false;
-        btn.classList.remove('primary');
+        btn.onclick = doLogout;
 
         const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
         if (isAdmin) {
-          document.getElementById('admin-section').classList.add('visible');
+          document.getElementById('nav-admin').style.display = '';
           showToast('Logged in as admin', 'success');
+          if (currentConfig) loadMyBalances(currentConfig);
+          swapTokenChanged();
+          swapUpdateBalances();
         } else {
           showToast('Not authorized. Add your principal as admin via dfx.', 'error');
         }
-        if (currentConfig) loadMyBalances(currentConfig);
-        swapUpdateBalances();
       } catch (e) {
         showToast('Login failed: ' + (e.message || e), 'error');
         btnDone(btn);
@@ -717,13 +992,17 @@
     window.doLogout = async function() {
       if (authClient) await authClient.logout();
       authenticatedActor = null; authClient = null;
-      document.getElementById('login-info').textContent = '';
-      const btn = document.getElementById('login-btn');
+      document.getElementById('principal-display').textContent = '';
+      const btn = document.getElementById('auth-btn');
       btn.textContent = 'Login with II';
       btn.onclick = doLogin;
       btn.disabled = false;
-      document.getElementById('admin-section').classList.remove('visible');
-      document.getElementById('my-wallet-section').classList.remove('visible');
+      document.getElementById('nav-admin').style.display = 'none';
+      // Switch away from admin view if active
+      const adminNav = document.querySelector('.nav-item[data-view="admin"]');
+      if (adminNav && adminNav.classList.contains('active')) {
+        switchView('overview');
+      }
       showToast('Logged out', 'success');
     };
 
@@ -732,95 +1011,223 @@
       return true;
     }
 
-    // ═══════ Data Loading ═══════
+    // ═══════ View Switching ═══════
 
-    async function loadConfig() {
-      try {
-        const config = await anonymousActor.get_config();
-        currentConfig = config;
-        const badge = document.getElementById('bot-status');
-        badge.textContent = config.paused ? 'Paused' : 'Running';
-        badge.className = 'status-badge ' + (config.paused ? 'status-paused' : 'status-running');
-        loadBalances(config);
-        if (authenticatedActor) loadMyBalances(config);
-      } catch (e) { console.error('loadConfig:', e); }
-    }
-
-    async function loadBalances(config) {
-      try {
-        const acct = { owner: Principal.fromText(canisterId), subaccount: [] };
-        const [a1, a2, a3, a4, a5] = await Promise.all([
-          createBalanceActor(config.three_usd_ledger.toText()),
-          createBalanceActor(config.ckusdc_ledger.toText()),
-          createBalanceActor(TOKEN_INFO.ckusdt.getLedger()),
-          createBalanceActor(TOKEN_INFO.icusd.getLedger()),
-          createBalanceActor(config.icp_ledger.toText()),
-        ]);
-        const [b1, b2, b3, b4, b5] = await Promise.all([a1, a2, a3, a4, a5].map(a => a.icrc1_balance_of(acct)));
-        document.getElementById('bal-3usd').textContent = fmtTok(b1, 8);
-        document.getElementById('bal-ckusdc').textContent = fmtTok(b2, 6);
-        document.getElementById('bal-ckusdt').textContent = fmtTok(b3, 6);
-        document.getElementById('bal-icusd').textContent = fmtTok(b4, 8);
-        document.getElementById('bal-icp').textContent = fmtTok(b5, 8);
-      } catch (e) {
-        console.error('loadBalances:', e);
-        ['bal-3usd','bal-ckusdc','bal-ckusdt','bal-icusd','bal-icp'].forEach(id => document.getElementById(id).textContent = 'err');
+    function switchView(name) {
+      document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      const navItem = document.querySelector(`.nav-item[data-view="${name}"]`);
+      if (navItem) navItem.classList.add('active');
+      document.getElementById('view-' + name)?.classList.add('active');
+      if (name === 'charts') {
+        renderCurrentChart();
+        if (snapshotsLoaded) {
+          chartsRefreshInterval = setInterval(async () => {
+            await loadSnapshots();
+            renderCurrentChart();
+          }, 60000);
+        }
+      } else {
+        clearInterval(chartsRefreshInterval);
+        chartsRefreshInterval = null;
       }
     }
+    window.switchView = switchView;
 
-    async function loadMyBalances(config) {
-      try {
-        if (!authClient || !(await authClient.isAuthenticated())) return;
-        document.getElementById('my-wallet-section').classList.add('visible');
-        const acct = { owner: authClient.getIdentity().getPrincipal(), subaccount: [] };
-        const [a1, a2, a3, a4, a5] = await Promise.all([
-          createBalanceActor(config.three_usd_ledger.toText()),
-          createBalanceActor(config.ckusdc_ledger.toText()),
-          createBalanceActor(TOKEN_INFO.ckusdt.getLedger()),
-          createBalanceActor(TOKEN_INFO.icusd.getLedger()),
-          createBalanceActor(config.icp_ledger.toText()),
-        ]);
-        const [b1, b2, b3, b4, b5] = await Promise.all([a1, a2, a3, a4, a5].map(a => a.icrc1_balance_of(acct)));
-        document.getElementById('my-bal-3usd').textContent = fmtTok(b1, 8);
-        document.getElementById('my-bal-ckusdc').textContent = fmtTok(b2, 6);
-        document.getElementById('my-bal-ckusdt').textContent = fmtTok(b3, 6);
-        document.getElementById('my-bal-icusd').textContent = fmtTok(b4, 8);
-        document.getElementById('my-bal-icp').textContent = fmtTok(b5, 8);
-      } catch (e) { console.error('loadMyBalances:', e); }
-    }
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.addEventListener('click', () => switchView(item.dataset.view));
+    });
 
-    function legTypeStr(lt) { return 'Leg1' in lt ? 'Leg 1' : 'Leg2' in lt ? 'Leg 2' : 'Drain' in lt ? 'Drain' : '?'; }
-    function legTypeColor(lt) { return 'Leg1' in lt ? 'var(--blue)' : 'Leg2' in lt ? 'var(--green)' : 'var(--yellow)'; }
+    // ═══════ Principal click-to-copy ═══════
+
+    document.getElementById('principal-display').addEventListener('click', () => {
+      window.copyPrincipal();
+    });
+
+    // ═══════ Auth button ═══════
+
+    document.getElementById('auth-btn').addEventListener('click', function() {
+      if (authClient && authenticatedActor) {
+        window.doLogout();
+      } else {
+        window.doLogin();
+      }
+    });
+
+    // ═══════ Data Loading ═══════
+
     function fmtTokAmt(amount, token) {
       const dec = (token === 'ICP' || token === '3USD' || token === 'icUSD') ? 8 : 6;
       return `${fmtTok(amount, dec)} ${token}`;
     }
 
+    function updateSpreadGauge(fillEl, valueEl, threshLEl, threshREl, spreadBps, minSpreadBps) {
+      const maxBps = 200;
+      const pct = Math.min(Math.abs(spreadBps) / maxBps, 1) * 50;
+      const isAboveThreshold = Math.abs(spreadBps) >= minSpreadBps;
+      const color = isAboveThreshold ? 'var(--accent)' : 'var(--text-muted)';
+
+      if (spreadBps >= 0) {
+        fillEl.style.left = '50%';
+        fillEl.style.width = pct + '%';
+      } else {
+        fillEl.style.left = (50 - pct) + '%';
+        fillEl.style.width = pct + '%';
+      }
+      fillEl.style.background = color;
+
+      const threshPct = Math.min(minSpreadBps / maxBps, 1) * 50;
+      threshLEl.style.left = (50 - threshPct) + '%';
+      threshREl.style.left = (50 + threshPct) + '%';
+
+      const sign = spreadBps >= 0 ? '+' : '';
+      const dot = isAboveThreshold ? ' \u25cf' : '';
+      valueEl.textContent = sign + spreadBps + ' bps' + dot;
+      valueEl.style.color = isAboveThreshold ? 'var(--accent)' : 'var(--text-secondary)';
+    }
+
+    function updateBalanceTotal() {
+      const bals = window._rawBals;
+      const prices = window._latestPrices;
+      if (!bals) return;
+      const vp = prices?.vp || 1.0;
+      const icpPrice = prices?.icpswap || 0;
+      const total = (bi(bals.b3usd) / 1e8 * vp) + (bi(bals.bCkusdc) / 1e6) + (bi(bals.bCkusdt) / 1e6) + (bi(bals.bIcusd) / 1e8) + (bi(bals.bIcp) / 1e8 * icpPrice);
+      document.getElementById('bal-total').textContent = '$' + total.toFixed(2);
+    }
+
+    async function loadConfig() {
+      try {
+        const config = await anonymousActor.get_config();
+        currentConfig = config;
+        const dot = document.getElementById('status-dot');
+        const label = document.getElementById('status-label');
+        dot.className = 'status-dot ' + (config.paused ? 'paused' : 'running');
+        label.textContent = config.paused ? 'Paused' : 'Running';
+        displayConfig();
+      } catch (e) { console.error('loadConfig:', e); }
+    }
+
     async function loadSummary() {
       try {
         const s = await anonymousActor.get_summary();
-        const el = (id, val, cls) => { const e = document.getElementById(id); e.textContent = val; if (cls !== undefined) e.className = 'stat-value ' + cls; };
-        el('sum-pnl', fmt$(s.net_pnl_usd), pClass(s.net_pnl_usd));
-        el('sum-usd-in', fmt$(s.total_usd_in));
-        el('sum-usd-out', fmt$(s.total_usd_out));
-        el('sum-fees', fmt$(s.total_fees_usd));
-        el('sum-legs', `${bi(s.leg1_count)} / ${bi(s.leg2_count)} / ${bi(s.drain_count)}`);
-        el('sum-dex', `${bi(s.rumi_count)} / ${bi(s.icpswap_count)}`);
+        const pnl = bi(s.net_pnl_usd);
+        const el = document.getElementById('hero-pnl');
+        el.textContent = fmt$(pnl);
+        el.className = 'hero-number ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
+
+        document.getElementById('hero-trades').textContent = `${bi(s.leg1_count) + bi(s.leg2_count)} legs`;
+        document.getElementById('hero-volume').textContent = fmt$(s.total_usd_in);
+        document.getElementById('hero-dex').textContent = `${bi(s.rumi_count)} Rumi \u00b7 ${bi(s.icpswap_count)} ICPSwap`;
       } catch (e) { console.error('loadSummary:', e); }
     }
+
+    async function loadBalances(config) {
+      try {
+        const botPrincipal = Principal.fromText(canisterId);
+        const account = { owner: botPrincipal, subaccount: [] };
+
+        const [b1, b2, b3, b4, b5] = await Promise.all([
+          createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(account)),
+          createBalanceActor(config.ckusdc_ledger.toText()).then(a => a.icrc1_balance_of(account)),
+          createBalanceActor('cngnf-vqaaa-aaaar-qag4q-cai').then(a => a.icrc1_balance_of(account)),
+          createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(account)),
+          createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(account)),
+        ]);
+
+        document.getElementById('bal-3usd').textContent = fmtTok(b1, 8);
+        document.getElementById('bal-ckusdc').textContent = fmtTok(b2, 6);
+        document.getElementById('bal-ckusdt').textContent = fmtTok(b3, 6);
+        document.getElementById('bal-icusd').textContent = fmtTok(b4, 8);
+        document.getElementById('bal-icp').textContent = fmtTok(b5, 8);
+
+        window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5 };
+        updateBalanceTotal();
+      } catch (e) { console.error('loadBalances:', e); }
+    }
+
+    async function loadPrices() {
+      try {
+        const p = await authenticatedActor.get_prices();
+
+        document.getElementById('price-rumi-usd').textContent = '$' + (bi(p.rumi_icp_price_usd_6dec) / 1e6).toFixed(4);
+        document.getElementById('price-icpswap').textContent = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
+        document.getElementById('price-vp').textContent = (bi(p.virtual_price) / 1e18).toFixed(6);
+        document.getElementById('price-icusd').textContent = (bi(p.icpswap_icusd_icp_price) / 1e8).toFixed(6) + ' ICP';
+        document.getElementById('price-icpswap-b').textContent = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
+
+        window._latestPrices = {
+          vp: bi(p.virtual_price) / 1e18,
+          icpswap: bi(p.icpswap_icp_price_ckusdc) / 1e6,
+        };
+        updateBalanceTotal();
+
+        // Update spread thermometers
+        const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
+        updateSpreadGauge(
+          document.getElementById('spread-a-fill'),
+          document.getElementById('spread-a-value'),
+          document.getElementById('spread-a-thresh-l'),
+          document.getElementById('spread-a-thresh-r'),
+          bi(p.spread_bps), minSpread
+        );
+        // Strategy B
+        const icusdPrice = bi(p.icpswap_icusd_icp_price);
+        if (icusdPrice > 0) {
+          updateSpreadGauge(
+            document.getElementById('spread-b-fill'),
+            document.getElementById('spread-b-value'),
+            document.getElementById('spread-b-thresh-l'),
+            document.getElementById('spread-b-thresh-r'),
+            bi(p.strategy_b_spread_bps), minSpread
+          );
+        } else {
+          document.getElementById('spread-b-value').textContent = 'N/A';
+        }
+
+        // Hide login hint if authed
+        if (authenticatedActor) document.getElementById('prices-login-hint').style.display = 'none';
+      } catch (e) { console.error('loadPrices:', e); }
+    }
+
+    async function loadRecentTrades() {
+      try {
+        const legs = await anonymousActor.get_trade_legs(BigInt(0), BigInt(5));
+        const tbody = document.getElementById('recent-trades-body');
+        if (!legs.length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades yet</td></tr>';
+          return;
+        }
+        tbody.innerHTML = [...legs].reverse().map(t => {
+          const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'var(--warning)';
+          const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'Drain';
+          return `<tr>
+            <td>${fmtTime(t.timestamp)}</td>
+            <td style="color:${typeColor}">${typeStr}</td>
+            <td>${t.dex}</td>
+            <td>${fmtTokAmt(t.sold_amount, t.sold_token)}</td>
+            <td>${fmtTokAmt(t.bought_amount, t.bought_token)}</td>
+            <td>--</td>
+          </tr>`;
+        }).join('');
+      } catch (e) { console.error('loadRecentTrades:', e); }
+    }
+
+    // ═══════ Trades View ═══════
 
     async function loadTrades() {
       try {
         const legs = await anonymousActor.get_trade_legs(BigInt(tradesPage * PAGE_SIZE), BigInt(PAGE_SIZE));
         const tbody = document.getElementById('trades-body');
         if (!legs.length) {
-          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);">No trades yet</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-tertiary)">No trades yet</td></tr>';
+          document.getElementById('trades-count').textContent = '';
         } else {
-          // Compute profit: for Leg2/Drain, pair with the most recent preceding Leg1
-          // Legs are in chronological order; we'll scan forward tracking the last Leg1 cost
-          let lastLeg1Cost = 0; // sold_usd_value + fees from the Leg1
-          let lastLeg1Fees = 0;
+          let lastLeg1Cost = 0, lastLeg1Fees = 0;
           const rows = legs.map(t => {
+            const legKey = 'Leg1' in t.leg_type ? 'Leg1' : 'Leg2' in t.leg_type ? 'Leg2' : 'Drain';
+            const hidden = currentLegFilter !== 'all' && legKey !== currentLegFilter;
+
             let profitHtml = '--';
             if ('Leg1' in t.leg_type) {
               lastLeg1Cost = bi(t.sold_usd_value);
@@ -829,12 +1236,17 @@
               const revenue = bi(t.bought_usd_value);
               const totalFees = lastLeg1Fees + bi(t.fees_usd);
               const profit = revenue - lastLeg1Cost - totalFees;
-              profitHtml = `<span class="${pClass(profit)}">${fmt$(profit)}</span>`;
+              const cls = profit > 0 ? 'positive' : profit < 0 ? 'negative' : '';
+              profitHtml = `<span class="${cls}">${fmt$(profit)}</span>`;
               if ('Leg2' in t.leg_type) { lastLeg1Cost = 0; lastLeg1Fees = 0; }
             }
-            return `<tr>
+
+            const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'var(--warning)';
+            const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'Drain';
+
+            return `<tr style="${hidden ? 'display:none' : ''}">
               <td>${fmtTime(t.timestamp)}</td>
-              <td style="color:${legTypeColor(t.leg_type)}">${legTypeStr(t.leg_type)}</td>
+              <td style="color:${typeColor}">${typeStr}</td>
               <td>${t.dex}</td>
               <td>${fmtTokAmt(t.sold_amount, t.sold_token)}</td>
               <td>${fmtTokAmt(t.bought_amount, t.bought_token)}</td>
@@ -845,6 +1257,7 @@
             </tr>`;
           });
           tbody.innerHTML = [...rows].reverse().join('');
+          document.getElementById('trades-count').textContent = `${legs.length} legs loaded`;
         }
         document.getElementById('trades-prev').disabled = tradesPage === 0;
         document.getElementById('trades-next').disabled = legs.length < PAGE_SIZE;
@@ -852,73 +1265,17 @@
       } catch (e) { console.error('loadTrades:', e); }
     }
 
-    async function loadErrors() {
-      try {
-        const errors = await anonymousActor.get_errors(BigInt(errorsPage * PAGE_SIZE), BigInt(PAGE_SIZE));
-        const list = document.getElementById('errors-list');
-        if (!errors.length) {
-          list.innerHTML = '<div style="color:var(--text-muted);">No errors recorded</div>';
-        } else {
-          list.innerHTML = [...errors].reverse().map(e =>
-            `<div class="error-entry"><span class="error-ts">${fmtTime(e.timestamp)}</span>${esc(e.message)}</div>`
-          ).join('');
-        }
-        document.getElementById('errors-prev').disabled = errorsPage === 0;
-        document.getElementById('errors-next').disabled = errors.length < PAGE_SIZE;
-        document.getElementById('errors-page').textContent = `Page ${errorsPage + 1}`;
-      } catch (e) { console.error('loadErrors:', e); }
-    }
-
-    async function loadPrices() {
-      try {
-        const p = await anonymousActor.get_prices();
-        const ckusdcPrice = bi(p.icpswap_icp_price_ckusdc);
-        // Strategy A
-        document.getElementById('price-rumi-3usd').textContent = (bi(p.rumi_icp_price_3usd) / 1e8).toFixed(4) + ' 3USD';
-        document.getElementById('price-rumi-usd').textContent = '$' + (bi(p.rumi_icp_price_usd_6dec) / 1e6).toFixed(4);
-        document.getElementById('price-icpswap').textContent = (ckusdcPrice / 1e6).toFixed(4) + ' ckUSDC';
-        document.getElementById('price-vp').textContent = (bi(p.virtual_price) / 1e18).toFixed(6);
-        const spread = bi(p.spread_bps), abs = Math.abs(spread);
-        const dir = spread > 0 ? 'Rumi cheaper' : spread < 0 ? 'ICPSwap cheaper' : 'Even';
-        const el = document.getElementById('price-spread');
-        el.textContent = abs + ' bps (' + dir + ')';
-        el.className = 'stat-value ' + (abs >= 50 ? 'positive' : '');
-        // Strategy B
-        const icusdPrice = bi(p.icpswap_icusd_icp_price);
-        const elIcusd = document.getElementById('price-icusd');
-        const elRefB = document.getElementById('price-icpswap-b');
-        const elB = document.getElementById('price-spread-b');
-        if (icusdPrice > 0) {
-          elIcusd.textContent = (icusdPrice / 1e8).toFixed(4) + ' icUSD';
-          elRefB.textContent = (ckusdcPrice / 1e6).toFixed(4) + ' ckUSDC';
-          const spreadB = bi(p.strategy_b_spread_bps), absB = Math.abs(spreadB);
-          const dirB = spreadB > 0 ? 'icUSD cheaper' : spreadB < 0 ? 'ckUSDC cheaper' : 'Even';
-          elB.textContent = absB + ' bps (' + dirB + ')';
-          elB.className = 'stat-value ' + (absB >= 50 ? 'positive' : '');
-        } else {
-          elIcusd.textContent = 'N/A';
-          elRefB.textContent = 'N/A';
-          elB.textContent = 'N/A';
-          elB.className = 'stat-value';
-        }
-      } catch (e) {
-        console.error('loadPrices:', e);
-        ['price-rumi-3usd','price-rumi-usd','price-icpswap','price-vp','price-spread','price-icusd','price-icpswap-b','price-spread-b'].forEach(id =>
-          document.getElementById(id).textContent = 'err');
-      }
-    }
+    window.filterLegs = function(type) {
+      currentLegFilter = type;
+      document.querySelectorAll('[data-legfilter]').forEach(c => c.classList.toggle('active', c.dataset.legfilter === type));
+      loadTrades();
+    };
 
     window.tradesPrev = () => { if (tradesPage > 0) { tradesPage--; loadTrades(); } };
     window.tradesNext = () => { tradesPage++; loadTrades(); };
-    window.errorsPrev = () => { if (errorsPage > 0) { errorsPage--; loadErrors(); } };
-    window.errorsNext = () => { errorsPage++; loadErrors(); };
-    window.toggleErrors = () => {
-      const b = document.getElementById('errors-body'), t = document.getElementById('errors-toggle');
-      b.classList.toggle('open');
-      t.innerHTML = b.classList.contains('open') ? '&#9650;' : '&#9660;';
-    };
 
-    const ACTIVITY_PAGE_SIZE = 50;
+    // ═══════ Activity Log ═══════
+
     async function loadActivity() {
       try {
         const entries = await anonymousActor.get_activity_log(BigInt(activityPage * ACTIVITY_PAGE_SIZE), BigInt(ACTIVITY_PAGE_SIZE));
@@ -926,12 +1283,17 @@
         const filtered = filter ? entries.filter(e => e.category === filter) : entries;
         const list = document.getElementById('activity-list');
         if (!filtered.length) {
-          list.innerHTML = '<div style="color:var(--text-muted);">No activity recorded</div>';
+          list.innerHTML = '<div style="color:var(--text-tertiary)">No activity recorded</div>';
         } else {
-          const catColors = { trade: 'var(--green)', swap: 'var(--blue)', error: 'var(--red)', admin: 'var(--purple)', withdraw: 'var(--yellow)', pool_deposit: '#58d68d', pool_redeem: '#f0b27a', approval: 'var(--text-muted)', arb_skip: 'var(--text-muted)', arb_start: 'var(--blue)', drain: 'var(--yellow)' };
+          const catColors = {
+            trade: 'var(--accent)', swap: 'var(--info)', error: 'var(--loss)',
+            admin: '#bc8cff', withdraw: 'var(--warning)', pool_deposit: '#58d68d',
+            pool_redeem: '#f0b27a', approval: 'var(--text-secondary)',
+            arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)'
+          };
           list.innerHTML = [...filtered].reverse().map(e => {
-            const col = catColors[e.category] || 'var(--text-muted)';
-            return `<div class="error-entry"><span class="error-ts">${fmtTime(e.timestamp)}</span><span style="color:${col};font-weight:600;margin-right:8px;font-size:0.8em;text-transform:uppercase;">${esc(e.category)}</span>${esc(e.message)}</div>`;
+            const col = catColors[e.category] || 'var(--text-tertiary)';
+            return `<div class="activity-entry"><span class="activity-ts">${fmtTime(e.timestamp)}</span><span class="activity-cat" style="color:${col}">${esc(e.category)}</span>${esc(e.message)}</div>`;
           }).join('');
         }
         document.getElementById('activity-prev').disabled = activityPage === 0;
@@ -939,287 +1301,307 @@
         document.getElementById('activity-page').textContent = `Page ${activityPage + 1}`;
       } catch (e) { console.error('loadActivity:', e); }
     }
+    window.loadActivity = loadActivity;
+
     window.activityPrev = () => { if (activityPage > 0) { activityPage--; loadActivity(); } };
     window.activityNext = () => { activityPage++; loadActivity(); };
-    window.toggleActivity = () => {
-      const b = document.getElementById('activity-body'), t = document.getElementById('activity-toggle');
+    window.toggleActivity = function() {
+      const b = document.getElementById('activity-body');
+      const t = document.getElementById('activity-toggle');
       b.classList.toggle('open');
-      t.innerHTML = b.classList.contains('open') ? '&#9650;' : '&#9660;';
+      t.textContent = b.classList.contains('open') ? '▾' : '▸';
     };
+
+    // ═══════ Errors (compatibility) ═══════
+
+    async function loadErrors() {
+      // Errors are shown in the activity log now — this is a no-op for compatibility
+      try {} catch (e) { console.error('loadErrors:', e); }
+    }
+
+    // ═══════ Load All ═══════
 
     async function loadAll() {
       await loadConfig();
-      loadSummary(); loadTrades(); loadErrors(); loadActivity(); loadPrices();
-    }
-
-    // ═══════ Deposit from II wallet ═══════
-
-    window.doDeposit = async function(tokenKey) {
-      if (!authClient || !(await authClient.isAuthenticated())) { showToast('Please log in first', 'error'); return; }
-      if (!currentConfig) return;
-      const info = TOKEN_INFO[tokenKey]; if (!info) return;
-      const ledgerId = info.getLedger(); if (!ledgerId) return;
-      const identity = authClient.getIdentity();
-      const actor = await createAuthLedgerActor(ledgerId, identity);
-      const [balance, fee] = await Promise.all([
-        actor.icrc1_balance_of({ owner: identity.getPrincipal(), subaccount: [] }),
-        actor.icrc1_fee(),
-      ]);
-      const balN = bi(balance), feeN = bi(fee);
-      if (balN <= feeN) { showToast(`No ${info.label} to deposit`, 'error'); return; }
-      const amt = BigInt(balN) - BigInt(feeN);
-      const display = (Number(amt) / 10**info.decimals).toFixed(info.decimals > 6 ? 4 : 2);
-      if (!confirm(`Deposit ${display} ${info.label} to bot?\nFee: ${fmtTok(fee, info.decimals)} ${info.label}`)) return;
-      showToast(`Depositing ${info.label}...`, 'success');
-      try {
-        const res = await actor.icrc1_transfer({ from_subaccount: [], to: { owner: Principal.fromText(canisterId), subaccount: [] }, amount: amt, fee: [], memo: [], created_at_time: [] });
-        if ('Ok' in res) { showToast(`Deposited ${display} ${info.label}`, 'success'); loadConfig(); }
-        else showToast(`Transfer failed: ${Object.keys(res.Err)[0]}`, 'error');
-      } catch (e) { showToast('Deposit failed: ' + e.message, 'error'); }
-    };
-
-    // ═══════ Withdraw ═══════
-
-    window.doWithdraw = async function(btn) {
-      if (!requireAuth()) return;
-      const tokenKey = document.getElementById('w-token').value;
-      const to = document.getElementById('w-to').value.trim();
-      const amountStr = document.getElementById('w-amount').value.trim();
-      if (!to || !amountStr) { showToast('Fill in recipient and amount', 'error'); return; }
-      const info = TOKEN_INFO[tokenKey];
-      const ledger = info?.getLedger();
-      if (!ledger) { showToast('Config not loaded', 'error'); return; }
-      btnLoading(btn, 'Withdrawing...');
-      try {
-        await authenticatedActor.withdraw(Principal.fromText(ledger), Principal.fromText(to), humanToRaw(amountStr, info.decimals));
-        showToast(`Withdrew ${amountStr} ${info.label}`, 'success');
-        loadConfig();
-      } catch (e) { showToast('Withdraw failed: ' + e.message, 'error'); }
-      finally { btnDone(btn); }
-    };
-
-    // ═══════ Swap Widget ═══════
-
-    // Determine swap route based on from/to tokens
-    function swapRoute() {
-      const from = document.getElementById('swap-from-token').value;
-      const to = document.getElementById('swap-to-token').value;
-      if (from === to) return { type: 'invalid', label: 'Same token' };
-      const stables = ['ckusdc','ckusdt','icusd'];
-      const isFromStable = stables.includes(from);
-      const isToStable = stables.includes(to);
-
-      if (from === 'icp' && to === '3usd') return { type: 'rumi', label: 'via Rumi AMM' };
-      if (from === '3usd' && to === 'icp') return { type: 'rumi', label: 'via Rumi AMM' };
-      if (isFromStable && to === '3usd') return { type: '3pool_deposit', label: 'via 3pool deposit' };
-      if (from === '3usd' && isToStable) return { type: '3pool_redeem', label: 'via 3pool redeem' };
-      if (from === 'icp' && isToStable) return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool' };
-      if (isFromStable && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool + Rumi AMM' };
-      if (isFromStable && isToStable) return { type: 'invalid', label: 'Stable-to-stable not supported (use 3USD as intermediate)' };
-      return { type: 'invalid', label: 'Unsupported pair' };
-    }
-
-    function swapUpdateRoute() {
-      const route = swapRoute();
-      const routeEl = document.getElementById('swap-route-info');
-      routeEl.textContent = route.type === 'invalid' ? route.label : `Route: ${route.label}`;
-      routeEl.style.color = route.type === 'invalid' ? 'var(--red)' : 'var(--text-muted)';
-    }
-
-    window.swapTokenChanged = function() {
-      const fromKey = document.getElementById('swap-from-token').value;
-      const toKey = document.getElementById('swap-to-token').value;
-      if (fromKey === toKey) {
-        const toSel = document.getElementById('swap-to-token');
-        const opts = Array.from(toSel.options).filter(o => o.value !== fromKey);
-        if (opts.length > 0) toSel.value = opts[0].value;
+      loadSummary();
+      if (currentConfig) loadBalances(currentConfig);
+      loadRecentTrades();
+      loadTrades();
+      loadActivity();
+      loadErrors();
+      if (authenticatedActor) loadPrices();
+      if (authenticatedActor && currentConfig) {
+        loadMyBalances(currentConfig);
+        displayConfig();
       }
-      document.getElementById('swap-to-amount').value = '';
-      document.getElementById('swap-quote-info').textContent = '';
-      swapUpdateRoute();
-      swapUpdateBalances();
-      swapQuote();
-    };
-
-    window.swapFlip = function() {
-      const fromSel = document.getElementById('swap-from-token');
-      const toSel = document.getElementById('swap-to-token');
-      const oldFrom = fromSel.value, oldTo = toSel.value;
-      fromSel.value = oldTo;
-      toSel.value = oldFrom;
-      const fromAmt = document.getElementById('swap-from-amount').value;
-      const toAmt = document.getElementById('swap-to-amount').value;
-      document.getElementById('swap-from-amount').value = toAmt;
-      document.getElementById('swap-to-amount').value = '';
-      swapUpdateRoute();
-      swapUpdateBalances();
-      swapQuote();
-    };
-
-    async function swapUpdateBalances() {
-      if (!currentConfig) return;
-      const fromKey = document.getElementById('swap-from-token').value;
-      const toKey = document.getElementById('swap-to-token').value;
-      const botAcct = { owner: Principal.fromText(canisterId), subaccount: [] };
-      try {
-        const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
-        if (!fromInfo || !toInfo) return;
-        const [fromActor, toActor] = await Promise.all([
-          createBalanceActor(fromInfo.getLedger()),
-          createBalanceActor(toInfo.getLedger()),
-        ]);
-        const [fromBal, toBal] = await Promise.all([
-          fromActor.icrc1_balance_of(botAcct),
-          toActor.icrc1_balance_of(botAcct),
-        ]);
-        document.getElementById('swap-from-bal').textContent = `Balance: ${fmtTok(fromBal, fromInfo.decimals)}`;
-        document.getElementById('swap-from-bal')._rawBal = fromBal;
-        document.getElementById('swap-from-bal')._decimals = fromInfo.decimals;
-        document.getElementById('swap-to-bal').textContent = `Balance: ${fmtTok(toBal, toInfo.decimals)}`;
-      } catch (e) { console.error('swapUpdateBalances:', e); }
+      document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }
 
-    window.swapSetMax = function() {
-      const balEl = document.getElementById('swap-from-bal');
-      if (balEl._rawBal !== undefined) {
-        document.getElementById('swap-from-amount').value = fmtTok(balEl._rawBal, balEl._decimals);
-        swapQuote();
-      }
-    };
+    // ═══════ Toast ═══════
 
-    window.swapQuote = function() {
-      clearTimeout(quoteTimer);
-      quoteTimer = setTimeout(swapQuoteNow, 400);
-    };
-
-    async function swapQuoteNow() {
-      const amountStr = document.getElementById('swap-from-amount').value.trim();
-      if (!amountStr || parseFloat(amountStr) <= 0) {
-        document.getElementById('swap-to-amount').value = '';
-        document.getElementById('swap-quote-info').textContent = '';
-        return;
-      }
-      if (!authenticatedActor) return;
-
-      const fromKey = document.getElementById('swap-from-token').value;
-      const toKey = document.getElementById('swap-to-token').value;
-      const route = swapRoute();
-      const quoteEl = document.getElementById('swap-quote-info');
-
-      if (route.type === 'invalid') { quoteEl.textContent = route.label; return; }
-      quoteEl.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;"></span>';
-
-      const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
-      try {
-        let outRaw;
-        if (route.type === 'rumi') {
-          const raw = humanToRaw(amountStr, fromInfo.decimals);
-          const tokenInLedger = Principal.fromText(fromInfo.getLedger());
-          const result = await authenticatedActor.rumi_quote(tokenInLedger, raw);
-          outRaw = bi(result.estimated_output);
-        } else if (route.type === '3pool_deposit') {
-          const coin = POOL_COIN_MAP[fromKey];
-          const raw = humanToRaw(amountStr, coin.decimals);
-          const result = await authenticatedActor.pool_quote_deposit(coin.index, raw);
-          outRaw = bi(result.estimated_output);
-        } else if (route.type === '3pool_redeem') {
-          const coin = POOL_COIN_MAP[toKey];
-          const raw = humanToRaw(amountStr, 8);
-          const result = await authenticatedActor.pool_quote_redeem(coin.index, raw);
-          outRaw = bi(result.estimated_output);
-        } else if (route.type === 'rumi+3pool') {
-          const raw = humanToRaw(amountStr, 8);
-          const icpLedger = Principal.fromText(TOKEN_INFO.icp.getLedger());
-          const step1 = await authenticatedActor.rumi_quote(icpLedger, raw);
-          const threeUsdOut = bi(step1.estimated_output);
-          const coin = POOL_COIN_MAP[toKey];
-          const step2 = await authenticatedActor.pool_quote_redeem(coin.index, BigInt(threeUsdOut));
-          outRaw = bi(step2.estimated_output);
-        } else if (route.type === '3pool+rumi') {
-          const coin = POOL_COIN_MAP[fromKey];
-          const raw = humanToRaw(amountStr, coin.decimals);
-          const step1 = await authenticatedActor.pool_quote_deposit(coin.index, raw);
-          const threeUsdOut = bi(step1.estimated_output);
-          const threeUsdLedger = Principal.fromText(TOKEN_INFO['3usd'].getLedger());
-          const step2 = await authenticatedActor.rumi_quote(threeUsdLedger, BigInt(threeUsdOut));
-          outRaw = bi(step2.estimated_output);
-        }
-
-        const outHuman = Number(outRaw) / 10**toInfo.decimals;
-        document.getElementById('swap-to-amount').value = outHuman.toFixed(toInfo.decimals > 6 ? 4 : 2);
-        const rate = outHuman / parseFloat(amountStr);
-        quoteEl.textContent = `1 ${fromInfo.label} \u2248 ${rate.toFixed(4)} ${toInfo.label}`;
-      } catch (e) {
-        console.error('swapQuoteNow:', e);
-        quoteEl.textContent = 'Quote failed';
-        document.getElementById('swap-to-amount').value = '';
-      }
+    function showToast(msg, type) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = type || '';
+      el.style.display = 'block';
+      clearTimeout(el._timeout);
+      el._timeout = setTimeout(() => { el.style.display = 'none'; }, 4000);
     }
 
-    window.swapExecute = async function(btn) {
-      if (!requireAuth()) return;
-      const amountStr = document.getElementById('swap-from-amount').value.trim();
-      if (!amountStr || parseFloat(amountStr) <= 0) { showToast('Enter an amount', 'error'); return; }
+    // ═══════ Restore Session ═══════
 
-      const fromKey = document.getElementById('swap-from-token').value;
-      const toKey = document.getElementById('swap-to-token').value;
-      const route = swapRoute();
-      if (route.type === 'invalid') { showToast(route.label, 'error'); return; }
-
-      const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
-      const toAmount = document.getElementById('swap-to-amount').value;
-
-      btnLoading(btn, 'Swapping...');
+    async function restoreSession() {
       try {
-        if (route.type === 'rumi') {
-          const raw = humanToRaw(amountStr, fromInfo.decimals);
-          const tokenInLedger = Principal.fromText(fromInfo.getLedger());
-          await authenticatedActor.rumi_manual_swap(tokenInLedger, raw, BigInt(0));
-          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ${toAmount} ${toInfo.label}`, 'success');
-        } else if (route.type === '3pool_deposit') {
-          const coin = POOL_COIN_MAP[fromKey];
-          const raw = humanToRaw(amountStr, coin.decimals);
-          await authenticatedActor.pool_deposit(coin.index, raw, BigInt(0));
-          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ${toAmount} 3USD`, 'success');
-        } else if (route.type === '3pool_redeem') {
-          const coin = POOL_COIN_MAP[toKey];
-          const raw = humanToRaw(amountStr, 8);
-          await authenticatedActor.pool_redeem(coin.index, raw, BigInt(0));
-          showToast(`Swapped ${amountStr} 3USD \u2192 ${toAmount} ${toInfo.label}`, 'success');
-        } else if (route.type === 'rumi+3pool') {
-          const raw = humanToRaw(amountStr, 8);
-          const icpLedger = Principal.fromText(TOKEN_INFO.icp.getLedger());
-          await authenticatedActor.rumi_manual_swap(icpLedger, raw, BigInt(0));
-          const threeUsdActor = await createBalanceActor(TOKEN_INFO['3usd'].getLedger());
-          const bal3usd = await threeUsdActor.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
-          const coin = POOL_COIN_MAP[toKey];
-          if (bi(bal3usd) > 0n) {
-            await authenticatedActor.pool_redeem(coin.index, BigInt(bi(bal3usd)), BigInt(0));
+        authClient = await AuthClient.create();
+        if (await authClient.isAuthenticated()) {
+          const identity = authClient.getIdentity();
+          const p = identity.getPrincipal().toText();
+          // If delegation expired, identity falls back to anonymous — treat as not logged in
+          if (p === '2vxsx-fae') {
+            await authClient.logout();
+            authClient = null;
+            return;
           }
-          showToast(`Swapped ${amountStr} ICP \u2192 ${toInfo.label}`, 'success');
-        } else if (route.type === '3pool+rumi') {
-          const coin = POOL_COIN_MAP[fromKey];
-          const raw = humanToRaw(amountStr, coin.decimals);
-          await authenticatedActor.pool_deposit(coin.index, raw, BigInt(0));
-          const threeUsdActor = await createBalanceActor(TOKEN_INFO['3usd'].getLedger());
-          const bal3usd = await threeUsdActor.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
-          const threeUsdLedger = Principal.fromText(TOKEN_INFO['3usd'].getLedger());
-          if (bi(bal3usd) > 0n) {
-            await authenticatedActor.rumi_manual_swap(threeUsdLedger, BigInt(bi(bal3usd)), BigInt(0));
+          const agent = await HttpAgent.create({ host: IC_HOST, identity });
+          authenticatedActor = Actor.createActor(idlFactory, { agent, canisterId });
+          showPrincipal(p);
+          document.getElementById('auth-btn').textContent = 'Logout';
+          const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
+          if (isAdmin) {
+            document.getElementById('nav-admin').style.display = '';
+            swapTokenChanged();
+            swapUpdateBalances();
           }
-          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ICP`, 'success');
         }
-        document.getElementById('swap-from-amount').value = '';
-        document.getElementById('swap-to-amount').value = '';
-        document.getElementById('swap-quote-info').textContent = '';
-        loadConfig();
-        swapUpdateBalances();
-      } catch (e) {
-        showToast('Swap failed: ' + e.message, 'error');
-      } finally { btnDone(btn); }
+      } catch (e) { console.error('restoreSession:', e); }
+    }
+
+    // ═══════ Charts ═══════
+
+    let currentChartType = 'spread';
+    let currentRange = 86400; // 24H default
+    let chartInstance = null;
+
+    async function loadSnapshots() {
+      snapshotCache = [];
+      let offset = 0;
+      const batchSize = 2000;
+      while (true) {
+        const batch = await anonymousActor.get_snapshots(BigInt(offset), BigInt(batchSize));
+        snapshotCache.push(...batch);
+        if (batch.length < batchSize) break;
+        offset += batchSize;
+      }
+      snapshotsLoaded = true;
+    }
+
+    function createBaseChart(containerId) {
+      const container = document.getElementById(containerId);
+      container.innerHTML = '';
+      const chart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#12151e' }, textColor: '#8b93a8', fontFamily: 'IBM Plex Mono' },
+        grid: { vertLines: { color: 'rgba(255,255,255,0.03)' }, horzLines: { color: 'rgba(255,255,255,0.03)' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: false, borderColor: 'rgba(255,255,255,0.06)' },
+        rightPriceScale: { borderColor: 'rgba(255,255,255,0.06)' },
+        width: container.clientWidth,
+        height: container.clientHeight || 500,
+      });
+      const ro = new ResizeObserver(() => { chart.applyOptions({ width: container.clientWidth }); });
+      ro.observe(container);
+      return chart;
+    }
+
+    function destroyChart() {
+      if (chartInstance) {
+        chartInstance.remove();
+        chartInstance = null;
+      }
+    }
+
+    function filterByRange(snapshots, rangeSeconds) {
+      if (rangeSeconds === 0) return snapshots;
+      const now = Date.now() * 1e6;
+      const cutoff = now - rangeSeconds * 1e9;
+      return snapshots.filter(s => bi(s.timestamp) >= cutoff);
+    }
+
+    function renderSpreadChart(snapshots) {
+      destroyChart();
+      if (!snapshots.length) { showChartEmpty(); return; }
+      hideChartEmpty();
+
+      chartInstance = createBaseChart('chart-container');
+
+      const seriesA = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
+      const seriesB = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'Strategy B' });
+
+      const dataA = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) }));
+      const dataB = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_b_bps) }));
+
+      seriesA.setData(dataA);
+      seriesB.setData(dataB);
+
+      const markersA = snapshots.filter(s => s.traded && s.strategy_used === 'A')
+        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#00d4aa', shape: 'circle', size: 1 }));
+      const markersB = snapshots.filter(s => s.traded && s.strategy_used === 'B')
+        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#5b8af0', shape: 'circle', size: 1 }));
+      if (markersA.length) seriesA.setMarkers(markersA);
+      if (markersB.length) seriesB.setMarkers(markersB);
+
+      const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
+      seriesA.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
+      seriesA.createPriceLine({ price: -minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '-threshold' });
+
+      chartInstance.timeScale().fitContent();
+      updateChartFooter(snapshots.length);
+    }
+
+    function renderPriceChart(snapshots) {
+      destroyChart();
+      if (!snapshots.length) { showChartEmpty(); return; }
+      hideChartEmpty();
+
+      chartInstance = createBaseChart('chart-container');
+
+      const rumi = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Rumi (USD)' });
+      const icpswap = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'ICPSwap (USD)' });
+
+      rumi.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.rumi_icp_price_usd) / 1e6 })));
+      icpswap.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.icpswap_icp_price_ckusdc) / 1e6 })));
+
+      const markers = snapshots.filter(s => s.traded).map(s => ({
+        time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar',
+        color: s.strategy_used === 'A' ? '#00d4aa' : '#5b8af0', shape: 'circle', size: 1
+      }));
+      if (markers.length) rumi.setMarkers(markers);
+
+      chartInstance.timeScale().fitContent();
+      updateChartFooter(snapshots.length);
+    }
+
+    async function renderPnlChart() {
+      destroyChart();
+      hideChartEmpty();
+
+      let allLegs = [];
+      let offset = 0;
+      while (true) {
+        const batch = await anonymousActor.get_trade_legs(BigInt(offset), BigInt(2000));
+        allLegs.push(...batch);
+        if (batch.length < 2000) break;
+        offset += 2000;
+      }
+
+      if (!allLegs.length) { showChartEmpty(); return; }
+
+      let cumPnl = 0;
+      const data = allLegs.map(leg => {
+        cumPnl += (bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd));
+        return { time: Math.floor(bi(leg.timestamp) / 1e9), value: cumPnl / 1e6 };
+      });
+
+      chartInstance = createBaseChart('chart-container');
+      const series = chartInstance.addAreaSeries({
+        lineColor: '#00d4aa', topColor: 'rgba(0, 212, 170, 0.3)', bottomColor: 'rgba(0, 212, 170, 0.02)',
+        lineWidth: 2, title: 'Cumulative P&L (USD)',
+      });
+      series.setData(data);
+      chartInstance.timeScale().fitContent();
+      updateChartFooter(data.length, 'trade legs');
+    }
+
+    function renderBalanceChart(snapshots) {
+      destroyChart();
+      if (!snapshots.length) { showChartEmpty(); return; }
+      hideChartEmpty();
+
+      chartInstance = createBaseChart('chart-container');
+
+      const sIcp = chartInstance.addLineSeries({ color: '#8b93a8', lineWidth: 1, title: 'ICP' });
+      const s3usd = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 1, title: '3USD' });
+      const sCkusdc = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 1, title: 'ckUSDC' });
+      const sIcusd = chartInstance.addLineSeries({ color: '#f0b232', lineWidth: 1, title: 'icUSD' });
+      const sTotal = chartInstance.addLineSeries({ color: '#e8ecf4', lineWidth: 2, title: 'Total' });
+
+      const data = snapshots.map(s => {
+        const t = Math.floor(bi(s.timestamp) / 1e9);
+        const icpPrice = bi(s.icpswap_icp_price_ckusdc) / 1e6;
+        const vp = bi(s.virtual_price) / 1e18;
+        const icpUsd = bi(s.balance_icp) / 1e8 * icpPrice;
+        const threeUsd = bi(s.balance_3usd) / 1e8 * (vp || 1);
+        const ckusdcUsd = bi(s.balance_ckusdc) / 1e6;
+        const icusdUsd = bi(s.balance_icusd) / 1e8;
+        return { t, icpUsd, threeUsd, ckusdcUsd, icusdUsd, total: icpUsd + threeUsd + ckusdcUsd + icusdUsd };
+      });
+
+      sIcp.setData(data.map(d => ({ time: d.t, value: d.icpUsd })));
+      s3usd.setData(data.map(d => ({ time: d.t, value: d.threeUsd })));
+      sCkusdc.setData(data.map(d => ({ time: d.t, value: d.ckusdcUsd })));
+      sIcusd.setData(data.map(d => ({ time: d.t, value: d.icusdUsd })));
+      sTotal.setData(data.map(d => ({ time: d.t, value: d.total })));
+
+      chartInstance.timeScale().fitContent();
+      updateChartFooter(snapshots.length);
+    }
+
+    function renderVpChart(snapshots) {
+      destroyChart();
+      if (!snapshots.length) { showChartEmpty(); return; }
+      hideChartEmpty();
+
+      chartInstance = createBaseChart('chart-container');
+      const series = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Virtual Price' });
+      series.setData(snapshots.map(s => ({
+        time: Math.floor(bi(s.timestamp) / 1e9),
+        value: bi(s.virtual_price) / 1e18,
+      })));
+      chartInstance.timeScale().fitContent();
+      updateChartFooter(snapshots.length);
+    }
+
+    window.switchChart = async function(type) {
+      currentChartType = type;
+      document.querySelectorAll('.chart-tabs .chip').forEach(c => c.classList.toggle('active', c.dataset.chart === type));
+      await renderCurrentChart();
     };
 
-    // ═══════ Dry Run ═══════
+    window.switchRange = async function(seconds) {
+      currentRange = seconds;
+      document.querySelectorAll('.chart-ranges .chip').forEach(c => c.classList.toggle('active', Number(c.dataset.range) === seconds));
+      await renderCurrentChart();
+    };
+
+    async function renderCurrentChart() {
+      if (!snapshotsLoaded) {
+        updateChartFooter(0, 'Loading snapshots...');
+        await loadSnapshots();
+      }
+
+      const filtered = filterByRange(snapshotCache, currentRange);
+
+      switch (currentChartType) {
+        case 'spread': renderSpreadChart(filtered); break;
+        case 'prices': renderPriceChart(filtered); break;
+        case 'pnl': await renderPnlChart(); break;
+        case 'balances': renderBalanceChart(filtered); break;
+        case 'vp': renderVpChart(filtered); break;
+      }
+    }
+
+    function showChartEmpty() {
+      document.getElementById('chart-container').style.display = 'none';
+      document.getElementById('chart-empty').style.display = 'block';
+    }
+    function hideChartEmpty() {
+      document.getElementById('chart-container').style.display = 'block';
+      document.getElementById('chart-empty').style.display = 'none';
+    }
+    function updateChartFooter(count, label) {
+      document.getElementById('chart-footer').textContent = label || `${count.toLocaleString()} data points · ${new Date().toLocaleTimeString()}`;
+    }
+
+    // ═══════ Admin: Dry Run ═══════
 
     window.doDryRun = async function(btn) {
       if (!requireAuth()) return;
@@ -1241,7 +1623,7 @@
         const outDec = outToken === '3USD' ? 8 : 6;
         const profit = bi(dr.expected_profit_usd);
 
-        let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;">
+        let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">
           <div class="stat-row"><span class="stat-label">Trade?</span><span class="stat-value ${dr.should_trade ? 'positive' : ''}">${dr.should_trade ? 'YES' : 'NO'}</span></div>
           <div class="stat-row"><span class="stat-label">Direction</span><span class="stat-value">${dir}</span></div>
           <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value">${spread} bps</span></div>
@@ -1249,11 +1631,11 @@
           <div class="stat-row"><span class="stat-label">ICPSwap</span><span class="stat-value">$${icpswapP.toFixed(4)}</span></div>
           <div class="stat-row"><span class="stat-label">VP</span><span class="stat-value">${vp.toFixed(6)}</span></div>
         </div>
-        <div style="margin-top:8px;padding:8px;background:var(--bg2);border-radius:6px;font-size:0.85em;"><strong>Status:</strong> ${esc(dr.message)}</div>`;
+        <div style="margin-top:var(--sp-2);padding:var(--sp-2);background:var(--surface-2);border-radius:var(--radius-sm);font-size:12px"><strong>Status:</strong> ${esc(dr.message)}</div>`;
 
         if (dr.should_trade) {
-          html += `<div style="margin-top:10px;padding:12px;border:1px solid var(--green);border-radius:8px;background:rgba(63,185,80,0.05);">
-            <div style="font-weight:600;color:var(--green);margin-bottom:6px;">Optimal Trade</div>
+          html += `<div style="margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--accent);border-radius:var(--radius-md);background:rgba(0,212,170,0.05);">
+            <div style="font-weight:600;color:var(--accent);margin-bottom:var(--sp-2);font-size:12px">OPTIMAL TRADE</div>
             <div class="stat-row"><span class="stat-label">Input</span><span class="stat-value">${fmtTok(dr.optimal_input_amount, inDec)} ${inToken}</span></div>
             <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value">${fmtTok(dr.expected_icp_amount, 8)}</span></div>
             <div class="stat-row"><span class="stat-label">Output</span><span class="stat-value">${fmtTok(dr.expected_output_amount, outDec)} ${outToken}</span></div>
@@ -1263,8 +1645,8 @@
 
         const cands = dr.candidates_evaluated;
         if (cands.length > 0) {
-          html += `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:0.8em;color:var(--text-muted);">Candidates (${cands.length})</summary>
-            <table style="font-size:0.8em;margin-top:6px;"><thead><tr><th>Input</th><th>ICP</th><th>Output</th><th>Profit</th></tr></thead>
+          html += `<details style="margin-top:var(--sp-3)"><summary style="cursor:pointer;font-size:11px;color:var(--text-tertiary)">Candidates (${cands.length})</summary>
+            <table class="data-table" style="margin-top:var(--sp-2)"><thead><tr><th>Input</th><th>ICP</th><th>Output</th><th>Profit</th></tr></thead>
             <tbody>${cands.map(c => { const p = bi(c.profit_usd); return `<tr>
               <td>${fmtTok(c.input_amount, inDec)} ${inToken}</td><td>${fmtTok(c.icp_amount, 8)}</td>
               <td>${fmtTok(c.output_amount, outDec)} ${outToken}</td>
@@ -1277,56 +1659,299 @@
       finally { btnDone(btn); }
     };
 
-    // ═══════ Toast ═══════
+    // ═══════ Admin: Withdraw ═══════
 
-    function showToast(msg, type) {
-      const el = document.getElementById('toast');
-      el.textContent = msg;
-      el.className = type || '';
-      el.style.display = 'block';
-      clearTimeout(el._timeout);
-      el._timeout = setTimeout(() => { el.style.display = 'none'; }, 4000);
+    window.doWithdraw = async function(btn) {
+      if (!requireAuth()) return;
+      const tokenKey = document.getElementById('w-token').value;
+      const to = document.getElementById('w-to').value.trim();
+      const amountStr = document.getElementById('w-amount').value.trim();
+      if (!to || !amountStr) { showToast('Fill in recipient and amount', 'error'); return; }
+      const info = TOKEN_INFO[tokenKey];
+      const ledger = info?.getLedger();
+      if (!ledger) { showToast('Config not loaded', 'error'); return; }
+      btnLoading(btn, 'Withdrawing...');
+      try {
+        await authenticatedActor.withdraw(Principal.fromText(ledger), Principal.fromText(to), humanToRaw(amountStr, info.decimals));
+        showToast(`Withdrew ${amountStr} ${info.label}`, 'success');
+        loadAll();
+      } catch (e) { showToast('Withdraw failed: ' + e.message, 'error'); }
+      finally { btnDone(btn); }
+    };
+
+    // ═══════ Admin: Deposit ═══════
+
+    window.doDeposit = async function(tokenKey) {
+      if (!authClient || !(await authClient.isAuthenticated())) { showToast('Please log in first', 'error'); return; }
+      if (!currentConfig) return;
+      const info = TOKEN_INFO[tokenKey]; if (!info) return;
+      const ledgerId = info.getLedger(); if (!ledgerId) return;
+      const identity = authClient.getIdentity();
+      const actor = await createAuthLedgerActor(ledgerId, identity);
+      const [balance, fee] = await Promise.all([
+        actor.icrc1_balance_of({ owner: identity.getPrincipal(), subaccount: [] }),
+        actor.icrc1_fee(),
+      ]);
+      const balN = bi(balance), feeN = bi(fee);
+      if (balN <= feeN) { showToast(`No ${info.label} to deposit`, 'error'); return; }
+      const amt = BigInt(balance) - BigInt(fee);
+      const display = (Number(amt) / 10**info.decimals).toFixed(info.decimals > 6 ? 4 : 2);
+      if (!confirm(`Deposit ${display} ${info.label} to bot?\nFee: ${fmtTok(fee, info.decimals)} ${info.label}`)) return;
+      showToast(`Depositing ${info.label}...`, 'success');
+      try {
+        const res = await actor.icrc1_transfer({ from_subaccount: [], to: { owner: Principal.fromText(canisterId), subaccount: [] }, amount: amt, fee: [], memo: [], created_at_time: [] });
+        if ('Ok' in res) { showToast(`Deposited ${display} ${info.label}`, 'success'); loadAll(); }
+        else showToast(`Transfer failed: ${Object.keys(res.Err)[0]}`, 'error');
+      } catch (e) { showToast('Deposit failed: ' + e.message, 'error'); }
+    };
+
+    // ═══════ Admin: My Balances ═══════
+
+    async function loadMyBalances(config) {
+      try {
+        if (!authClient || !(await authClient.isAuthenticated())) return;
+        document.getElementById('deposit-section').style.display = 'block';
+        const acct = { owner: authClient.getIdentity().getPrincipal(), subaccount: [] };
+        const [a1, a2, a3, a4, a5] = await Promise.all([
+          createBalanceActor(config.three_usd_ledger.toText()),
+          createBalanceActor(config.ckusdc_ledger.toText()),
+          createBalanceActor(TOKEN_INFO.ckusdt.getLedger()),
+          createBalanceActor(TOKEN_INFO.icusd.getLedger()),
+          createBalanceActor(config.icp_ledger.toText()),
+        ]);
+        const [b1, b2, b3, b4, b5] = await Promise.all([a1, a2, a3, a4, a5].map(a => a.icrc1_balance_of(acct)));
+        document.getElementById('my-bal-3usd').textContent = fmtTok(b1, 8);
+        document.getElementById('my-bal-ckusdc').textContent = fmtTok(b2, 6);
+        document.getElementById('my-bal-ckusdt').textContent = fmtTok(b3, 6);
+        document.getElementById('my-bal-icusd').textContent = fmtTok(b4, 8);
+        document.getElementById('my-bal-icp').textContent = fmtTok(b5, 8);
+      } catch (e) { console.error('loadMyBalances:', e); }
     }
+
+    // ═══════ Admin: Config Display ═══════
+
+    function displayConfig() {
+      if (!currentConfig) return;
+      const c = currentConfig;
+      const short = (p) => { const t = p.toText(); return t.length > 20 ? t.slice(0, 8) + '...' + t.slice(-5) : t; };
+      document.getElementById('config-display').innerHTML = `
+        <div class="stat-row"><span class="stat-label">Owner</span><span class="stat-value">${short(c.owner)}</span></div>
+        <div class="stat-row"><span class="stat-label">Min Spread</span><span class="stat-value">${bi(c.min_spread_bps)} bps</span></div>
+        <div class="stat-row"><span class="stat-label">Max Trade Size</span><span class="stat-value">${fmt$(c.max_trade_size_usd)}</span></div>
+        <div class="stat-row"><span class="stat-label">Rumi AMM</span><span class="stat-value">${short(c.rumi_amm)}</span></div>
+        <div class="stat-row"><span class="stat-label">ICPSwap Pool</span><span class="stat-value">${short(c.icpswap_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">Admins</span><span class="stat-value">${c.admins.length}</span></div>
+      `;
+    }
+
+    // ═══════ Admin: Swap ═══════
+
+    function swapRoute() {
+      const from = document.getElementById('swap-from-token').value;
+      const to = document.getElementById('swap-to-token').value;
+      if (from === to) return { type: 'invalid', label: 'Same token' };
+      const stables = ['ckusdc','ckusdt','icusd'];
+      const isFromStable = stables.includes(from);
+      const isToStable = stables.includes(to);
+      if (from === 'icp' && to === '3usd') return { type: 'rumi', label: 'via Rumi AMM' };
+      if (from === '3usd' && to === 'icp') return { type: 'rumi', label: 'via Rumi AMM' };
+      if (isFromStable && to === '3usd') return { type: '3pool_deposit', label: 'via 3pool deposit' };
+      if (from === '3usd' && isToStable) return { type: '3pool_redeem', label: 'via 3pool redeem' };
+      if (from === 'icp' && isToStable) return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool' };
+      if (isFromStable && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool + Rumi AMM' };
+      if (isFromStable && isToStable) return { type: 'invalid', label: 'Use 3USD as intermediate' };
+      return { type: 'invalid', label: 'Unsupported pair' };
+    }
+
+    function swapUpdateRoute() {
+      const route = swapRoute();
+      document.getElementById('swap-route-info').textContent = route.label;
+      const btn = document.getElementById('swap-execute-btn');
+      btn.disabled = route.type === 'invalid';
+    }
+
+    window.swapTokenChanged = function() {
+      swapUpdateRoute();
+      swapUpdateBalances();
+      swapQuote();
+    };
+
+    window.swapFlip = function() {
+      const fromSel = document.getElementById('swap-from-token');
+      const toSel = document.getElementById('swap-to-token');
+      const tmp = fromSel.value;
+      fromSel.value = toSel.value;
+      toSel.value = tmp;
+      document.getElementById('swap-from-amount').value = '';
+      document.getElementById('swap-to-amount').value = '';
+      document.getElementById('swap-quote-info').textContent = '';
+      swapUpdateRoute();
+      swapUpdateBalances();
+    };
+
+    window.swapUpdateBalances = async function() {
+      if (!currentConfig) return;
+      const fromKey = document.getElementById('swap-from-token').value;
+      const toKey = document.getElementById('swap-to-token').value;
+      const botAccount = { owner: Principal.fromText(canisterId), subaccount: [] };
+      try {
+        const fromInfo = TOKEN_INFO[fromKey];
+        const toInfo = TOKEN_INFO[toKey];
+        if (fromInfo?.getLedger()) {
+          const a = await createBalanceActor(fromInfo.getLedger());
+          const b = await a.icrc1_balance_of(botAccount);
+          document.getElementById('swap-from-bal').textContent = 'Balance: ' + fmtTok(b, fromInfo.decimals);
+          document.getElementById('swap-from-bal')._rawBal = b;
+          document.getElementById('swap-from-bal')._decimals = fromInfo.decimals;
+        }
+        if (toInfo?.getLedger()) {
+          const a = await createBalanceActor(toInfo.getLedger());
+          const b = await a.icrc1_balance_of(botAccount);
+          document.getElementById('swap-to-bal').textContent = 'Balance: ' + fmtTok(b, toInfo.decimals);
+        }
+      } catch (e) { console.error('swapUpdateBalances:', e); }
+    };
+
+    window.swapSetMax = function() {
+      const el = document.getElementById('swap-from-bal');
+      if (el._rawBal != null) {
+        const dec = el._decimals || 8;
+        document.getElementById('swap-from-amount').value = (bi(el._rawBal) / 10**dec).toFixed(dec > 6 ? 4 : 2);
+        swapQuote();
+      }
+    };
+
+    window.swapQuote = function() {
+      clearTimeout(quoteTimer);
+      quoteTimer = setTimeout(swapQuoteNow, 400);
+    };
+
+    async function swapQuoteNow() {
+      if (!requireAuth()) return;
+      const route = swapRoute();
+      if (route.type === 'invalid') return;
+      const amtStr = document.getElementById('swap-from-amount').value.trim();
+      if (!amtStr || isNaN(Number(amtStr)) || Number(amtStr) <= 0) {
+        document.getElementById('swap-to-amount').value = '';
+        document.getElementById('swap-quote-info').textContent = '';
+        return;
+      }
+      const fromKey = document.getElementById('swap-from-token').value;
+      const toKey = document.getElementById('swap-to-token').value;
+      const fromInfo = TOKEN_INFO[fromKey];
+      const toInfo = TOKEN_INFO[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+
+      document.getElementById('swap-quote-info').textContent = 'Quoting...';
+      try {
+        let outRaw;
+        if (route.type === 'rumi') {
+          const inLedger = fromInfo.getLedger();
+          const res = await authenticatedActor.rumi_quote(Principal.fromText(inLedger), raw);
+          outRaw = res.estimated_output;
+        } else if (route.type === '3pool_deposit') {
+          const coin = POOL_COIN_MAP[fromKey];
+          const res = await authenticatedActor.pool_quote_deposit(coin.index, raw);
+          outRaw = res.estimated_output;
+        } else if (route.type === '3pool_redeem') {
+          const coin = POOL_COIN_MAP[toKey];
+          const res = await authenticatedActor.pool_quote_redeem(coin.index, raw);
+          outRaw = res.estimated_output;
+        } else if (route.type === 'rumi+3pool') {
+          // ICP -> 3USD via Rumi, then 3USD -> stable via 3pool
+          const icpLedger = TOKEN_INFO.icp.getLedger();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(icpLedger), raw);
+          const coin = POOL_COIN_MAP[toKey];
+          const poolRes = await authenticatedActor.pool_quote_redeem(coin.index, rumiRes.estimated_output);
+          outRaw = poolRes.estimated_output;
+        } else if (route.type === '3pool+rumi') {
+          // stable -> 3USD via 3pool, then 3USD -> ICP via Rumi
+          const coin = POOL_COIN_MAP[fromKey];
+          const poolRes = await authenticatedActor.pool_quote_deposit(coin.index, raw);
+          const threeUsdLedger = TOKEN_INFO['3usd'].getLedger();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(threeUsdLedger), poolRes.estimated_output);
+          outRaw = rumiRes.estimated_output;
+        }
+
+        const outNum = bi(outRaw) / 10**toInfo.decimals;
+        document.getElementById('swap-to-amount').value = outNum.toFixed(toInfo.decimals > 6 ? 4 : 2);
+        const inNum = Number(amtStr);
+        const rate = inNum > 0 ? (outNum / inNum).toFixed(6) : '--';
+        document.getElementById('swap-quote-info').textContent = `1 ${fromInfo.label} ≈ ${rate} ${toInfo.label}`;
+      } catch (e) {
+        document.getElementById('swap-quote-info').textContent = 'Quote failed';
+        console.error('swapQuote:', e);
+      }
+    }
+
+    window.swapExecute = async function(btn) {
+      if (!requireAuth()) return;
+      const route = swapRoute();
+      if (route.type === 'invalid') { showToast('Invalid swap route', 'error'); return; }
+      const amtStr = document.getElementById('swap-from-amount').value.trim();
+      if (!amtStr || Number(amtStr) <= 0) { showToast('Enter an amount', 'error'); return; }
+      const fromKey = document.getElementById('swap-from-token').value;
+      const toKey = document.getElementById('swap-to-token').value;
+      const fromInfo = TOKEN_INFO[fromKey];
+      const toInfo = TOKEN_INFO[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+      const minOut = BigInt(0); // no slippage protection for admin swaps
+
+      btnLoading(btn, 'Swapping...');
+      try {
+        if (route.type === 'rumi') {
+          const inLedger = fromInfo.getLedger();
+          await authenticatedActor.rumi_manual_swap(Principal.fromText(inLedger), raw, minOut);
+        } else if (route.type === '3pool_deposit') {
+          const coin = POOL_COIN_MAP[fromKey];
+          await authenticatedActor.pool_deposit(coin.index, raw, minOut);
+        } else if (route.type === '3pool_redeem') {
+          const coin = POOL_COIN_MAP[toKey];
+          await authenticatedActor.pool_redeem(coin.index, raw, minOut);
+        } else if (route.type === 'rumi+3pool') {
+          // ICP -> 3USD via Rumi
+          const icpLedger = TOKEN_INFO.icp.getLedger();
+          await authenticatedActor.rumi_manual_swap(Principal.fromText(icpLedger), raw, minOut);
+          // Then 3USD -> stable via 3pool redeem (use full 3USD balance)
+          const threeUsdLedger = TOKEN_INFO['3usd'].getLedger();
+          const a = await createBalanceActor(threeUsdLedger);
+          const bal3usd = await a.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
+          const coin = POOL_COIN_MAP[toKey];
+          await authenticatedActor.pool_redeem(coin.index, bal3usd, minOut);
+        } else if (route.type === '3pool+rumi') {
+          // stable -> 3USD via 3pool deposit
+          const coin = POOL_COIN_MAP[fromKey];
+          await authenticatedActor.pool_deposit(coin.index, raw, minOut);
+          // Then 3USD -> ICP via Rumi (use full 3USD balance)
+          const threeUsdLedger = TOKEN_INFO['3usd'].getLedger();
+          const a = await createBalanceActor(threeUsdLedger);
+          const bal3usd = await a.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
+          await authenticatedActor.rumi_manual_swap(Principal.fromText(threeUsdLedger), bal3usd, minOut);
+        }
+        showToast(`Swapped ${amtStr} ${fromInfo.label} → ${toInfo.label}`, 'success');
+        document.getElementById('swap-from-amount').value = '';
+        document.getElementById('swap-to-amount').value = '';
+        document.getElementById('swap-quote-info').textContent = '';
+        loadAll();
+        swapUpdateBalances();
+      } catch (e) { showToast('Swap failed: ' + e.message, 'error'); }
+      finally { btnDone(btn); }
+    };
 
     // ═══════ Init ═══════
-
-    async function restoreSession() {
-      try {
-        authClient = await AuthClient.create();
-        if (await authClient.isAuthenticated()) {
-          const identity = authClient.getIdentity();
-          const p = identity.getPrincipal().toText();
-          // If delegation expired, identity falls back to anonymous — treat as not logged in
-          if (p === '2vxsx-fae') {
-            await authClient.logout();
-            authClient = null;
-            return;
-          }
-          const agent = await HttpAgent.create({ host: IC_HOST, identity });
-          authenticatedActor = Actor.createActor(idlFactory, { agent, canisterId });
-          showPrincipal(p);
-          document.getElementById('login-btn').textContent = 'Logout';
-          document.getElementById('login-btn').onclick = doLogout;
-          const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
-          if (isAdmin) document.getElementById('admin-section').classList.add('visible');
-        }
-      } catch (e) { console.error('restoreSession:', e); }
-    }
 
     async function init() {
       try {
         await createAnonymousActor();
         await restoreSession();
         await loadAll();
-        swapTokenChanged(); // initialize swap widget
-        swapUpdateBalances();
         setInterval(loadAll, 30000);
       } catch (e) {
         showToast('Failed to connect: ' + e.message, 'error');
         console.error(e);
       }
     }
-
     init();
   </script>
 </body>

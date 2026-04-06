@@ -158,6 +158,38 @@ pub async fn run_arb_cycle() {
         None
     };
 
+    // Fetch extra balances for snapshot (ICP, icUSD) — dry runs already have 3USD and ckUSDC
+    let (bal_icp, bal_icusd) = futures::future::join(
+        fetch_balance(config.icp_ledger),
+        async {
+            if has_icusd_pool { fetch_balance(config.icusd_ledger).await } else { Ok(0) }
+        },
+    ).await;
+
+    // Build snapshot from dry run data
+    let mut snapshot = state::CycleSnapshot {
+        timestamp: ic_cdk::api::time(),
+        // Recover 3USD/ICP (8 dec) from USD price: usd_6dec * 100 * 1e18 / vp
+        rumi_icp_price_3usd: dry_run_a.as_ref().map(|d| {
+            if d.virtual_price > 0 {
+                (d.rumi_price_usd as u128 * 100 * VP_PRECISION / d.virtual_price as u128) as u64
+            } else { 0 }
+        }).unwrap_or(0),
+        rumi_icp_price_usd: dry_run_a.as_ref().map(|d| d.rumi_price_usd).unwrap_or(0),
+        icpswap_icp_price_ckusdc: dry_run_a.as_ref().map(|d| d.icpswap_price_usd).unwrap_or(0),
+        virtual_price: dry_run_a.as_ref().map(|d| d.virtual_price).unwrap_or(0),
+        spread_a_bps: dry_run_a.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        // icUSD/ICP native (8 dec): dry_run_b stores 6-dec USD, multiply by 100
+        icpswap_icp_price_icusd: dry_run_b.as_ref().map(|d| d.rumi_price_usd * 100).unwrap_or(0),
+        spread_b_bps: dry_run_b.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        balance_icp: bal_icp.unwrap_or(0),
+        balance_3usd: dry_run_a.as_ref().map(|d| d.balance_3usd).unwrap_or(0),
+        balance_ckusdc: dry_run_a.as_ref().map(|d| d.balance_ckusdc).unwrap_or(0),
+        balance_icusd: bal_icusd.unwrap_or(0),
+        traded: false,
+        strategy_used: String::new(),
+    };
+
     // Pick the best strategy
     let profit_a = dry_run_a.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_b = dry_run_b.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
@@ -171,11 +203,15 @@ pub async fn run_arb_cycle() {
             (None, None) => "Both strategies failed".to_string(),
         };
         state::log_activity("arb_skip", &msg);
+        // Record snapshot even when not trading
+        state::mutate_state(|s| s.snapshots.push(snapshot));
         return;
     }
 
     if profit_a >= profit_b {
         // Execute Strategy A
+        snapshot.traded = true;
+        snapshot.strategy_used = "A".to_string();
         let dry_run = dry_run_a.unwrap();
         state::log_activity("arb_start", &format!(
             "[A] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
@@ -194,6 +230,8 @@ pub async fn run_arb_cycle() {
         }
     } else {
         // Execute Strategy B
+        snapshot.traded = true;
+        snapshot.strategy_used = "B".to_string();
         let dry_run = dry_run_b.unwrap();
         state::log_activity("arb_start", &format!(
             "[B] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
@@ -212,6 +250,8 @@ pub async fn run_arb_cycle() {
         }
     }
 
+    // Record snapshot after trade execution
+    state::mutate_state(|s| s.snapshots.push(snapshot));
 }
 
 // ─── Dry Run: Compute Optimal Trade ───

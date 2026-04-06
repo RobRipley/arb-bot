@@ -72,6 +72,23 @@ type TradeLeg = record {
   fees_usd: int64;
 };
 
+type CycleSnapshot = record {
+  timestamp: nat64;
+  rumi_icp_price_3usd: nat64;
+  rumi_icp_price_usd: nat64;
+  icpswap_icp_price_ckusdc: nat64;
+  virtual_price: nat64;
+  spread_a_bps: int32;
+  icpswap_icp_price_icusd: nat64;
+  spread_b_bps: int32;
+  balance_icp: nat64;
+  balance_3usd: nat64;
+  balance_ckusdc: nat64;
+  balance_icusd: nat64;
+  traded: bool;
+  strategy_used: text;
+};
+
 type ErrorRecord = record {
   timestamp: nat64;
   message: text;
@@ -144,6 +161,7 @@ service : (InitArgs) -> {
   get_summary: () -> (TradeSummary) query;
   get_errors: (nat64, nat64) -> (vec ErrorRecord) query;
   get_activity_log: (nat64, nat64) -> (vec ActivityRecord) query;
+  get_snapshots: (nat64, nat64) -> (vec CycleSnapshot) query;
   http_request: (HttpRequest) -> (HttpResponse) query;
 
   // Auth
