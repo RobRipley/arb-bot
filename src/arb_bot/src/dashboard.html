@@ -33,7 +33,7 @@
 
       /* Semantic */
       --profit: #00d4aa;
-      --loss: #ff4757;
+      --loss: #e06b9f;
       --warning: #f0b232;
       --info: #5b8af0;
 
@@ -205,8 +205,10 @@
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-primary { background: var(--accent); color: #0c0e14; border-color: var(--accent); font-weight: 600; }
     .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-    .btn-danger { background: var(--loss); color: #fff; border-color: var(--loss); }
-    .btn-success { background: var(--profit); color: #0c0e14; border-color: var(--profit); }
+    .btn-danger { background: #e06b9f; color: #fff; border-color: #e06b9f; }
+    .btn-danger:hover:not(:disabled) { background: #e87db0; }
+    .btn-success { background: #34d399; color: #0c0e14; border-color: #34d399; }
+    .btn-success:hover:not(:disabled) { background: #6ee7b7; }
     .btn-sm { padding: 5px 12px; font-size: 12px; min-height: 30px; }
     .btn-ghost { background: transparent; border-color: var(--border); }
     .btn-block { width: 100%; }
@@ -328,7 +330,8 @@
     .collapsible-body { display: none; }
     .collapsible-body.open { display: block; }
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
-    .admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--sp-4); }
+    .admin-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-4); }
+    .admin-full { grid-column: 1 / -1; }
     .btn-group { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
     .divider { border-top: 1px solid var(--border); margin: var(--sp-3) 0; }
 
@@ -380,8 +383,14 @@
     /* ── Content Header ── */
     .content-header {
       display: flex;
-      justify-content: flex-end;
-      margin-bottom: var(--sp-2);
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--sp-4);
+    }
+    .content-header-right {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
     }
 
     /* ── Responsive ── */
@@ -437,14 +446,16 @@
         <span class="status-dot" id="status-dot"></span>
         <span id="status-label">Loading...</span>
       </div>
-      <div id="principal-display" class="sidebar-principal"></div>
-      <button class="btn btn-sm btn-ghost" id="auth-btn" style="width:100%">Login with II</button>
     </div>
   </aside>
 
   <main class="content">
     <div class="content-header">
       <span id="last-updated" class="text-muted" style="font-size:11px;font-family:var(--font-data);color:var(--text-tertiary)"></span>
+      <div class="content-header-right">
+        <span id="principal-display" class="sidebar-principal"></span>
+        <button class="btn btn-sm btn-ghost" id="auth-btn">Login with II</button>
+      </div>
     </div>
     <section class="view active" id="view-overview">
       <!-- Hero P&L Strip -->
@@ -631,26 +642,65 @@
     <section class="view" id="view-admin">
   <div class="admin-grid">
 
-    <!-- Bot Controls -->
+    <!-- Row 1, Col 1: Bot Controls -->
     <div class="card">
-      <div class="card-header">BOT CONTROLS</div>
-      <div class="btn-group" style="margin-bottom:var(--sp-4)">
-        <button class="btn btn-danger" id="pause-btn" onclick="doAction(this, () => authenticatedActor.pause(), 'Bot paused')">Pause</button>
-        <button class="btn btn-success" id="resume-btn" onclick="doAction(this, () => authenticatedActor.resume(), 'Bot resumed')">Resume</button>
+      <div class="card-header">Bot Controls</div>
+      <div id="bot-status-line" style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-4);font-size:13px;font-weight:500">
+        <span class="status-dot" id="admin-status-dot"></span>
+        <span id="admin-status-text">Loading...</span>
       </div>
-      <div class="btn-group" style="margin-bottom:var(--sp-4)">
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+        <button class="btn" id="pause-btn" onclick="doAction(this, () => authenticatedActor.pause(), 'Bot paused')" style="background:#e06b9f;color:#fff;border-color:#e06b9f">Pause</button>
+        <button class="btn" id="resume-btn" onclick="doAction(this, () => authenticatedActor.resume(), 'Bot resumed')" style="background:#34d399;color:#0c0e14;border-color:#34d399;font-weight:600">Resume</button>
         <button class="btn" onclick="doAction(this, async () => { const msg = await authenticatedActor.setup_approvals(); showToast(msg, 'success'); }, null)">Setup Approvals</button>
         <button class="btn" onclick="doAction(this, () => authenticatedActor.manual_arb_cycle(), 'Arb cycle complete')">Manual Arb</button>
       </div>
-      <button class="btn btn-primary btn-block" id="dryrun-btn" onclick="doDryRun(this)">Dry Run</button>
-      <div id="dryrun-result" style="display:none;margin-top:var(--sp-4);background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4)">
-        <div id="dryrun-content"></div>
+    </div>
+
+    <!-- Row 1, Col 2: Configuration -->
+    <div class="card">
+      <div class="card-header">Configuration</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label>Min Spread (bps)</label>
+          <input type="number" id="cfg-min-spread" placeholder="50">
+        </div>
+        <div>
+          <label>Max Trade Size (USD)</label>
+          <input type="number" id="cfg-max-trade" placeholder="100" step="0.01">
+        </div>
+        <div>
+          <label>Min Profit (USD, 0 = disabled)</label>
+          <input type="number" id="cfg-min-profit" placeholder="0" step="0.01">
+        </div>
+        <button class="btn btn-primary btn-block" onclick="saveConfig(this)">Save Configuration</button>
+      </div>
+      <div style="margin-top:var(--sp-4);border-top:1px solid var(--border);padding-top:var(--sp-3)">
+        <div class="card-header" style="margin-bottom:var(--sp-2)">Current Config</div>
+        <div id="config-display" style="font-size:12px;color:var(--text-secondary);font-family:var(--font-data)">Loading...</div>
       </div>
     </div>
 
-    <!-- Swap Widget -->
+    <!-- Row 2, Col 1: Dry Run -->
     <div class="card">
-      <div class="card-header">SWAP</div>
+      <div class="card-header">Dry Run</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div style="display:flex;gap:var(--sp-2)">
+          <button class="btn btn-block" onclick="doDryRun(this, 'a')" style="flex:1">Strategy A</button>
+          <button class="btn btn-block" onclick="doDryRun(this, 'b')" style="flex:1">Strategy B</button>
+        </div>
+        <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run Both</button>
+        <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
+          A = Rumi 3USD/ICP vs ICPSwap ckUSDC/ICP<br>
+          B = ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP
+        </div>
+      </div>
+      <div id="dry-run-result" style="display:none;margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)"></div>
+    </div>
+
+    <!-- Row 2, Col 2: Swap Widget -->
+    <div class="card">
+      <div class="card-header">Swap</div>
       <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)" id="swap-route-info"></div>
       <!-- From -->
       <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-bottom:var(--sp-2)">
@@ -694,58 +744,52 @@
       <button class="btn btn-primary btn-block" id="swap-execute-btn" onclick="swapExecute(this)">Swap</button>
     </div>
 
-    <!-- Withdraw -->
-    <div class="card">
-      <div class="card-header">WITHDRAW FROM BOT</div>
-      <div style="margin-bottom:var(--sp-3)">
-        <label>Token</label>
-        <select id="w-token">
-          <option value="icp">ICP</option>
-          <option value="ckusdc">ckUSDC</option>
-          <option value="3usd">3USD</option>
-          <option value="ckusdt">ckUSDT</option>
-          <option value="icusd">icUSD</option>
-        </select>
+    <!-- Row 3, Full Width: Withdraw + Deposit -->
+    <div class="admin-full" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-4)">
+      <!-- Withdraw -->
+      <div class="card">
+        <div class="card-header">Withdraw from Bot</div>
+        <div style="margin-bottom:var(--sp-3)">
+          <label>Token</label>
+          <select id="w-token">
+            <option value="icp">ICP</option>
+            <option value="ckusdc">ckUSDC</option>
+            <option value="3usd">3USD</option>
+            <option value="ckusdt">ckUSDT</option>
+            <option value="icusd">icUSD</option>
+          </select>
+        </div>
+        <div style="margin-bottom:var(--sp-3)">
+          <label>Recipient</label>
+          <input id="w-to" type="text" placeholder="Principal ID">
+        </div>
+        <div style="margin-bottom:var(--sp-3)">
+          <label>Amount</label>
+          <input id="w-amount" type="text" placeholder="0.00">
+        </div>
+        <button class="btn btn-danger btn-block" onclick="doWithdraw(this)">Withdraw</button>
       </div>
-      <div style="margin-bottom:var(--sp-3)">
-        <label>Recipient</label>
-        <input id="w-to" type="text" placeholder="Principal ID">
-      </div>
-      <div style="margin-bottom:var(--sp-3)">
-        <label>Amount</label>
-        <input id="w-amount" type="text" placeholder="0.00">
-      </div>
-      <button class="btn btn-danger btn-block" onclick="doWithdraw(this)">Withdraw</button>
-    </div>
-  </div>
 
-  <!-- Deposit section (below grid) -->
-  <div class="card" id="deposit-section" style="margin-top:var(--sp-4);display:none">
-    <div class="card-header">DEPOSIT FROM YOUR WALLET</div>
-    <div class="grid-2">
-      <div>
-        <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="my-bal-3usd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="my-bal-ckusdc">--</span></div>
-        <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="my-bal-ckusdt">--</span></div>
-        <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="my-bal-icusd">--</span></div>
-        <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="my-bal-icp">--</span></div>
-      </div>
-      <div>
-        <div class="btn-group" style="flex-direction:column">
-          <button class="btn btn-sm" onclick="doDeposit('3usd')">Deposit 3USD</button>
-          <button class="btn btn-sm" onclick="doDeposit('ckusdc')">Deposit ckUSDC</button>
-          <button class="btn btn-sm" onclick="doDeposit('ckusdt')">Deposit ckUSDT</button>
-          <button class="btn btn-sm" onclick="doDeposit('icusd')">Deposit icUSD</button>
-          <button class="btn btn-sm" onclick="doDeposit('icp')">Deposit ICP</button>
+      <!-- Deposit -->
+      <div class="card" id="deposit-section">
+        <div class="card-header">Deposit from Your Wallet</div>
+        <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+          <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="my-bal-3usd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="my-bal-ckusdc">--</span></div>
+          <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="my-bal-ckusdt">--</span></div>
+          <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="my-bal-icusd">--</span></div>
+          <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="my-bal-icp">--</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:var(--sp-2);margin-top:var(--sp-3)">
+          <button class="btn btn-sm btn-block" onclick="doDeposit('3usd')">Deposit 3USD</button>
+          <button class="btn btn-sm btn-block" onclick="doDeposit('ckusdc')">Deposit ckUSDC</button>
+          <button class="btn btn-sm btn-block" onclick="doDeposit('ckusdt')">Deposit ckUSDT</button>
+          <button class="btn btn-sm btn-block" onclick="doDeposit('icusd')">Deposit icUSD</button>
+          <button class="btn btn-sm btn-block" onclick="doDeposit('icp')">Deposit ICP</button>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Config display -->
-  <div class="card" style="margin-top:var(--sp-4)">
-    <div class="card-header">CONFIGURATION</div>
-    <div id="config-display" style="font-family:var(--font-data);font-size:12px;color:var(--text-secondary)">Loading...</div>
   </div>
 </section>
   </main>
@@ -775,7 +819,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64 });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
@@ -791,12 +835,13 @@
       timestamp: IDL.Nat64, rumi_icp_price_3usd: IDL.Nat64, rumi_icp_price_usd: IDL.Nat64,
       icpswap_icp_price_ckusdc: IDL.Nat64, virtual_price: IDL.Nat64, spread_a_bps: IDL.Int32,
       icpswap_icp_price_icusd: IDL.Nat64, spread_b_bps: IDL.Int32,
-      balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_icusd: IDL.Nat64,
+      balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_ckusdt: IDL.Nat64, balance_icusd: IDL.Nat64,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
     const idlFactory = ({ IDL: I }) => I.Service({
       get_config: I.Func([], [BotConfig], ['query']),
+      set_config: I.Func([BotConfig], [], []),
       get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
       get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
       get_summary: I.Func([], [TradeSummary], ['query']),
@@ -1479,8 +1524,8 @@
 
     async function renderPnlChart() {
       destroyChart();
-      hideChartEmpty();
 
+      // Fetch ALL trade legs
       let allLegs = [];
       let offset = 0;
       while (true) {
@@ -1491,21 +1536,36 @@
       }
 
       if (!allLegs.length) { showChartEmpty(); return; }
+      hideChartEmpty();
 
+      // Compute cumulative P&L, only emitting points at cycle completions (Leg2 or Drain)
       let cumPnl = 0;
-      const data = allLegs.map(leg => {
-        cumPnl += (bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd));
-        return { time: Math.floor(bi(leg.timestamp) / 1e9), value: cumPnl / 1e6 };
-      });
+      const data = [];
+      for (const leg of allLegs) {
+        const legPnl = (bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd));
+        cumPnl += legPnl;
+        // Only plot at cycle completion points
+        const lt = leg.leg_type;
+        const isCompletion = lt.Leg2 !== undefined || lt.Drain !== undefined;
+        if (isCompletion) {
+          data.push({
+            time: Math.floor(bi(leg.timestamp) / 1e9),
+            value: cumPnl / 1e6,
+          });
+        }
+      }
 
       chartInstance = createBaseChart('chart-container');
       const series = chartInstance.addAreaSeries({
-        lineColor: '#00d4aa', topColor: 'rgba(0, 212, 170, 0.3)', bottomColor: 'rgba(0, 212, 170, 0.02)',
-        lineWidth: 2, title: 'Cumulative P&L (USD)',
+        lineColor: '#00d4aa',
+        topColor: 'rgba(0, 212, 170, 0.3)',
+        bottomColor: 'rgba(0, 212, 170, 0.02)',
+        lineWidth: 2,
+        title: 'Cumulative P&L ($)',
       });
       series.setData(data);
       chartInstance.timeScale().fitContent();
-      updateChartFooter(data.length, 'trade legs');
+      updateChartFooter(data.length, `${allLegs.length} legs → ${data.length} cycles`);
     }
 
     function renderBalanceChart(snapshots) {
@@ -1515,11 +1575,12 @@
 
       chartInstance = createBaseChart('chart-container');
 
-      const sIcp = chartInstance.addLineSeries({ color: '#8b93a8', lineWidth: 1, title: 'ICP' });
-      const s3usd = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 1, title: '3USD' });
-      const sCkusdc = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 1, title: 'ckUSDC' });
-      const sIcusd = chartInstance.addLineSeries({ color: '#f0b232', lineWidth: 1, title: 'icUSD' });
-      const sTotal = chartInstance.addLineSeries({ color: '#e8ecf4', lineWidth: 2, title: 'Total' });
+      const sIcp = chartInstance.addLineSeries({ color: '#8b93a8', lineWidth: 1, title: 'ICP (USD)' });
+      const s3usd = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 1, title: '3USD (USD)' });
+      const sCkusdc = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 1, title: 'ckUSDC (USD)' });
+      const sCkusdt = chartInstance.addLineSeries({ color: '#a78bfa', lineWidth: 1, title: 'ckUSDT (USD)' });
+      const sIcusd = chartInstance.addLineSeries({ color: '#f0b232', lineWidth: 1, title: 'icUSD (USD)' });
+      const sTotal = chartInstance.addLineSeries({ color: '#e8ecf4', lineWidth: 2, title: 'Total (USD)' });
 
       const data = snapshots.map(s => {
         const t = Math.floor(bi(s.timestamp) / 1e9);
@@ -1528,13 +1589,15 @@
         const icpUsd = bi(s.balance_icp) / 1e8 * icpPrice;
         const threeUsd = bi(s.balance_3usd) / 1e8 * (vp || 1);
         const ckusdcUsd = bi(s.balance_ckusdc) / 1e6;
+        const ckusdtUsd = bi(s.balance_ckusdt) / 1e6;
         const icusdUsd = bi(s.balance_icusd) / 1e8;
-        return { t, icpUsd, threeUsd, ckusdcUsd, icusdUsd, total: icpUsd + threeUsd + ckusdcUsd + icusdUsd };
+        return { t, icpUsd, threeUsd, ckusdcUsd, ckusdtUsd, icusdUsd, total: icpUsd + threeUsd + ckusdcUsd + ckusdtUsd + icusdUsd };
       });
 
       sIcp.setData(data.map(d => ({ time: d.t, value: d.icpUsd })));
       s3usd.setData(data.map(d => ({ time: d.t, value: d.threeUsd })));
       sCkusdc.setData(data.map(d => ({ time: d.t, value: d.ckusdcUsd })));
+      sCkusdt.setData(data.map(d => ({ time: d.t, value: d.ckusdtUsd })));
       sIcusd.setData(data.map(d => ({ time: d.t, value: d.icusdUsd })));
       sTotal.setData(data.map(d => ({ time: d.t, value: d.total })));
 
@@ -1600,59 +1663,74 @@
 
     // ═══════ Admin: Dry Run ═══════
 
-    window.doDryRun = async function(btn) {
+    function formatDryRunResult(r) {
+      const dir = r.direction.length ? Object.keys(r.direction[0])[0] : 'N/A';
+      const token = r.optimal_input_token.length ? Object.keys(r.optimal_input_token[0])[0] : '--';
+      let html = '<div style="font-family:var(--font-data);font-size:12px;margin-top:var(--sp-2);display:flex;flex-direction:column;gap:2px">';
+      html += `<div style="color:var(--text-secondary)">${r.message}</div>`;
+      html += `<div>Trade: <span style="color:${r.should_trade ? 'var(--profit)' : 'var(--text-muted)'}">${r.should_trade ? 'YES' : 'NO'}</span></div>`;
+      html += `<div>Spread: ${bi(r.spread_bps)} bps</div>`;
+      if (r.should_trade) {
+        html += `<div>Direction: ${dir}</div>`;
+        html += `<div>Input: ${fmtTok(r.optimal_input_amount, token === 'CkUSDC' ? 6 : 8)} ${token}</div>`;
+        html += `<div>Expected profit: <span class="positive">$${(bi(r.expected_profit_usd) / 1e6).toFixed(4)}</span></div>`;
+      }
+      html += '</div>';
+      return html;
+    }
+
+    window.doDryRun = async function(btn, strategy) {
       if (!requireAuth()) return;
-      btnLoading(btn, 'Simulating...');
+      btnLoading(btn, 'Running...');
       try {
-        const dr = await authenticatedActor.dry_run_arb_cycle();
-        const panel = document.getElementById('dryrun-result');
-        const content = document.getElementById('dryrun-content');
+        const panel = document.getElementById('dry-run-result');
         panel.style.display = 'block';
+        let html = '';
 
-        const spread = bi(dr.spread_bps);
-        const rumiP = bi(dr.rumi_price_usd) / 1e6;
-        const icpswapP = bi(dr.icpswap_price_usd) / 1e6;
-        const vp = bi(dr.virtual_price) / 1e18;
-        const dir = dr.direction.length > 0 ? dirStr(dr.direction[0]) : 'None';
-        const inToken = dr.optimal_input_token.length > 0 ? tokStr(dr.optimal_input_token[0]) : '?';
-        const outToken = dr.expected_output_token.length > 0 ? tokStr(dr.expected_output_token[0]) : '?';
-        const inDec = inToken === '3USD' ? 8 : 6;
-        const outDec = outToken === '3USD' ? 8 : 6;
-        const profit = bi(dr.expected_profit_usd);
-
-        let html = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">
-          <div class="stat-row"><span class="stat-label">Trade?</span><span class="stat-value ${dr.should_trade ? 'positive' : ''}">${dr.should_trade ? 'YES' : 'NO'}</span></div>
-          <div class="stat-row"><span class="stat-label">Direction</span><span class="stat-value">${dir}</span></div>
-          <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value">${spread} bps</span></div>
-          <div class="stat-row"><span class="stat-label">Rumi</span><span class="stat-value">$${rumiP.toFixed(4)}</span></div>
-          <div class="stat-row"><span class="stat-label">ICPSwap</span><span class="stat-value">$${icpswapP.toFixed(4)}</span></div>
-          <div class="stat-row"><span class="stat-label">VP</span><span class="stat-value">${vp.toFixed(6)}</span></div>
-        </div>
-        <div style="margin-top:var(--sp-2);padding:var(--sp-2);background:var(--surface-2);border-radius:var(--radius-sm);font-size:12px"><strong>Status:</strong> ${esc(dr.message)}</div>`;
-
-        if (dr.should_trade) {
-          html += `<div style="margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--accent);border-radius:var(--radius-md);background:rgba(0,212,170,0.05);">
-            <div style="font-weight:600;color:var(--accent);margin-bottom:var(--sp-2);font-size:12px">OPTIMAL TRADE</div>
-            <div class="stat-row"><span class="stat-label">Input</span><span class="stat-value">${fmtTok(dr.optimal_input_amount, inDec)} ${inToken}</span></div>
-            <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value">${fmtTok(dr.expected_icp_amount, 8)}</span></div>
-            <div class="stat-row"><span class="stat-label">Output</span><span class="stat-value">${fmtTok(dr.expected_output_amount, outDec)} ${outToken}</span></div>
-            <div class="stat-row"><span class="stat-label">Profit</span><span class="stat-value positive">$${(profit / 1e6).toFixed(4)}</span></div>
-          </div>`;
+        if (strategy === 'a' || strategy === 'both') {
+          const r = await authenticatedActor.dry_run_arb_cycle();
+          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:var(--accent)">Strategy A</strong>';
+          html += formatDryRunResult(r);
+          html += '</div>';
         }
-
-        const cands = dr.candidates_evaluated;
-        if (cands.length > 0) {
-          html += `<details style="margin-top:var(--sp-3)"><summary style="cursor:pointer;font-size:11px;color:var(--text-tertiary)">Candidates (${cands.length})</summary>
-            <table class="data-table" style="margin-top:var(--sp-2)"><thead><tr><th>Input</th><th>ICP</th><th>Output</th><th>Profit</th></tr></thead>
-            <tbody>${cands.map(c => { const p = bi(c.profit_usd); return `<tr>
-              <td>${fmtTok(c.input_amount, inDec)} ${inToken}</td><td>${fmtTok(c.icp_amount, 8)}</td>
-              <td>${fmtTok(c.output_amount, outDec)} ${outToken}</td>
-              <td class="${p > 0 ? 'positive' : p < 0 ? 'negative' : ''}">$${(p/1e6).toFixed(4)}</td></tr>`; }).join('')}
-            </tbody></table></details>`;
+        if (strategy === 'b' || strategy === 'both') {
+          const r = await authenticatedActor.dry_run_strategy_b();
+          html += '<div><strong style="color:#5b8af0">Strategy B</strong>';
+          html += formatDryRunResult(r);
+          html += '</div>';
         }
-        content.innerHTML = html;
-        showToast('Dry run complete', 'success');
+        panel.innerHTML = html;
       } catch (e) { showToast('Dry run failed: ' + e.message, 'error'); }
+      finally { btnDone(btn); }
+    };
+
+    // ═══════ Admin: Save Config ═══════
+
+    window.saveConfig = async function(btn) {
+      if (!requireAuth()) return;
+      const minSpread = parseInt(document.getElementById('cfg-min-spread').value);
+      const maxTradeRaw = parseFloat(document.getElementById('cfg-max-trade').value);
+      const minProfitRaw = parseFloat(document.getElementById('cfg-min-profit').value);
+
+      if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw)) {
+        showToast('Enter at least one value to update', 'error');
+        return;
+      }
+
+      btnLoading(btn, 'Saving...');
+      try {
+        const cfg = await anonymousActor.get_config();
+        if (!isNaN(minSpread)) cfg.min_spread_bps = minSpread;
+        if (!isNaN(maxTradeRaw)) cfg.max_trade_size_usd = BigInt(Math.round(maxTradeRaw * 1e6));
+        if (!isNaN(minProfitRaw)) cfg.min_profit_usd = BigInt(Math.round(minProfitRaw * 1e6));
+        await authenticatedActor.set_config(cfg);
+        showToast('Config updated', 'success');
+        await loadConfig();
+        displayConfig();
+        document.getElementById('cfg-min-spread').value = '';
+        document.getElementById('cfg-max-trade').value = '';
+        document.getElementById('cfg-min-profit').value = '';
+      } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
 
@@ -1735,11 +1813,21 @@
         <div class="stat-row"><span class="stat-label">Owner</span><span class="stat-value">${short(c.owner)}</span></div>
         <div class="stat-row"><span class="stat-label">Min Spread</span><span class="stat-value">${bi(c.min_spread_bps)} bps</span></div>
         <div class="stat-row"><span class="stat-label">Max Trade Size</span><span class="stat-value">${fmt$(c.max_trade_size_usd)}</span></div>
+        <div class="stat-row"><span class="stat-label">Min Profit</span><span class="stat-value">$${(bi(c.min_profit_usd) / 1e6).toFixed(2)} USD</span></div>
         <div class="stat-row"><span class="stat-label">Rumi AMM</span><span class="stat-value">${short(c.rumi_amm)}</span></div>
         <div class="stat-row"><span class="stat-label">ICPSwap Pool</span><span class="stat-value">${short(c.icpswap_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">Admins</span><span class="stat-value">${c.admins.length}</span></div>
       `;
+      // Update admin status indicator
+      const adminDot = document.getElementById('admin-status-dot');
+      const adminText = document.getElementById('admin-status-text');
+      if (adminDot && adminText) {
+        adminDot.className = 'status-dot ' + (c.paused ? 'paused' : 'running');
+        adminText.innerHTML = c.paused
+          ? 'Bot is <span style="color:var(--warning);font-weight:600">PAUSED</span>'
+          : 'Bot is <span style="color:#34d399;font-weight:600">RUNNING</span>';
+      }
     }
 
     // ═══════ Admin: Swap ═══════

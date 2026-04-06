@@ -158,12 +158,14 @@ pub async fn run_arb_cycle() {
         None
     };
 
-    // Fetch extra balances for snapshot (ICP, icUSD) — dry runs already have 3USD and ckUSDC
-    let (bal_icp, bal_icusd) = futures::future::join(
+    // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT) — dry runs already have 3USD and ckUSDC
+    let ckusdt_ledger = candid::Principal::from_text("cngnf-vqaaa-aaaar-qag4q-cai").unwrap();
+    let (bal_icp, bal_icusd, bal_ckusdt) = futures::future::join3(
         fetch_balance(config.icp_ledger),
         async {
             if has_icusd_pool { fetch_balance(config.icusd_ledger).await } else { Ok(0) }
         },
+        fetch_balance(ckusdt_ledger),
     ).await;
 
     // Build snapshot from dry run data
@@ -185,6 +187,7 @@ pub async fn run_arb_cycle() {
         balance_icp: bal_icp.unwrap_or(0),
         balance_3usd: dry_run_a.as_ref().map(|d| d.balance_3usd).unwrap_or(0),
         balance_ckusdc: dry_run_a.as_ref().map(|d| d.balance_ckusdc).unwrap_or(0),
+        balance_ckusdt: bal_ckusdt.unwrap_or(0),
         balance_icusd: bal_icusd.unwrap_or(0),
         traded: false,
         strategy_used: String::new(),
@@ -204,6 +207,16 @@ pub async fn run_arb_cycle() {
         };
         state::log_activity("arb_skip", &msg);
         // Record snapshot even when not trading
+        state::mutate_state(|s| s.snapshots.push(snapshot));
+        return;
+    }
+
+    // Check minimum profit threshold
+    let best_profit = profit_a.max(profit_b);
+    if config.min_profit_usd > 0 && best_profit < config.min_profit_usd {
+        let msg = format!("Best profit ${:.2} < min ${:.2}",
+            best_profit as f64 / 1e6, config.min_profit_usd as f64 / 1e6);
+        state::log_activity("arb_skip", &msg);
         state::mutate_state(|s| s.snapshots.push(snapshot));
         return;
     }
@@ -270,19 +283,19 @@ pub async fn compute_optimal_trade(config: &state::BotConfig) -> Result<DryRunRe
     result.virtual_price = prices.virtual_price;
     result.spread_bps = prices.spread_bps();
 
-    let abs_spread = result.spread_bps.unsigned_abs();
-    if abs_spread < config.min_spread_bps {
-        result.message = format!("Spread {} bps < minimum {} bps", abs_spread, config.min_spread_bps);
-        return Ok(result);
-    }
-
-    // Fetch balances
+    // Fetch balances (always, even when spread is below minimum — needed for snapshot)
     let (bal_3usd, bal_ckusdc) = futures::future::join(
         fetch_balance(config.three_usd_ledger),
         fetch_balance(config.ckusdc_ledger),
     ).await;
     result.balance_3usd = bal_3usd.unwrap_or(0);
     result.balance_ckusdc = bal_ckusdc.unwrap_or(0);
+
+    let abs_spread = result.spread_bps.unsigned_abs();
+    if abs_spread < config.min_spread_bps {
+        result.message = format!("Spread {} bps < minimum {} bps", abs_spread, config.min_spread_bps);
+        return Ok(result);
+    }
 
     if result.spread_bps > 0 {
         // ICP more expensive on ICPSwap → buy on Rumi (3USD→ICP), sell on ICPSwap (ICP→ckUSDC)
@@ -520,19 +533,19 @@ pub async fn compute_optimal_trade_b(config: &state::BotConfig) -> Result<DryRun
     result.virtual_price = 0; // not applicable for Strategy B
     result.spread_bps = prices.spread_bps();
 
-    let abs_spread = result.spread_bps.unsigned_abs();
-    if abs_spread < config.min_spread_bps {
-        result.message = format!("[B] Spread {} bps < minimum {} bps", abs_spread, config.min_spread_bps);
-        return Ok(result);
-    }
-
-    // Fetch balances
+    // Fetch balances (always, even when spread is below minimum — needed for snapshot)
     let (bal_icusd, bal_ckusdc) = futures::future::join(
         fetch_balance(config.icusd_ledger),
         fetch_balance(config.ckusdc_ledger),
     ).await;
     result.balance_3usd = bal_icusd.unwrap_or(0); // reusing field for icUSD balance
     result.balance_ckusdc = bal_ckusdc.unwrap_or(0);
+
+    let abs_spread = result.spread_bps.unsigned_abs();
+    if abs_spread < config.min_spread_bps {
+        result.message = format!("[B] Spread {} bps < minimum {} bps", abs_spread, config.min_spread_bps);
+        return Ok(result);
+    }
 
     if result.spread_bps > 0 {
         // ICP more expensive on ckUSDC pool → buy on icUSD pool (icUSD→ICP), sell on ckUSDC pool (ICP→ckUSDC)

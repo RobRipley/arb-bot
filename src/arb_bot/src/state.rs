@@ -32,6 +32,9 @@ pub struct BotConfig {
     /// Whether ICP is token0 in the ICPSwap icUSD/ICP pool
     #[serde(default)]
     pub icpswap_icusd_icp_is_token0: bool,
+    /// Minimum net profit (6-decimal USD) required to execute a trade. 0 = disabled.
+    #[serde(default)]
+    pub min_profit_usd: i64,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -91,6 +94,8 @@ pub struct CycleSnapshot {
     pub balance_icp: u64,
     pub balance_3usd: u64,
     pub balance_ckusdc: u64,
+    #[serde(default)]
+    pub balance_ckusdt: u64,
     pub balance_icusd: u64,
     // Trade activity
     pub traded: bool,
@@ -156,6 +161,7 @@ impl Default for BotState {
                 icpswap_icusd_pool: Principal::anonymous(),
                 icusd_ledger: Principal::anonymous(),
                 icpswap_icusd_icp_is_token0: false,
+                min_profit_usd: 0,
             },
             trades: Vec::new(),
             errors: Vec::new(),

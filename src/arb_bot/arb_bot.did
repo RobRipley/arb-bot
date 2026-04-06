@@ -14,6 +14,7 @@ type BotConfig = record {
   icpswap_icusd_pool: principal;
   icusd_ledger: principal;
   icpswap_icusd_icp_is_token0: bool;
+  min_profit_usd: int64;
 };
 
 type Direction = variant {
@@ -84,6 +85,7 @@ type CycleSnapshot = record {
   balance_icp: nat64;
   balance_3usd: nat64;
   balance_ckusdc: nat64;
+  balance_ckusdt: nat64;
   balance_icusd: nat64;
   traded: bool;
   strategy_used: text;
