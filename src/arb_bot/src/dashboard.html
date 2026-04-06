@@ -291,23 +291,28 @@
 
       <div class="card">
         <h2>Live Prices</h2>
+        <div style="font-size:0.75em;color:var(--text-muted);margin-bottom:6px;">STRATEGY A &mdash; Rumi vs ICPSwap</div>
         <div class="stat-row"><span class="stat-label">Rumi ICP/3USD</span><span class="stat-value" id="price-rumi-3usd">--</span></div>
         <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-rumi-usd">--</span></div>
         <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap">--</span></div>
-        <div class="divider"></div>
         <div class="stat-row"><span class="stat-label">3pool Virtual Price</span><span class="stat-value" id="price-vp">--</span></div>
         <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value" id="price-spread">--</span></div>
+        <div class="divider"></div>
+        <div style="font-size:0.75em;color:var(--text-muted);margin-bottom:6px;">STRATEGY B &mdash; icUSD/ICP vs ckUSDC/ICP</div>
+        <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-icusd">--</span></div>
+        <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap-b">--</span></div>
+        <div class="stat-row"><span class="stat-label">Spread</span><span class="stat-value" id="price-spread-b">--</span></div>
       </div>
 
       <div class="card">
         <h2>Performance</h2>
-        <div class="stat-row"><span class="stat-label">Total P&amp;L</span><span class="stat-value" id="sum-pnl">--</span></div>
-        <div class="stat-row"><span class="stat-label">Trade Count</span><span class="stat-value" id="sum-trades">--</span></div>
-        <div class="stat-row"><span class="stat-label">Avg Profit/Trade</span><span class="stat-value" id="sum-avg">--</span></div>
+        <div class="stat-row"><span class="stat-label">Net P&amp;L</span><span class="stat-value" id="sum-pnl">--</span></div>
+        <div class="stat-row"><span class="stat-label">USD In (cost)</span><span class="stat-value" id="sum-usd-in">--</span></div>
+        <div class="stat-row"><span class="stat-label">USD Out (revenue)</span><span class="stat-value" id="sum-usd-out">--</span></div>
         <div class="stat-row"><span class="stat-label">Total Fees</span><span class="stat-value" id="sum-fees">--</span></div>
         <div class="divider"></div>
-        <div class="stat-row"><span class="stat-label">Rumi &rarr; ICPSwap</span><span class="stat-value" id="sum-r2i">--</span></div>
-        <div class="stat-row"><span class="stat-label">ICPSwap &rarr; Rumi</span><span class="stat-value" id="sum-i2r">--</span></div>
+        <div class="stat-row"><span class="stat-label">Leg 1 / Leg 2 / Drain</span><span class="stat-value" id="sum-legs">--</span></div>
+        <div class="stat-row"><span class="stat-label">Rumi / ICPSwap</span><span class="stat-value" id="sum-dex">--</span></div>
       </div>
     </div>
 
@@ -317,11 +322,11 @@
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Time</th><th>Direction</th><th>Input</th><th>Output</th>
-            <th>ICP</th><th>Spread</th><th>Fees</th><th>Net P&amp;L</th>
+            <th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th>
+            <th>USD In</th><th>USD Out</th><th>Fees</th><th>Profit</th>
           </tr></thead>
           <tbody id="trades-body">
-            <tr><td colspan="8" style="text-align:center;color:var(--text-muted);">Loading...</td></tr>
+            <tr><td colspan="9" style="text-align:center;color:var(--text-muted);">Loading...</td></tr>
           </tbody>
         </table>
       </div>
@@ -405,9 +410,10 @@
           </div>
         </div>
 
-        <!-- 3pool Swap Widget -->
+        <!-- Swap Widget -->
         <div class="card">
-          <h2>3pool Swap</h2>
+          <h2>Swap</h2>
+          <div style="font-size:0.75em;color:var(--text-muted);margin:-8px 0 12px;" id="swap-route-info"></div>
           <!-- From -->
           <div class="swap-box">
             <div class="swap-box-header">
@@ -417,10 +423,11 @@
             <div class="swap-input-row">
               <input type="text" id="swap-from-amount" placeholder="0.00" oninput="swapQuote()">
               <select id="swap-from-token" onchange="swapTokenChanged()">
+                <option value="icp">ICP</option>
+                <option value="3usd">3USD</option>
                 <option value="ckusdc">ckUSDC</option>
                 <option value="ckusdt">ckUSDT</option>
                 <option value="icusd">icUSD</option>
-                <option value="3usd">3USD</option>
               </select>
             </div>
           </div>
@@ -436,8 +443,12 @@
             </div>
             <div class="swap-input-row">
               <input type="text" id="swap-to-amount" placeholder="0.00" readonly style="color:var(--text-muted);">
-              <select id="swap-to-token" onchange="swapTokenChanged()" disabled style="opacity:0.7;">
+              <select id="swap-to-token" onchange="swapTokenChanged()">
                 <option value="3usd">3USD</option>
+                <option value="icp">ICP</option>
+                <option value="ckusdc">ckUSDC</option>
+                <option value="ckusdt">ckUSDT</option>
+                <option value="icusd">icUSD</option>
               </select>
             </div>
           </div>
@@ -498,12 +509,14 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal) });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
-    const TradeSummary = IDL.Record({ total_trades: IDL.Nat64, total_net_profit_usd: IDL.Int64, total_ledger_fees_usd: IDL.Int64, avg_profit_per_trade_usd: IDL.Int64, rumi_to_icpswap_count: IDL.Nat64, rumi_to_icpswap_profit: IDL.Int64, icpswap_to_rumi_count: IDL.Nat64, icpswap_to_rumi_profit: IDL.Int64 });
+    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64 });
+    const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
+    const TradeLeg = IDL.Record({ timestamp: IDL.Nat64, leg_type: LegType, dex: IDL.Text, sold_token: IDL.Text, sold_amount: IDL.Nat64, bought_token: IDL.Text, bought_amount: IDL.Nat64, sold_usd_value: IDL.Int64, bought_usd_value: IDL.Int64, fees_usd: IDL.Int64 });
     const ErrorRecord = IDL.Record({ timestamp: IDL.Nat64, message: IDL.Text });
     const ActivityRecord = IDL.Record({ timestamp: IDL.Nat64, category: IDL.Text, message: IDL.Text });
-    const PriceInfo = IDL.Record({ rumi_icp_price_3usd: IDL.Nat64, rumi_icp_price_usd_6dec: IDL.Nat64, icpswap_icp_price_ckusdc: IDL.Nat64, virtual_price: IDL.Nat64, spread_bps: IDL.Int32 });
+    const PriceInfo = IDL.Record({ rumi_icp_price_3usd: IDL.Nat64, rumi_icp_price_usd_6dec: IDL.Nat64, icpswap_icp_price_ckusdc: IDL.Nat64, virtual_price: IDL.Nat64, spread_bps: IDL.Int32, icpswap_icusd_icp_price: IDL.Nat64, strategy_b_spread_bps: IDL.Int32 });
     const CandidateResult = IDL.Record({ input_amount: IDL.Nat64, icp_amount: IDL.Nat64, output_amount: IDL.Nat64, profit_usd: IDL.Int64 });
     const DryRunResult = IDL.Record({ should_trade: IDL.Bool, direction: IDL.Opt(Direction), spread_bps: IDL.Int32, rumi_price_usd: IDL.Nat64, icpswap_price_usd: IDL.Nat64, virtual_price: IDL.Nat64, optimal_input_amount: IDL.Nat64, optimal_input_token: IDL.Opt(TokenVariant), expected_icp_amount: IDL.Nat64, expected_output_amount: IDL.Nat64, expected_output_token: IDL.Opt(TokenVariant), expected_profit_usd: IDL.Int64, candidates_evaluated: IDL.Vec(CandidateResult), balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, message: IDL.Text });
     const PoolQuoteResult = IDL.Record({ estimated_output: IDL.Nat64 });
@@ -511,6 +524,7 @@
     const idlFactory = ({ IDL: I }) => I.Service({
       get_config: I.Func([], [BotConfig], ['query']),
       get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
+      get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
       get_summary: I.Func([], [TradeSummary], ['query']),
       get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
       get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
@@ -523,11 +537,14 @@
       setup_approvals: I.Func([], [I.Text], []),
       manual_arb_cycle: I.Func([], [], []),
       dry_run_arb_cycle: I.Func([], [DryRunResult], []),
+      dry_run_strategy_b: I.Func([], [DryRunResult], []),
       withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
       pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
       pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
       pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
       pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+      rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
+      rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
     });
 
     const icrc1IdlFactory = ({ IDL: I }) => {
@@ -772,36 +789,65 @@
       } catch (e) { console.error('loadMyBalances:', e); }
     }
 
+    function legTypeStr(lt) { return 'Leg1' in lt ? 'Leg 1' : 'Leg2' in lt ? 'Leg 2' : 'Drain' in lt ? 'Drain' : '?'; }
+    function legTypeColor(lt) { return 'Leg1' in lt ? 'var(--blue)' : 'Leg2' in lt ? 'var(--green)' : 'var(--yellow)'; }
+    function fmtTokAmt(amount, token) {
+      const dec = (token === 'ICP' || token === '3USD' || token === 'icUSD') ? 8 : 6;
+      return `${fmtTok(amount, dec)} ${token}`;
+    }
+
     async function loadSummary() {
       try {
         const s = await anonymousActor.get_summary();
         const el = (id, val, cls) => { const e = document.getElementById(id); e.textContent = val; if (cls !== undefined) e.className = 'stat-value ' + cls; };
-        el('sum-pnl', fmt$(s.total_net_profit_usd), pClass(s.total_net_profit_usd));
-        el('sum-trades', bi(s.total_trades));
-        el('sum-avg', fmt$(s.avg_profit_per_trade_usd), pClass(s.avg_profit_per_trade_usd));
-        el('sum-fees', fmt$(s.total_ledger_fees_usd));
-        el('sum-r2i', `${bi(s.rumi_to_icpswap_count)} / ${fmt$(s.rumi_to_icpswap_profit)}`, pClass(s.rumi_to_icpswap_profit));
-        el('sum-i2r', `${bi(s.icpswap_to_rumi_count)} / ${fmt$(s.icpswap_to_rumi_profit)}`, pClass(s.icpswap_to_rumi_profit));
+        el('sum-pnl', fmt$(s.net_pnl_usd), pClass(s.net_pnl_usd));
+        el('sum-usd-in', fmt$(s.total_usd_in));
+        el('sum-usd-out', fmt$(s.total_usd_out));
+        el('sum-fees', fmt$(s.total_fees_usd));
+        el('sum-legs', `${bi(s.leg1_count)} / ${bi(s.leg2_count)} / ${bi(s.drain_count)}`);
+        el('sum-dex', `${bi(s.rumi_count)} / ${bi(s.icpswap_count)}`);
       } catch (e) { console.error('loadSummary:', e); }
     }
 
     async function loadTrades() {
       try {
-        const trades = await anonymousActor.get_trade_history(BigInt(tradesPage * PAGE_SIZE), BigInt(PAGE_SIZE));
+        const legs = await anonymousActor.get_trade_legs(BigInt(tradesPage * PAGE_SIZE), BigInt(PAGE_SIZE));
         const tbody = document.getElementById('trades-body');
-        if (!trades.length) {
-          tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);">No trades yet</td></tr>';
+        if (!legs.length) {
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);">No trades yet</td></tr>';
         } else {
-          tbody.innerHTML = [...trades].reverse().map(t => `<tr>
-            <td>${fmtTime(t.timestamp)}</td><td>${dirStr(t.direction)}</td>
-            <td>${fmtTok(t.input_amount, 'ThreeUSD' in t.input_token ? 8 : 6)} ${tokStr(t.input_token)}</td>
-            <td>${fmtTok(t.output_amount, 'ThreeUSD' in t.output_token ? 8 : 6)} ${tokStr(t.output_token)}</td>
-            <td>${fmtTok(t.icp_amount, 8)}</td><td>${bi(t.spread_bps)} bps</td>
-            <td>${fmt$(t.ledger_fees_usd)}</td><td class="${pClass(t.net_profit_usd)}">${fmt$(t.net_profit_usd)}</td>
-          </tr>`).join('');
+          // Compute profit: for Leg2/Drain, pair with the most recent preceding Leg1
+          // Legs are in chronological order; we'll scan forward tracking the last Leg1 cost
+          let lastLeg1Cost = 0; // sold_usd_value + fees from the Leg1
+          let lastLeg1Fees = 0;
+          const rows = legs.map(t => {
+            let profitHtml = '--';
+            if ('Leg1' in t.leg_type) {
+              lastLeg1Cost = bi(t.sold_usd_value);
+              lastLeg1Fees = bi(t.fees_usd);
+            } else if (('Leg2' in t.leg_type || 'Drain' in t.leg_type) && lastLeg1Cost > 0) {
+              const revenue = bi(t.bought_usd_value);
+              const totalFees = lastLeg1Fees + bi(t.fees_usd);
+              const profit = revenue - lastLeg1Cost - totalFees;
+              profitHtml = `<span class="${pClass(profit)}">${fmt$(profit)}</span>`;
+              if ('Leg2' in t.leg_type) { lastLeg1Cost = 0; lastLeg1Fees = 0; }
+            }
+            return `<tr>
+              <td>${fmtTime(t.timestamp)}</td>
+              <td style="color:${legTypeColor(t.leg_type)}">${legTypeStr(t.leg_type)}</td>
+              <td>${t.dex}</td>
+              <td>${fmtTokAmt(t.sold_amount, t.sold_token)}</td>
+              <td>${fmtTokAmt(t.bought_amount, t.bought_token)}</td>
+              <td>${bi(t.sold_usd_value) ? fmt$(t.sold_usd_value) : '--'}</td>
+              <td>${bi(t.bought_usd_value) ? fmt$(t.bought_usd_value) : '--'}</td>
+              <td>${bi(t.fees_usd) ? fmt$(t.fees_usd) : '--'}</td>
+              <td>${profitHtml}</td>
+            </tr>`;
+          });
+          tbody.innerHTML = [...rows].reverse().join('');
         }
         document.getElementById('trades-prev').disabled = tradesPage === 0;
-        document.getElementById('trades-next').disabled = trades.length < PAGE_SIZE;
+        document.getElementById('trades-next').disabled = legs.length < PAGE_SIZE;
         document.getElementById('trades-page').textContent = `Page ${tradesPage + 1}`;
       } catch (e) { console.error('loadTrades:', e); }
     }
@@ -826,18 +872,38 @@
     async function loadPrices() {
       try {
         const p = await anonymousActor.get_prices();
+        const ckusdcPrice = bi(p.icpswap_icp_price_ckusdc);
+        // Strategy A
         document.getElementById('price-rumi-3usd').textContent = (bi(p.rumi_icp_price_3usd) / 1e8).toFixed(4) + ' 3USD';
         document.getElementById('price-rumi-usd').textContent = '$' + (bi(p.rumi_icp_price_usd_6dec) / 1e6).toFixed(4);
-        document.getElementById('price-icpswap').textContent = (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4) + ' ckUSDC';
+        document.getElementById('price-icpswap').textContent = (ckusdcPrice / 1e6).toFixed(4) + ' ckUSDC';
         document.getElementById('price-vp').textContent = (bi(p.virtual_price) / 1e18).toFixed(6);
         const spread = bi(p.spread_bps), abs = Math.abs(spread);
         const dir = spread > 0 ? 'Rumi cheaper' : spread < 0 ? 'ICPSwap cheaper' : 'Even';
         const el = document.getElementById('price-spread');
         el.textContent = abs + ' bps (' + dir + ')';
         el.className = 'stat-value ' + (abs >= 50 ? 'positive' : '');
+        // Strategy B
+        const icusdPrice = bi(p.icpswap_icusd_icp_price);
+        const elIcusd = document.getElementById('price-icusd');
+        const elRefB = document.getElementById('price-icpswap-b');
+        const elB = document.getElementById('price-spread-b');
+        if (icusdPrice > 0) {
+          elIcusd.textContent = (icusdPrice / 1e8).toFixed(4) + ' icUSD';
+          elRefB.textContent = (ckusdcPrice / 1e6).toFixed(4) + ' ckUSDC';
+          const spreadB = bi(p.strategy_b_spread_bps), absB = Math.abs(spreadB);
+          const dirB = spreadB > 0 ? 'icUSD cheaper' : spreadB < 0 ? 'ckUSDC cheaper' : 'Even';
+          elB.textContent = absB + ' bps (' + dirB + ')';
+          elB.className = 'stat-value ' + (absB >= 50 ? 'positive' : '');
+        } else {
+          elIcusd.textContent = 'N/A';
+          elRefB.textContent = 'N/A';
+          elB.textContent = 'N/A';
+          elB.className = 'stat-value';
+        }
       } catch (e) {
         console.error('loadPrices:', e);
-        ['price-rumi-3usd','price-rumi-usd','price-icpswap','price-vp','price-spread'].forEach(id =>
+        ['price-rumi-3usd','price-rumi-usd','price-icpswap','price-vp','price-spread','price-icusd','price-icpswap-b','price-spread-b'].forEach(id =>
           document.getElementById(id).textContent = 'err');
       }
     }
@@ -932,41 +998,45 @@
       finally { btnDone(btn); }
     };
 
-    // ═══════ 3pool Swap Widget ═══════
+    // ═══════ Swap Widget ═══════
 
-    function isSwapDeposit() {
-      return document.getElementById('swap-from-token').value !== '3usd';
+    // Determine swap route based on from/to tokens
+    function swapRoute() {
+      const from = document.getElementById('swap-from-token').value;
+      const to = document.getElementById('swap-to-token').value;
+      if (from === to) return { type: 'invalid', label: 'Same token' };
+      const stables = ['ckusdc','ckusdt','icusd'];
+      const isFromStable = stables.includes(from);
+      const isToStable = stables.includes(to);
+
+      if (from === 'icp' && to === '3usd') return { type: 'rumi', label: 'via Rumi AMM' };
+      if (from === '3usd' && to === 'icp') return { type: 'rumi', label: 'via Rumi AMM' };
+      if (isFromStable && to === '3usd') return { type: '3pool_deposit', label: 'via 3pool deposit' };
+      if (from === '3usd' && isToStable) return { type: '3pool_redeem', label: 'via 3pool redeem' };
+      if (from === 'icp' && isToStable) return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool' };
+      if (isFromStable && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool + Rumi AMM' };
+      if (isFromStable && isToStable) return { type: 'invalid', label: 'Stable-to-stable not supported (use 3USD as intermediate)' };
+      return { type: 'invalid', label: 'Unsupported pair' };
     }
 
-    function swapGetFromInfo() {
-      const key = document.getElementById('swap-from-token').value;
-      return key === '3usd' ? { key: '3usd', decimals: 8, label: '3USD' } : POOL_COIN_MAP[key];
-    }
-
-    function swapGetToInfo() {
-      const key = document.getElementById('swap-to-token').value;
-      return key === '3usd' ? { key: '3usd', decimals: 8, label: '3USD' } : POOL_COIN_MAP[key];
+    function swapUpdateRoute() {
+      const route = swapRoute();
+      const routeEl = document.getElementById('swap-route-info');
+      routeEl.textContent = route.type === 'invalid' ? route.label : `Route: ${route.label}`;
+      routeEl.style.color = route.type === 'invalid' ? 'var(--red)' : 'var(--text-muted)';
     }
 
     window.swapTokenChanged = function() {
       const fromKey = document.getElementById('swap-from-token').value;
-      const toSelect = document.getElementById('swap-to-token');
-      toSelect.innerHTML = '';
-      if (fromKey === '3usd') {
-        // Redeeming: output is a stablecoin
-        POOL_COINS.forEach(c => {
-          const opt = document.createElement('option');
-          opt.value = c.key; opt.textContent = c.label;
-          toSelect.appendChild(opt);
-        });
-      } else {
-        // Depositing: output is 3USD
-        const opt = document.createElement('option');
-        opt.value = '3usd'; opt.textContent = '3USD';
-        toSelect.appendChild(opt);
+      const toKey = document.getElementById('swap-to-token').value;
+      if (fromKey === toKey) {
+        const toSel = document.getElementById('swap-to-token');
+        const opts = Array.from(toSel.options).filter(o => o.value !== fromKey);
+        if (opts.length > 0) toSel.value = opts[0].value;
       }
       document.getElementById('swap-to-amount').value = '';
       document.getElementById('swap-quote-info').textContent = '';
+      swapUpdateRoute();
       swapUpdateBalances();
       swapQuote();
     };
@@ -974,23 +1044,15 @@
     window.swapFlip = function() {
       const fromSel = document.getElementById('swap-from-token');
       const toSel = document.getElementById('swap-to-token');
-      const currentFrom = fromSel.value;
-      const currentTo = toSel.value;
-
-      // Set from to what was in to
-      fromSel.value = currentTo;
-      // Trigger the dependent to-select rebuild
-      swapTokenChanged();
-      // Try to set to to what was in from
-      const toOpts = Array.from(document.getElementById('swap-to-token').options);
-      const match = toOpts.find(o => o.value === currentFrom);
-      if (match) document.getElementById('swap-to-token').value = currentFrom;
-
-      // Move amount
+      const oldFrom = fromSel.value, oldTo = toSel.value;
+      fromSel.value = oldTo;
+      toSel.value = oldFrom;
       const fromAmt = document.getElementById('swap-from-amount').value;
       const toAmt = document.getElementById('swap-to-amount').value;
       document.getElementById('swap-from-amount').value = toAmt;
       document.getElementById('swap-to-amount').value = '';
+      swapUpdateRoute();
+      swapUpdateBalances();
       swapQuote();
     };
 
@@ -1040,31 +1102,55 @@
       if (!authenticatedActor) return;
 
       const fromKey = document.getElementById('swap-from-token').value;
-      const deposit = isSwapDeposit();
+      const toKey = document.getElementById('swap-to-token').value;
+      const route = swapRoute();
       const quoteEl = document.getElementById('swap-quote-info');
+
+      if (route.type === 'invalid') { quoteEl.textContent = route.label; return; }
       quoteEl.innerHTML = '<span class="spinner" style="width:12px;height:12px;border-width:1.5px;"></span>';
 
+      const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
       try {
-        let result;
-        if (deposit) {
+        let outRaw;
+        if (route.type === 'rumi') {
+          const raw = humanToRaw(amountStr, fromInfo.decimals);
+          const tokenInLedger = Principal.fromText(fromInfo.getLedger());
+          const result = await authenticatedActor.rumi_quote(tokenInLedger, raw);
+          outRaw = bi(result.estimated_output);
+        } else if (route.type === '3pool_deposit') {
           const coin = POOL_COIN_MAP[fromKey];
           const raw = humanToRaw(amountStr, coin.decimals);
-          result = await authenticatedActor.pool_quote_deposit(coin.index, raw);
-          const out = bi(result.estimated_output);
-          document.getElementById('swap-to-amount').value = (out / 1e8).toFixed(4);
-          const rate = (out / 1e8) / parseFloat(amountStr);
-          quoteEl.textContent = `1 ${coin.label} = ${rate.toFixed(4)} 3USD`;
-        } else {
-          const toKey = document.getElementById('swap-to-token').value;
+          const result = await authenticatedActor.pool_quote_deposit(coin.index, raw);
+          outRaw = bi(result.estimated_output);
+        } else if (route.type === '3pool_redeem') {
           const coin = POOL_COIN_MAP[toKey];
-          const raw = humanToRaw(amountStr, 8); // 3USD has 8 dec
-          result = await authenticatedActor.pool_quote_redeem(coin.index, raw);
-          const out = bi(result.estimated_output);
-          document.getElementById('swap-to-amount').value = (out / 10**coin.decimals).toFixed(coin.decimals > 6 ? 4 : 2);
-          const rate = (out / 10**coin.decimals) / parseFloat(amountStr);
-          quoteEl.textContent = `1 3USD = ${rate.toFixed(4)} ${coin.label}`;
+          const raw = humanToRaw(amountStr, 8);
+          const result = await authenticatedActor.pool_quote_redeem(coin.index, raw);
+          outRaw = bi(result.estimated_output);
+        } else if (route.type === 'rumi+3pool') {
+          const raw = humanToRaw(amountStr, 8);
+          const icpLedger = Principal.fromText(TOKEN_INFO.icp.getLedger());
+          const step1 = await authenticatedActor.rumi_quote(icpLedger, raw);
+          const threeUsdOut = bi(step1.estimated_output);
+          const coin = POOL_COIN_MAP[toKey];
+          const step2 = await authenticatedActor.pool_quote_redeem(coin.index, BigInt(threeUsdOut));
+          outRaw = bi(step2.estimated_output);
+        } else if (route.type === '3pool+rumi') {
+          const coin = POOL_COIN_MAP[fromKey];
+          const raw = humanToRaw(amountStr, coin.decimals);
+          const step1 = await authenticatedActor.pool_quote_deposit(coin.index, raw);
+          const threeUsdOut = bi(step1.estimated_output);
+          const threeUsdLedger = Principal.fromText(TOKEN_INFO['3usd'].getLedger());
+          const step2 = await authenticatedActor.rumi_quote(threeUsdLedger, BigInt(threeUsdOut));
+          outRaw = bi(step2.estimated_output);
         }
+
+        const outHuman = Number(outRaw) / 10**toInfo.decimals;
+        document.getElementById('swap-to-amount').value = outHuman.toFixed(toInfo.decimals > 6 ? 4 : 2);
+        const rate = outHuman / parseFloat(amountStr);
+        quoteEl.textContent = `1 ${fromInfo.label} \u2248 ${rate.toFixed(4)} ${toInfo.label}`;
       } catch (e) {
+        console.error('swapQuoteNow:', e);
         quoteEl.textContent = 'Quote failed';
         document.getElementById('swap-to-amount').value = '';
       }
@@ -1076,23 +1162,52 @@
       if (!amountStr || parseFloat(amountStr) <= 0) { showToast('Enter an amount', 'error'); return; }
 
       const fromKey = document.getElementById('swap-from-token').value;
-      const deposit = isSwapDeposit();
+      const toKey = document.getElementById('swap-to-token').value;
+      const route = swapRoute();
+      if (route.type === 'invalid') { showToast(route.label, 'error'); return; }
+
+      const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
       const toAmount = document.getElementById('swap-to-amount').value;
-      const fromInfo = swapGetFromInfo(), toInfo = swapGetToInfo();
 
       btnLoading(btn, 'Swapping...');
       try {
-        if (deposit) {
+        if (route.type === 'rumi') {
+          const raw = humanToRaw(amountStr, fromInfo.decimals);
+          const tokenInLedger = Principal.fromText(fromInfo.getLedger());
+          await authenticatedActor.rumi_manual_swap(tokenInLedger, raw, BigInt(0));
+          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ${toAmount} ${toInfo.label}`, 'success');
+        } else if (route.type === '3pool_deposit') {
           const coin = POOL_COIN_MAP[fromKey];
           const raw = humanToRaw(amountStr, coin.decimals);
           await authenticatedActor.pool_deposit(coin.index, raw, BigInt(0));
-          showToast(`Swapped ${amountStr} ${coin.label} \u2192 ${toAmount} 3USD`, 'success');
-        } else {
-          const toKey = document.getElementById('swap-to-token').value;
+          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ${toAmount} 3USD`, 'success');
+        } else if (route.type === '3pool_redeem') {
           const coin = POOL_COIN_MAP[toKey];
           const raw = humanToRaw(amountStr, 8);
           await authenticatedActor.pool_redeem(coin.index, raw, BigInt(0));
-          showToast(`Swapped ${amountStr} 3USD \u2192 ${toAmount} ${coin.label}`, 'success');
+          showToast(`Swapped ${amountStr} 3USD \u2192 ${toAmount} ${toInfo.label}`, 'success');
+        } else if (route.type === 'rumi+3pool') {
+          const raw = humanToRaw(amountStr, 8);
+          const icpLedger = Principal.fromText(TOKEN_INFO.icp.getLedger());
+          await authenticatedActor.rumi_manual_swap(icpLedger, raw, BigInt(0));
+          const threeUsdActor = await createBalanceActor(TOKEN_INFO['3usd'].getLedger());
+          const bal3usd = await threeUsdActor.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
+          const coin = POOL_COIN_MAP[toKey];
+          if (bi(bal3usd) > 0n) {
+            await authenticatedActor.pool_redeem(coin.index, BigInt(bi(bal3usd)), BigInt(0));
+          }
+          showToast(`Swapped ${amountStr} ICP \u2192 ${toInfo.label}`, 'success');
+        } else if (route.type === '3pool+rumi') {
+          const coin = POOL_COIN_MAP[fromKey];
+          const raw = humanToRaw(amountStr, coin.decimals);
+          await authenticatedActor.pool_deposit(coin.index, raw, BigInt(0));
+          const threeUsdActor = await createBalanceActor(TOKEN_INFO['3usd'].getLedger());
+          const bal3usd = await threeUsdActor.icrc1_balance_of({ owner: Principal.fromText(canisterId), subaccount: [] });
+          const threeUsdLedger = Principal.fromText(TOKEN_INFO['3usd'].getLedger());
+          if (bi(bal3usd) > 0n) {
+            await authenticatedActor.rumi_manual_swap(threeUsdLedger, BigInt(bi(bal3usd)), BigInt(0));
+          }
+          showToast(`Swapped ${amountStr} ${fromInfo.label} \u2192 ICP`, 'success');
         }
         document.getElementById('swap-from-amount').value = '';
         document.getElementById('swap-to-amount').value = '';

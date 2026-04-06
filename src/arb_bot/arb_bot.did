@@ -11,6 +11,9 @@ type BotConfig = record {
   paused: bool;
   icpswap_icp_is_token0: bool;
   admins: vec principal;
+  icpswap_icusd_pool: principal;
+  icusd_ledger: principal;
+  icpswap_icusd_icp_is_token0: bool;
 };
 
 type Direction = variant {
@@ -38,14 +41,35 @@ type TradeRecord = record {
 };
 
 type TradeSummary = record {
-  total_trades: nat64;
-  total_net_profit_usd: int64;
-  total_ledger_fees_usd: int64;
-  avg_profit_per_trade_usd: int64;
-  rumi_to_icpswap_count: nat64;
-  rumi_to_icpswap_profit: int64;
-  icpswap_to_rumi_count: nat64;
-  icpswap_to_rumi_profit: int64;
+  total_legs: nat64;
+  total_usd_in: int64;
+  total_usd_out: int64;
+  total_fees_usd: int64;
+  net_pnl_usd: int64;
+  leg1_count: nat64;
+  leg2_count: nat64;
+  drain_count: nat64;
+  rumi_count: nat64;
+  icpswap_count: nat64;
+};
+
+type LegType = variant {
+  Leg1;
+  Leg2;
+  Drain;
+};
+
+type TradeLeg = record {
+  timestamp: nat64;
+  leg_type: LegType;
+  dex: text;
+  sold_token: text;
+  sold_amount: nat64;
+  bought_token: text;
+  bought_amount: nat64;
+  sold_usd_value: int64;
+  bought_usd_value: int64;
+  fees_usd: int64;
 };
 
 type ErrorRecord = record {
@@ -78,6 +102,8 @@ type PriceInfo = record {
   icpswap_icp_price_ckusdc: nat64;
   virtual_price: nat64;
   spread_bps: int32;
+  icpswap_icusd_icp_price: nat64;
+  strategy_b_spread_bps: int32;
 };
 
 type CandidateResult = record {
@@ -114,6 +140,7 @@ service : (InitArgs) -> {
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;
+  get_trade_legs: (nat64, nat64) -> (vec TradeLeg) query;
   get_summary: () -> (TradeSummary) query;
   get_errors: (nat64, nat64) -> (vec ErrorRecord) query;
   get_activity_log: (nat64, nat64) -> (vec ActivityRecord) query;
@@ -133,12 +160,18 @@ service : (InitArgs) -> {
   resume: () -> ();
   setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
+  backfill_trade_legs: (vec TradeLeg) -> ();
   manual_arb_cycle: () -> ();
   dry_run_arb_cycle: () -> (DryRunResult);
+  dry_run_strategy_b: () -> (DryRunResult);
 
   // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
   pool_deposit: (nat8, nat64, nat64) -> ();
   pool_redeem: (nat8, nat64, nat64) -> ();
   pool_quote_deposit: (nat8, nat64) -> (record { estimated_output: nat64 });
   pool_quote_redeem: (nat8, nat64) -> (record { estimated_output: nat64 });
+
+  // Rumi AMM manual swap (ICP ↔ 3USD)
+  rumi_quote: (principal, nat64) -> (record { estimated_output: nat64 });
+  rumi_manual_swap: (principal, nat64, nat64) -> ();
 }

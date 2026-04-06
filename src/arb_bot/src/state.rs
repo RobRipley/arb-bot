@@ -2,6 +2,10 @@ use candid::{CandidType, Deserialize, Principal};
 use serde::Serialize;
 use std::cell::RefCell;
 
+fn default_principal() -> Principal {
+    Principal::anonymous()
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -19,6 +23,15 @@ pub struct BotConfig {
     /// Additional admin principals (e.g. Internet Identity) that can call admin methods
     #[serde(default)]
     pub admins: Vec<Principal>,
+    /// Strategy B: ICPSwap icUSD/ICP pool canister
+    #[serde(default = "default_principal")]
+    pub icpswap_icusd_pool: Principal,
+    /// Strategy B: icUSD ledger canister
+    #[serde(default = "default_principal")]
+    pub icusd_ledger: Principal,
+    /// Whether ICP is token0 in the ICPSwap icUSD/ICP pool
+    #[serde(default)]
+    pub icpswap_icusd_icp_is_token0: bool,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -61,6 +74,29 @@ pub struct ActivityRecord {
     pub message: String,
 }
 
+/// Per-leg trade record. Each swap (Leg 1, Leg 2, drain) gets its own entry.
+/// P&L is computed by summing stablecoin inflows vs outflows across all legs.
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub enum LegType {
+    Leg1,
+    Leg2,
+    Drain,
+}
+
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub struct TradeLeg {
+    pub timestamp: u64,
+    pub leg_type: LegType,
+    pub dex: String,             // "Rumi" or "ICPSwap"
+    pub sold_token: String,      // "3USD", "ICP", "ckUSDC"
+    pub sold_amount: u64,        // raw amount in token's native decimals
+    pub bought_token: String,
+    pub bought_amount: u64,
+    pub sold_usd_value: i64,     // 6-decimal USD (0 for ICP legs)
+    pub bought_usd_value: i64,   // 6-decimal USD (0 for ICP legs)
+    pub fees_usd: i64,           // ledger fees in 6-decimal USD
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct BotState {
     pub config: BotConfig,
@@ -70,6 +106,10 @@ pub struct BotState {
     pub activity_log: Vec<ActivityRecord>,
     #[serde(default)]
     pub token_ordering_resolved: bool,
+    #[serde(default)]
+    pub icusd_token_ordering_resolved: bool,
+    #[serde(default)]
+    pub trade_legs: Vec<TradeLeg>,
 }
 
 impl Default for BotState {
@@ -88,11 +128,16 @@ impl Default for BotState {
                 paused: true,
                 icpswap_icp_is_token0: true,
                 admins: Vec::new(),
+                icpswap_icusd_pool: Principal::anonymous(),
+                icusd_ledger: Principal::anonymous(),
+                icpswap_icusd_icp_is_token0: false,
             },
             trades: Vec::new(),
             errors: Vec::new(),
             activity_log: Vec::new(),
             token_ordering_resolved: false,
+            icusd_token_ordering_resolved: false,
+            trade_legs: Vec::new(),
         }
     }
 }
