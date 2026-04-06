@@ -1013,23 +1013,20 @@
 
     // ═══════ View Switching ═══════
 
-    function switchView(name) {
+    async function switchView(name) {
       document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       const navItem = document.querySelector(`.nav-item[data-view="${name}"]`);
       if (navItem) navItem.classList.add('active');
       document.getElementById('view-' + name)?.classList.add('active');
+      clearInterval(chartsRefreshInterval);
+      chartsRefreshInterval = null;
       if (name === 'charts') {
-        renderCurrentChart();
-        if (snapshotsLoaded) {
-          chartsRefreshInterval = setInterval(async () => {
-            await loadSnapshots();
-            renderCurrentChart();
-          }, 60000);
-        }
-      } else {
-        clearInterval(chartsRefreshInterval);
-        chartsRefreshInterval = null;
+        await renderCurrentChart();
+        chartsRefreshInterval = setInterval(async () => {
+          await loadSnapshots();
+          renderCurrentChart();
+        }, 60000);
       }
     }
     window.switchView = switchView;
