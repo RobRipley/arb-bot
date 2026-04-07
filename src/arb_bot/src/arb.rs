@@ -797,6 +797,11 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, dry_run: &DryRunResu
                     bought_usd_value: 0, // ICP is transit, no USD value
                     fees_usd: 0,         // no stablecoin fee on this leg
                 });
+                s.pending_exit = Some(state::PendingExit {
+                    entry_pool: state::Pool::RumiThreeUsd,
+                    intended_exit_pool: state::Pool::IcpswapCkusdc,
+                    timestamp: ic_cdk::api::time(),
+                });
             });
             amount
         }
@@ -880,6 +885,11 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, dry_run: &DryRunResu
                     sold_usd_value: trade_amount_ckusdc as i64, // ckUSDC IS USD
                     bought_usd_value: 0, // ICP is transit
                     fees_usd: CKUSDC_FEE as i64,
+                });
+                s.pending_exit = Some(state::PendingExit {
+                    entry_pool: state::Pool::IcpswapCkusdc,
+                    intended_exit_pool: state::Pool::RumiThreeUsd,
+                    timestamp: ic_cdk::api::time(),
                 });
             });
             amount
@@ -979,6 +989,11 @@ async fn execute_icusd_to_ckusdc(config: &state::BotConfig, dry_run: &DryRunResu
                     bought_usd_value: 0,
                     fees_usd: (ICUSD_FEE / 100) as i64,
                 });
+                s.pending_exit = Some(state::PendingExit {
+                    entry_pool: state::Pool::IcpswapIcusd,
+                    intended_exit_pool: state::Pool::IcpswapCkusdc,
+                    timestamp: ic_cdk::api::time(),
+                });
             });
             amount
         }
@@ -1065,6 +1080,11 @@ async fn execute_ckusdc_to_icusd(config: &state::BotConfig, dry_run: &DryRunResu
                     bought_usd_value: 0,
                     fees_usd: CKUSDC_FEE as i64,
                 });
+                s.pending_exit = Some(state::PendingExit {
+                    entry_pool: state::Pool::IcpswapCkusdc,
+                    intended_exit_pool: state::Pool::IcpswapIcusd,
+                    timestamp: ic_cdk::api::time(),
+                });
             });
             amount
         }
@@ -1141,28 +1161,102 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
 
     state::log_activity("drain", &format!("Draining {} residual ICP (balance: {})", drain_amount, icp_balance));
 
+    // Determine the entry pool to AVOID. Primary source: pending_exit recorded
+    // at Leg 1 success. Fallback safety net: the most recent Leg1 trade_leg
+    // (works even after a canister restart that cleared pending_exit).
+    let (pending_exit, fallback_entry_pool): (Option<state::PendingExit>, Option<state::Pool>) =
+        state::read_state(|s| {
+            let fb = s.trade_legs.iter().rev().find_map(|l| match l.leg_type {
+                state::LegType::Leg1 => Some(dex_string_to_pool(&l.dex)),
+                _ => None,
+            }).flatten();
+            (s.pending_exit.clone(), fb)
+        });
+    let entry_pool: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.entry_pool).or(fallback_entry_pool);
+    let intended_exit: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.intended_exit_pool);
+
+    // Quote all three pools in parallel.
     let rumi_quote = prices::fetch_rumi_price(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger);
-    let icpswap_quote = prices::fetch_icpswap_price(config.icpswap_pool, config.icpswap_icp_is_token0);
-    let vp = prices::fetch_virtual_price(config.rumi_3pool);
+    let icpswap_ck_quote = prices::fetch_icpswap_price(config.icpswap_pool, config.icpswap_icp_is_token0);
+    let vp_fut = prices::fetch_virtual_price(config.rumi_3pool);
+    let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
+    let icusd_resolved = state::read_state(|s| s.icusd_token_ordering_resolved);
 
-    let (rumi_res, icpswap_res, vp_res) =
-        futures::future::join3(rumi_quote, icpswap_quote, vp).await;
+    let (rumi_res, icpswap_ck_res, vp_res) =
+        futures::future::join3(rumi_quote, icpswap_ck_quote, vp_fut).await;
 
-    // Compute slippage-protected min outputs from quotes BEFORE consuming Results.
-    // Quotes are for 1 ICP; scale to drain_amount and apply slippage tolerance.
-    let rumi_min_out = rumi_res.as_ref().ok().map(|&quote_per_icp| {
-        let scaled = quote_per_icp as u128 * drain_amount as u128 / 100_000_000;
-        (scaled * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64
-    }).unwrap_or(0);
-    let icpswap_min_out = icpswap_res.as_ref().ok().map(|&quote_per_icp| {
-        let scaled = quote_per_icp as u128 * drain_amount as u128 / 100_000_000;
-        (scaled * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64
-    }).unwrap_or(0);
+    let icpswap_icusd_res: Result<u64, String> = if has_icusd_pool && icusd_resolved {
+        prices::fetch_icpswap_price(config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0).await
+    } else {
+        Err("icUSD pool unavailable".to_string())
+    };
 
-    let rumi_usd = rumi_res.ok().and_then(|r| {
-        vp_res.as_ref().ok().map(|vp| (r as u128 * *vp as u128 / VP_PRECISION / 100) as u64)
-    });
-    let icpswap_usd = icpswap_res.ok();
+    let vp_val = vp_res.as_ref().copied().unwrap_or(1_000_000_000_000_000_000);
+
+    // Build candidate list: (Pool, usd_out_6dec, min_out_raw)
+    #[derive(Clone, Copy)]
+    struct Candidate {
+        pool: state::Pool,
+        usd_out: u64,
+        min_out: u64,
+    }
+    let mut candidates: Vec<Candidate> = Vec::new();
+
+    if let Ok(quote_per_icp) = rumi_res {
+        // quote_per_icp is 3USD (8 dec) per ICP. Scale to drain_amount.
+        let out_3usd = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
+        let usd_out = (out_3usd as u128 * vp_val as u128 / VP_PRECISION / 100) as u64;
+        let min_out = (out_3usd as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        candidates.push(Candidate { pool: state::Pool::RumiThreeUsd, usd_out, min_out });
+    }
+    if let Ok(quote_per_icp) = icpswap_ck_res {
+        // quote is ckUSDC (6 dec) per ICP; ckUSDC ≈ USD.
+        let out_ck = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
+        let min_out = (out_ck as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        candidates.push(Candidate { pool: state::Pool::IcpswapCkusdc, usd_out: out_ck, min_out });
+    }
+    if let Ok(quote_per_icp) = icpswap_icusd_res {
+        // icUSD is 8 dec ≈ $1. Scale then divide by 100 for 6-dec USD.
+        let out_icusd = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
+        let usd_out = (out_icusd / 100) as u64;
+        let min_out = (out_icusd as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        candidates.push(Candidate { pool: state::Pool::IcpswapIcusd, usd_out, min_out });
+    }
+
+    if candidates.is_empty() {
+        state::mutate_state(|s| s.pending_exit = None);
+        return Err("No pool quotes available during ICP drain".to_string());
+    }
+
+    // Filter out the entry pool — we never want to sell back into it.
+    let filtered: Vec<Candidate> = candidates.iter()
+        .filter(|c| entry_pool.map_or(true, |ep| ep != c.pool))
+        .copied()
+        .collect();
+
+    if filtered.is_empty() {
+        state::log_activity("drain", &format!(
+            "Holding {} ICP: entry pool {:?} is the only option; refusing to drain back into it.",
+            drain_amount, entry_pool
+        ));
+        // Do NOT clear pending_exit — next cycle may open more options.
+        return Ok(());
+    }
+
+    // Build an ordered try list: intended exit first (if present and not filtered),
+    // then the rest sorted by USD output desc.
+    let mut order: Vec<Candidate> = Vec::new();
+    if let Some(ip) = intended_exit {
+        if let Some(c) = filtered.iter().find(|c| c.pool == ip) {
+            order.push(*c);
+        }
+    }
+    let mut rest: Vec<Candidate> = filtered.iter()
+        .filter(|c| !order.iter().any(|o| o.pool == c.pool))
+        .copied()
+        .collect();
+    rest.sort_by(|a, b| b.usd_out.cmp(&a.usd_out));
+    order.extend(rest);
 
     // Helper to record a drain leg
     fn record_drain_leg(dex: &str, icp_sold: u64, token_out: &str, amount_out: u64, usd_value_out: i64, fees: i64) {
@@ -1183,56 +1277,68 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
         });
     }
 
-    // Compute VP for 3USD valuation (use 1.0 as fallback)
-    let vp_val = vp_res.as_ref().copied().unwrap_or(1_000_000_000_000_000_000);
-
-    // Try best-rate DEX first, fall back to the other on failure
-    let try_rumi = |amt: u64, min_out: u64| swaps::rumi_swap(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, amt, min_out);
-    let try_icpswap = |amt: u64, min_out: u64| swaps::icpswap_swap(config.icpswap_pool, amt, config.icpswap_icp_is_token0, min_out, ICP_FEE, CKUSDC_FEE);
-
-    match (rumi_usd, icpswap_usd) {
-        (Some(r), Some(i)) if r >= i => {
-            match try_rumi(drain_amount, rumi_min_out).await {
-                Ok(out) => {
-                    let usd_out = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
-                    record_drain_leg("Rumi", drain_amount, "3USD", out, usd_out, 0);
-                }
-                Err(e) => {
-                    state::log_activity("drain", &format!("Rumi drain failed ({}), falling back to ICPSwap", e));
-                    let remaining = fetch_balance(config.icp_ledger).await.unwrap_or(0);
-                    let fallback_drainable = remaining.saturating_sub(ICP_RESERVE);
-                    if fallback_drainable > ICP_FEE * 2 {
-                        let fallback_amount = fallback_drainable - ICP_FEE;
-                        // Use 0 slippage for fallback — we already failed once, just get out
-                        match try_icpswap(fallback_amount, 0).await {
-                            Ok(out) => record_drain_leg("ICPSwap", fallback_amount, "ckUSDC", out, out as i64, CKUSDC_FEE as i64),
-                            Err(e2) => state::log_activity("drain", &format!("ICPSwap fallback also failed: {}", e2)),
-                        }
-                    }
-                }
-            }
+    // Try each candidate in order until one succeeds.
+    let mut any_success = false;
+    let mut remaining_amount = drain_amount;
+    for (i, cand) in order.iter().enumerate() {
+        // Refresh balance if this is a retry after failure.
+        if i > 0 {
+            let bal = fetch_balance(config.icp_ledger).await.unwrap_or(0);
+            let d = bal.saturating_sub(ICP_RESERVE);
+            if d <= ICP_FEE * 2 { break; }
+            remaining_amount = d - ICP_FEE;
         }
-        (_, Some(_)) => {
-            match try_icpswap(drain_amount, icpswap_min_out).await {
-                Ok(out) => record_drain_leg("ICPSwap", drain_amount, "ckUSDC", out, out as i64, CKUSDC_FEE as i64),
-                Err(e) => state::log_activity("drain", &format!("Drain via ICPSwap failed: {}", e)),
+        // Use 0 slippage on fallback attempts — we already failed once, just get out.
+        let min_out = if i == 0 { cand.min_out } else { 0 };
+        let result = match cand.pool {
+            state::Pool::RumiThreeUsd => {
+                swaps::rumi_swap(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, remaining_amount, min_out).await
+                    .map(|out| {
+                        let usd = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
+                        ("Rumi", "3USD", out, usd, 0i64)
+                    })
             }
-        }
-        (Some(_), None) => {
-            match try_rumi(drain_amount, rumi_min_out).await {
-                Ok(out) => {
-                    let usd_out = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
-                    record_drain_leg("Rumi", drain_amount, "3USD", out, usd_out, 0);
-                }
-                Err(e) => state::log_activity("drain", &format!("Drain via Rumi failed: {}", e)),
+            state::Pool::IcpswapCkusdc => {
+                swaps::icpswap_swap(config.icpswap_pool, remaining_amount, config.icpswap_icp_is_token0, min_out, ICP_FEE, CKUSDC_FEE).await
+                    .map(|out| ("ICPSwap", "ckUSDC", out, out as i64, CKUSDC_FEE as i64))
             }
-        }
-        (None, None) => {
-            return Err("Both DEX quotes failed during ICP drain".to_string());
+            state::Pool::IcpswapIcusd => {
+                swaps::icpswap_swap(config.icpswap_icusd_pool, remaining_amount, config.icpswap_icusd_icp_is_token0, min_out, ICP_FEE, ICUSD_FEE).await
+                    .map(|out| {
+                        let usd = (out / 100) as i64;
+                        ("ICPSwap-icUSD", "icUSD", out, usd, (ICUSD_FEE / 100) as i64)
+                    })
+            }
+        };
+        match result {
+            Ok((dex, tok, out, usd, fees)) => {
+                record_drain_leg(dex, remaining_amount, tok, out, usd, fees);
+                any_success = true;
+                break;
+            }
+            Err(e) => {
+                state::log_activity("drain", &format!("Drain via {:?} failed: {}", cand.pool, e));
+            }
         }
     }
 
+    // Clear pending_exit regardless: either we drained (success) or all non-entry
+    // pools failed (stale state cleared so next cycle can reassess).
+    state::mutate_state(|s| s.pending_exit = None);
+
+    if !any_success && !order.is_empty() {
+        return Err("All drain attempts failed".to_string());
+    }
     Ok(())
+}
+
+fn dex_string_to_pool(dex: &str) -> Option<state::Pool> {
+    match dex {
+        "Rumi" => Some(state::Pool::RumiThreeUsd),
+        "ICPSwap" => Some(state::Pool::IcpswapCkusdc),
+        "ICPSwap-icUSD" => Some(state::Pool::IcpswapIcusd),
+        _ => None,
+    }
 }
 
 pub async fn fetch_balance(ledger: Principal) -> Result<u64, String> {

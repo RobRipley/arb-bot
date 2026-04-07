@@ -104,6 +104,23 @@ pub struct CycleSnapshot {
 
 /// Per-leg trade record. Each swap (Leg 1, Leg 2, drain) gets its own entry.
 /// P&L is computed by summing stablecoin inflows vs outflows across all legs.
+/// Identifies a specific liquidity pool for drain routing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pool {
+    RumiThreeUsd,
+    IcpswapCkusdc,
+    IcpswapIcusd,
+}
+
+/// Records the intended exit pool after a successful Leg 1, so the drain
+/// can prefer it (and avoid draining back into the entry pool).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingExit {
+    pub entry_pool: Pool,
+    pub intended_exit_pool: Pool,
+    pub timestamp: u64,
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub enum LegType {
     Leg1,
@@ -140,6 +157,8 @@ pub struct BotState {
     pub trade_legs: Vec<TradeLeg>,
     #[serde(default)]
     pub snapshots: Vec<CycleSnapshot>,
+    #[serde(default)]
+    pub pending_exit: Option<PendingExit>,
 }
 
 impl Default for BotState {
@@ -170,6 +189,7 @@ impl Default for BotState {
             icusd_token_ordering_resolved: false,
             trade_legs: Vec::new(),
             snapshots: Vec::new(),
+            pending_exit: None,
         }
     }
 }
