@@ -92,6 +92,7 @@ type CycleSnapshot = record {
   balance_icusd: nat64;
   icpswap_icp_price_ckusdt: nat64;
   spread_c_bps: int32;
+  spread_d_bps: int32;
   traded: bool;
   strategy_used: text;
 };
@@ -190,6 +191,7 @@ service : (InitArgs) -> {
   dry_run_arb_cycle: () -> (DryRunResult);
   dry_run_strategy_b: () -> (DryRunResult);
   dry_run_strategy_c: () -> (DryRunResult);
+  dry_run_strategy_d: () -> (DryRunResult);
 
   // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
   pool_deposit: (nat8, nat64, nat64) -> ();

@@ -2,7 +2,7 @@ use candid::{CandidType, Nat, Principal};
 use std::cell::Cell;
 
 use crate::prices::{self, PriceData, nat_to_u64};
-use crate::state::{self, Direction, ErrorRecord, Token};
+use crate::state::{self, Direction, Token};
 use crate::swaps;
 
 const ICP_FEE: u64 = 10_000;        // 0.0001 ICP
@@ -172,6 +172,7 @@ pub async fn run_arb_cycle() {
         stable_fee: CKUSDC_FEE,
         stable_ledger: config.ckusdc_ledger,
         pool_enum: state::Pool::IcpswapCkusdc,
+        stable_decimals: 6,
     };
 
     // Evaluate Strategy A (Rumi vs ICPSwap ckUSDC/ICP)
@@ -202,11 +203,33 @@ pub async fn run_arb_cycle() {
         stable_fee: CKUSDT_FEE,
         stable_ledger: config.ckusdt_ledger,
         pool_enum: state::Pool::IcpswapCkusdt,
+        stable_decimals: 6,
     };
     let dry_run_c = if has_ckusdt_pool && ckusdt_resolved {
         match compute_optimal_trade(&config, &target_c).await {
             Ok(dr) => Some(dr),
             Err(e) => { log_error(&format!("Strategy C computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy D (Rumi vs ICPSwap icUSD/ICP) — same shape as A but 8-dec stable
+    let target_d = IcpswapTarget {
+        pool: config.icpswap_icusd_pool,
+        icp_is_token0: config.icpswap_icusd_icp_is_token0,
+        label: "ICPSwap-icUSD",
+        strategy_tag: "D",
+        stable_token_name: "icUSD",
+        stable_fee: ICUSD_FEE,
+        stable_ledger: config.icusd_ledger,
+        pool_enum: state::Pool::IcpswapIcusd,
+        stable_decimals: 8,
+    };
+    let dry_run_d = if has_icusd_pool && icusd_resolved {
+        match compute_optimal_trade(&config, &target_d).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy D computation failed: {}", e)); None }
         }
     } else {
         None
@@ -250,114 +273,145 @@ pub async fn run_arb_cycle() {
         balance_icusd: bal_icusd.unwrap_or(0),
         icpswap_icp_price_ckusdt: dry_run_c.as_ref().map(|d| d.icpswap_price_usd).unwrap_or(0),
         spread_c_bps: dry_run_c.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_d_bps: dry_run_d.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         traded: false,
         strategy_used: String::new(),
     };
 
-    // Pick the best strategy across A, B, C
+    // Pick the best strategy across A, B, C, D
     let profit_a = dry_run_a.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_b = dry_run_b.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_c = dry_run_c.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_d = dry_run_d.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
 
-    if profit_a <= 0 && profit_b <= 0 && profit_c <= 0 {
+    if profit_a <= 0 && profit_b <= 0 && profit_c <= 0 && profit_d <= 0 {
         // Nothing profitable
         let mut parts: Vec<String> = Vec::new();
         if let Some(a) = &dry_run_a { parts.push(format!("A: {}", a.message)); }
         if let Some(b) = &dry_run_b { parts.push(format!("B: {}", b.message)); }
         if let Some(c) = &dry_run_c { parts.push(format!("C: {}", c.message)); }
+        if let Some(d) = &dry_run_d { parts.push(format!("D: {}", d.message)); }
         let msg = if parts.is_empty() { "All strategies failed".to_string() } else { parts.join(" | ") };
         state::log_activity("arb_skip", &msg);
-        state::mutate_state(|s| s.snapshots.push(snapshot));
+        state::append_snapshot(snapshot);
         return;
     }
 
-    // Check minimum profit threshold against the best of the three
-    let best_profit = profit_a.max(profit_b).max(profit_c);
+    // Check minimum profit threshold against the best of the four
+    let best_profit = profit_a.max(profit_b).max(profit_c).max(profit_d);
     if config.min_profit_usd > 0 && best_profit < config.min_profit_usd {
         let msg = format!("Best profit ${:.2} < min ${:.2}",
             best_profit as f64 / 1e6, config.min_profit_usd as f64 / 1e6);
         state::log_activity("arb_skip", &msg);
-        state::mutate_state(|s| s.snapshots.push(snapshot));
+        state::append_snapshot(snapshot);
         return;
     }
 
     // Dispatch to the strategy with the highest profit
-    if profit_a >= profit_b && profit_a >= profit_c {
-        snapshot.traded = true;
-        snapshot.strategy_used = "A".to_string();
-        let dry_run = dry_run_a.unwrap();
-        state::log_activity("arb_start", &format!(
-            "[A] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
-            dry_run.direction.as_ref().unwrap(),
-            dry_run.optimal_input_amount,
-            dry_run.optimal_input_token.as_ref().unwrap(),
-            dry_run.expected_icp_amount,
-            dry_run.expected_output_amount,
-            dry_run.expected_output_token.as_ref().unwrap(),
-            dry_run.spread_bps,
-            dry_run.expected_profit_usd,
-        ));
-        match dry_run.direction.as_ref().unwrap() {
-            Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_a, &dry_run).await,
-            Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_a, &dry_run).await,
-        }
+    let winner = if profit_a >= profit_b && profit_a >= profit_c && profit_a >= profit_d {
+        "A"
+    } else if profit_d >= profit_b && profit_d >= profit_c {
+        "D"
     } else if profit_c >= profit_b {
-        snapshot.traded = true;
-        snapshot.strategy_used = "C".to_string();
-        let dry_run = dry_run_c.unwrap();
-        state::log_activity("arb_start", &format!(
-            "[C] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
-            dry_run.direction.as_ref().unwrap(),
-            dry_run.optimal_input_amount,
-            dry_run.optimal_input_token.as_ref().unwrap(),
-            dry_run.expected_icp_amount,
-            dry_run.expected_output_amount,
-            dry_run.expected_output_token.as_ref().unwrap(),
-            dry_run.spread_bps,
-            dry_run.expected_profit_usd,
-        ));
-        match dry_run.direction.as_ref().unwrap() {
-            Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_c, &dry_run).await,
-            Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_c, &dry_run).await,
-        }
+        "C"
     } else {
-        snapshot.traded = true;
-        snapshot.strategy_used = "B".to_string();
-        let dry_run = dry_run_b.unwrap();
+        "B"
+    };
+    snapshot.traded = true;
+    snapshot.strategy_used = winner.to_string();
+    let log_start = |tag: &str, dr: &DryRunResult| {
         state::log_activity("arb_start", &format!(
-            "[B] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
-            dry_run.direction.as_ref().unwrap(),
-            dry_run.optimal_input_amount,
-            dry_run.optimal_input_token.as_ref().unwrap(),
-            dry_run.expected_icp_amount,
-            dry_run.expected_output_amount,
-            dry_run.expected_output_token.as_ref().unwrap(),
-            dry_run.spread_bps,
-            dry_run.expected_profit_usd,
+            "[{}] Starting {:?} trade: {} {:?} → est {} ICP → est {} {:?} (spread: {} bps, est profit: {})",
+            tag,
+            dr.direction.as_ref().unwrap(),
+            dr.optimal_input_amount,
+            dr.optimal_input_token.as_ref().unwrap(),
+            dr.expected_icp_amount,
+            dr.expected_output_amount,
+            dr.expected_output_token.as_ref().unwrap(),
+            dr.spread_bps,
+            dr.expected_profit_usd,
         ));
-        match dry_run.direction.as_ref().unwrap() {
-            Direction::RumiToIcpswap => execute_icusd_to_ckusdc(&config, &dry_run).await,
-            Direction::IcpswapToRumi => execute_ckusdc_to_icusd(&config, &dry_run).await,
+    };
+    match winner {
+        "A" => {
+            let dry_run = dry_run_a.unwrap();
+            log_start("A", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_a, &dry_run).await,
+                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_a, &dry_run).await,
+            }
+        }
+        "C" => {
+            let dry_run = dry_run_c.unwrap();
+            log_start("C", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_c, &dry_run).await,
+                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_c, &dry_run).await,
+            }
+        }
+        "D" => {
+            let dry_run = dry_run_d.unwrap();
+            log_start("D", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_d, &dry_run).await,
+                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_d, &dry_run).await,
+            }
+        }
+        _ => {
+            let dry_run = dry_run_b.unwrap();
+            log_start("B", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_icusd_to_ckusdc(&config, &dry_run).await,
+                Direction::IcpswapToRumi => execute_ckusdc_to_icusd(&config, &dry_run).await,
+            }
         }
     }
 
     // Record snapshot after trade execution
-    state::mutate_state(|s| s.snapshots.push(snapshot));
+    state::append_snapshot(snapshot);
 }
 
 // ─── Dry Run: Compute Optimal Trade ───
 
-/// Identifies an ICPSwap stable/ICP pool that strategy A or C will arb against.
+/// Identifies an ICPSwap stable/ICP pool that a Rumi-vs-ICPSwap strategy will arb against.
 #[derive(Clone, Copy)]
 pub struct IcpswapTarget {
     pub pool: Principal,
     pub icp_is_token0: bool,
-    pub label: &'static str,    // "ICPSwap" (ckUSDC) or "ICPSwap-ckUSDT"
-    pub strategy_tag: &'static str, // "A" or "C", used in log messages
-    pub stable_token_name: &'static str, // "ckUSDC" or "ckUSDT"
-    pub stable_fee: u64,
+    pub label: &'static str,    // "ICPSwap" (ckUSDC), "ICPSwap-ckUSDT", "ICPSwap-icUSD"
+    pub strategy_tag: &'static str, // "A", "C", or "D" — used in log messages
+    pub stable_token_name: &'static str, // "ckUSDC", "ckUSDT", or "icUSD"
+    pub stable_fee: u64,        // native units (10_000 for ck*, 100_000 for icUSD)
     pub stable_ledger: Principal,
     pub pool_enum: state::Pool,
+    pub stable_decimals: u8,    // 6 for ck*, 8 for icUSD
+}
+
+/// Convert a stable token amount in native units to 6-dec USD (assumes ≈ $1 peg).
+fn stable_to_usd_6dec(amount: u64, decimals: u8) -> i64 {
+    if decimals > 6 {
+        let div = 10u64.pow((decimals - 6) as u32);
+        (amount / div) as i64
+    } else if decimals < 6 {
+        let mul = 10u64.pow((6 - decimals) as u32);
+        amount.saturating_mul(mul) as i64
+    } else {
+        amount as i64
+    }
+}
+
+/// Convert a 6-dec USD amount to a stable token's native units.
+fn usd_6dec_to_stable(amount_usd: u64, decimals: u8) -> u64 {
+    if decimals > 6 {
+        let mul = 10u64.pow((decimals - 6) as u32);
+        amount_usd.saturating_mul(mul)
+    } else if decimals < 6 {
+        let div = 10u64.pow((6 - decimals) as u32);
+        amount_usd / div
+    } else {
+        amount_usd
+    }
 }
 
 pub async fn compute_optimal_trade(
@@ -370,10 +424,11 @@ pub async fn compute_optimal_trade(
     let prices = prices::fetch_all_prices(
         config.rumi_amm, RUMI_POOL_ID, config.icp_ledger,
         config.rumi_3pool, target.pool, target.icp_is_token0,
+        target.stable_decimals,
     ).await?;
 
     result.rumi_price_usd = prices.rumi_price_usd_6dec();
-    result.icpswap_price_usd = prices.icpswap_icp_price_ckusdc_native;
+    result.icpswap_price_usd = prices.icpswap_price_usd_6dec();
     result.virtual_price = prices.virtual_price;
     result.spread_bps = prices.spread_bps();
 
@@ -417,12 +472,16 @@ pub async fn compute_optimal_trade(
 
         // Reserve fee for the ICRC-2 approve that ICPSwap's depositFromAndSwap triggers
         let usable_stable = result.balance_ckusdc.saturating_sub(target.stable_fee);
-        if usable_stable < 10_000 {
+        // Min balance: $0.01 worth, scaled to native units
+        let min_native = usd_6dec_to_stable(10_000, target.stable_decimals);
+        if usable_stable < min_native {
             result.message = format!("[{}] Insufficient {} balance", target.strategy_tag, target.stable_token_name);
             return Ok(result);
         }
 
-        let max_input = usable_stable.min(config.max_trade_size_usd);
+        // Cap by max_trade_size_usd, converted to native stable units
+        let max_native = usd_6dec_to_stable(config.max_trade_size_usd, target.stable_decimals);
+        let max_input = usable_stable.min(max_native);
 
         find_optimal_icpswap_to_rumi(config, target, max_input, &prices, &mut result).await;
     }
@@ -489,8 +548,9 @@ async fn find_optimal_rumi_to_icpswap(
         };
 
         let input_usd = (input_3usd as u128 * prices.virtual_price as u128 / VP_PRECISION / 100) as i64;
-        let output_usd = ckusdc_out as i64;
-        let profit = output_usd - input_usd - target.stable_fee as i64;
+        let output_usd = stable_to_usd_6dec(ckusdc_out, target.stable_decimals);
+        let fee_usd = stable_to_usd_6dec(target.stable_fee, target.stable_decimals);
+        let profit = output_usd - input_usd - fee_usd;
 
         result.candidates_evaluated.push(CandidateResult {
             input_amount: input_3usd,
@@ -578,9 +638,10 @@ async fn find_optimal_icpswap_to_rumi(
             Err(_) => continue,
         };
 
-        let input_usd = input_ckusdc as i64;
+        let input_usd = stable_to_usd_6dec(input_ckusdc, target.stable_decimals);
         let output_usd = (three_usd_out as u128 * prices.virtual_price as u128 / VP_PRECISION / 100) as i64;
-        let profit = output_usd - input_usd - target.stable_fee as i64;
+        let fee_usd = stable_to_usd_6dec(target.stable_fee, target.stable_decimals);
+        let profit = output_usd - input_usd - fee_usd;
 
         result.candidates_evaluated.push(CandidateResult {
             input_amount: input_ckusdc,
@@ -880,19 +941,19 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
         Ok(amount) => {
             state::log_activity("swap", &format!("Leg 1 OK: {} 3USD → {} ICP", trade_amount_3usd, amount));
             // Record Leg 1: sold 3USD (stablecoin), bought ICP (transit)
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg1,
+                dex: "Rumi".to_string(),
+                sold_token: "3USD".to_string(),
+                sold_amount: trade_amount_3usd,
+                bought_token: "ICP".to_string(),
+                bought_amount: amount,
+                sold_usd_value: cost_usd_6dec,
+                bought_usd_value: 0, // ICP is transit, no USD value
+                fees_usd: 0,         // no stablecoin fee on this leg
+            });
             state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg1,
-                    dex: "Rumi".to_string(),
-                    sold_token: "3USD".to_string(),
-                    sold_amount: trade_amount_3usd,
-                    bought_token: "ICP".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: cost_usd_6dec,
-                    bought_usd_value: 0, // ICP is transit, no USD value
-                    fees_usd: 0,         // no stablecoin fee on this leg
-                });
                 s.pending_exit = Some(state::PendingExit {
                     entry_pool: state::Pool::RumiThreeUsd,
                     intended_exit_pool: target.pool_enum,
@@ -923,21 +984,19 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 2 OK: {} ICP → {} {}", target.strategy_tag, icp_out, amount, target.stable_token_name));
-            state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg2,
-                    dex: target.label.to_string(),
-                    sold_token: "ICP".to_string(),
-                    sold_amount: usable_icp,
-                    bought_token: target.stable_token_name.to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: 0,            // ICP is transit
-                    bought_usd_value: amount as i64, // ckUSDC/ckUSDT are 6-dec USD
-                    fees_usd: target.stable_fee as i64,
-                });
-                s.pending_exit = None;
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg2,
+                dex: target.label.to_string(),
+                sold_token: "ICP".to_string(),
+                sold_amount: usable_icp,
+                bought_token: target.stable_token_name.to_string(),
+                bought_amount: amount,
+                sold_usd_value: 0,            // ICP is transit
+                bought_usd_value: stable_to_usd_6dec(amount, target.stable_decimals),
+                fees_usd: stable_to_usd_6dec(target.stable_fee, target.stable_decimals),
             });
+            state::mutate_state(|s| { s.pending_exit = None; });
             amount
         }
         Err(e) => {
@@ -948,7 +1007,9 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
         }
     };
 
-    let net_profit = stable_out as i64 - cost_usd_6dec - target.stable_fee as i64;
+    let net_profit = stable_to_usd_6dec(stable_out, target.stable_decimals)
+        - cost_usd_6dec
+        - stable_to_usd_6dec(target.stable_fee, target.stable_decimals);
     state::log_activity("trade", &format!(
         "[{}] COMPLETE RumiToIcpswap: {} 3USD → {} ICP → {} {} | profit: {} (6dec USD)",
         target.strategy_tag, trade_amount_3usd, icp_out, stable_out, target.stable_token_name, net_profit
@@ -968,19 +1029,19 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 1 OK: {} {} → {} ICP", target.strategy_tag, trade_amount_stable, target.stable_token_name, amount));
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg1,
+                dex: target.label.to_string(),
+                sold_token: target.stable_token_name.to_string(),
+                sold_amount: trade_amount_stable,
+                bought_token: "ICP".to_string(),
+                bought_amount: amount,
+                sold_usd_value: stable_to_usd_6dec(trade_amount_stable, target.stable_decimals),
+                bought_usd_value: 0, // ICP is transit
+                fees_usd: stable_to_usd_6dec(target.stable_fee, target.stable_decimals),
+            });
             state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg1,
-                    dex: target.label.to_string(),
-                    sold_token: target.stable_token_name.to_string(),
-                    sold_amount: trade_amount_stable,
-                    bought_token: "ICP".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: trade_amount_stable as i64,
-                    bought_usd_value: 0, // ICP is transit
-                    fees_usd: target.stable_fee as i64,
-                });
                 s.pending_exit = Some(state::PendingExit {
                     entry_pool: target.pool_enum,
                     intended_exit_pool: state::Pool::RumiThreeUsd,
@@ -1015,21 +1076,19 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
         Ok(amount) => {
             let out_usd_6dec = (amount as u128 * vp as u128 / VP_PRECISION / 100) as i64;
             state::log_activity("swap", &format!("[{}] Leg 2 OK: {} ICP → {} 3USD", target.strategy_tag, icp_out, amount));
-            state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg2,
-                    dex: "Rumi".to_string(),
-                    sold_token: "ICP".to_string(),
-                    sold_amount: usable_icp,
-                    bought_token: "3USD".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: 0,       // ICP is transit
-                    bought_usd_value: out_usd_6dec,
-                    fees_usd: 0,             // no stablecoin fee on this leg
-                });
-                s.pending_exit = None;
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg2,
+                dex: "Rumi".to_string(),
+                sold_token: "ICP".to_string(),
+                sold_amount: usable_icp,
+                bought_token: "3USD".to_string(),
+                bought_amount: amount,
+                sold_usd_value: 0,       // ICP is transit
+                bought_usd_value: out_usd_6dec,
+                fees_usd: 0,             // no stablecoin fee on this leg
             });
+            state::mutate_state(|s| { s.pending_exit = None; });
             amount
         }
         Err(e) => {
@@ -1040,9 +1099,9 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
         }
     };
 
-    let input_usd_6dec = trade_amount_stable as i64;
+    let input_usd_6dec = stable_to_usd_6dec(trade_amount_stable, target.stable_decimals);
     let output_usd_6dec = (three_usd_out as u128 * vp as u128 / VP_PRECISION / 100) as i64;
-    let net_profit = output_usd_6dec - input_usd_6dec - target.stable_fee as i64;
+    let net_profit = output_usd_6dec - input_usd_6dec - stable_to_usd_6dec(target.stable_fee, target.stable_decimals);
 
     state::log_activity("trade", &format!(
         "[{}] COMPLETE IcpswapToRumi: {} {} → {} ICP → {} 3USD | profit: {} (6dec USD)",
@@ -1071,19 +1130,19 @@ async fn execute_icusd_to_ckusdc(config: &state::BotConfig, dry_run: &DryRunResu
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[B] Leg 1 OK: {} icUSD → {} ICP", trade_amount_icusd, amount));
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg1,
+                dex: "ICPSwap-icUSD".to_string(),
+                sold_token: "icUSD".to_string(),
+                sold_amount: trade_amount_icusd,
+                bought_token: "ICP".to_string(),
+                bought_amount: amount,
+                sold_usd_value: cost_usd_6dec,
+                bought_usd_value: 0,
+                fees_usd: (ICUSD_FEE / 100) as i64,
+            });
             state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg1,
-                    dex: "ICPSwap-icUSD".to_string(),
-                    sold_token: "icUSD".to_string(),
-                    sold_amount: trade_amount_icusd,
-                    bought_token: "ICP".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: cost_usd_6dec,
-                    bought_usd_value: 0,
-                    fees_usd: (ICUSD_FEE / 100) as i64,
-                });
                 s.pending_exit = Some(state::PendingExit {
                     entry_pool: state::Pool::IcpswapIcusd,
                     intended_exit_pool: state::Pool::IcpswapCkusdc,
@@ -1115,21 +1174,19 @@ async fn execute_icusd_to_ckusdc(config: &state::BotConfig, dry_run: &DryRunResu
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[B] Leg 2 OK: {} ICP → {} ckUSDC", icp_out, amount));
-            state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg2,
-                    dex: "ICPSwap".to_string(),
-                    sold_token: "ICP".to_string(),
-                    sold_amount: usable_icp,
-                    bought_token: "ckUSDC".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: 0,
-                    bought_usd_value: amount as i64,
-                    fees_usd: CKUSDC_FEE as i64,
-                });
-                s.pending_exit = None;
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg2,
+                dex: "ICPSwap".to_string(),
+                sold_token: "ICP".to_string(),
+                sold_amount: usable_icp,
+                bought_token: "ckUSDC".to_string(),
+                bought_amount: amount,
+                sold_usd_value: 0,
+                bought_usd_value: amount as i64,
+                fees_usd: CKUSDC_FEE as i64,
             });
+            state::mutate_state(|s| { s.pending_exit = None; });
             amount
         }
         Err(e) => {
@@ -1163,19 +1220,19 @@ async fn execute_ckusdc_to_icusd(config: &state::BotConfig, dry_run: &DryRunResu
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[B] Leg 1 OK: {} ckUSDC → {} ICP", trade_amount_ckusdc, amount));
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg1,
+                dex: "ICPSwap".to_string(),
+                sold_token: "ckUSDC".to_string(),
+                sold_amount: trade_amount_ckusdc,
+                bought_token: "ICP".to_string(),
+                bought_amount: amount,
+                sold_usd_value: trade_amount_ckusdc as i64,
+                bought_usd_value: 0,
+                fees_usd: CKUSDC_FEE as i64,
+            });
             state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg1,
-                    dex: "ICPSwap".to_string(),
-                    sold_token: "ckUSDC".to_string(),
-                    sold_amount: trade_amount_ckusdc,
-                    bought_token: "ICP".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: trade_amount_ckusdc as i64,
-                    bought_usd_value: 0,
-                    fees_usd: CKUSDC_FEE as i64,
-                });
                 s.pending_exit = Some(state::PendingExit {
                     entry_pool: state::Pool::IcpswapCkusdc,
                     intended_exit_pool: state::Pool::IcpswapIcusd,
@@ -1207,21 +1264,19 @@ async fn execute_ckusdc_to_icusd(config: &state::BotConfig, dry_run: &DryRunResu
         Ok(amount) => {
             let out_usd_6dec = (amount / 100) as i64;
             state::log_activity("swap", &format!("[B] Leg 2 OK: {} ICP → {} icUSD", icp_out, amount));
-            state::mutate_state(|s| {
-                s.trade_legs.push(state::TradeLeg {
-                    timestamp: ic_cdk::api::time(),
-                    leg_type: state::LegType::Leg2,
-                    dex: "ICPSwap-icUSD".to_string(),
-                    sold_token: "ICP".to_string(),
-                    sold_amount: usable_icp,
-                    bought_token: "icUSD".to_string(),
-                    bought_amount: amount,
-                    sold_usd_value: 0,
-                    bought_usd_value: out_usd_6dec,
-                    fees_usd: (ICUSD_FEE / 100) as i64,
-                });
-                s.pending_exit = None;
+            state::append_trade_leg(state::TradeLeg {
+                timestamp: ic_cdk::api::time(),
+                leg_type: state::LegType::Leg2,
+                dex: "ICPSwap-icUSD".to_string(),
+                sold_token: "ICP".to_string(),
+                sold_amount: usable_icp,
+                bought_token: "icUSD".to_string(),
+                bought_amount: amount,
+                sold_usd_value: 0,
+                bought_usd_value: out_usd_6dec,
+                fees_usd: (ICUSD_FEE / 100) as i64,
             });
+            state::mutate_state(|s| { s.pending_exit = None; });
             amount
         }
         Err(e) => {
@@ -1261,14 +1316,17 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     // Determine the entry pool to AVOID. Primary source: pending_exit recorded
     // at Leg 1 success. Fallback safety net: the most recent Leg1 trade_leg
     // (works even after a canister restart that cleared pending_exit).
-    let (pending_exit, fallback_entry_pool): (Option<state::PendingExit>, Option<state::Pool>) =
-        state::read_state(|s| {
-            let fb = s.trade_legs.iter().rev().find_map(|l| match l.leg_type {
-                state::LegType::Leg1 => Some(dex_string_to_pool(&l.dex)),
-                _ => None,
-            }).flatten();
-            (s.pending_exit.clone(), fb)
-        });
+    let pending_exit: Option<state::PendingExit> =
+        state::read_state(|s| s.pending_exit.clone());
+    // Scan backward through trade_legs for the most recent Leg1 with a
+    // recognized dex string. Skip any Leg1 whose dex doesn't map (e.g.
+    // historical backfilled entries from deprecated strategies).
+    let fallback_entry_pool: Option<state::Pool> = state::find_map_last_trade_leg(|l| {
+        match l.leg_type {
+            state::LegType::Leg1 => dex_string_to_pool(&l.dex),
+            _ => None,
+        }
+    });
     let entry_pool: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.entry_pool).or(fallback_entry_pool);
     let intended_exit: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.intended_exit_pool);
 
@@ -1372,19 +1430,17 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     // Helper to record a drain leg
     fn record_drain_leg(dex: &str, icp_sold: u64, token_out: &str, amount_out: u64, usd_value_out: i64, fees: i64) {
         state::log_activity("drain", &format!("Drained {} ICP → {} {} via {}", icp_sold, amount_out, token_out, dex));
-        state::mutate_state(|s| {
-            s.trade_legs.push(state::TradeLeg {
-                timestamp: ic_cdk::api::time(),
-                leg_type: state::LegType::Drain,
-                dex: dex.to_string(),
-                sold_token: "ICP".to_string(),
-                sold_amount: icp_sold,
-                bought_token: token_out.to_string(),
-                bought_amount: amount_out,
-                sold_usd_value: 0,  // ICP is transit
-                bought_usd_value: usd_value_out,
-                fees_usd: fees,
-            });
+        state::append_trade_leg(state::TradeLeg {
+            timestamp: ic_cdk::api::time(),
+            leg_type: state::LegType::Drain,
+            dex: dex.to_string(),
+            sold_token: "ICP".to_string(),
+            sold_amount: icp_sold,
+            bought_token: token_out.to_string(),
+            bought_amount: amount_out,
+            sold_usd_value: 0,  // ICP is transit
+            bought_usd_value: usd_value_out,
+            fees_usd: fees,
         });
     }
 
@@ -1470,13 +1526,5 @@ pub async fn fetch_balance(ledger: Principal) -> Result<u64, String> {
 }
 
 fn log_error(msg: &str) {
-    state::mutate_state(|s| {
-        s.errors.push(ErrorRecord {
-            timestamp: ic_cdk::api::time(),
-            message: msg.to_string(),
-        });
-        if s.errors.len() > 1000 {
-            s.errors.drain(0..500);
-        }
-    });
+    state::log_error(msg.to_string());
 }

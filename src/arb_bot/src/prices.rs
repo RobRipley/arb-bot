@@ -94,6 +94,8 @@ pub struct PriceData {
     pub rumi_icp_price_3usd_native: u64,
     pub virtual_price: u64,
     pub icpswap_icp_price_ckusdc_native: u64,
+    /// Decimal places of the ICPSwap stable token (6 for ckUSDC/ckUSDT, 8 for icUSD)
+    pub icpswap_stable_decimals: u8,
 }
 
 impl PriceData {
@@ -109,7 +111,17 @@ impl PriceData {
     }
 
     pub fn icpswap_price_usd_6dec(&self) -> u64 {
-        self.icpswap_icp_price_ckusdc_native
+        // Stable tokens are pegged to $1, so price-per-ICP in native units
+        // converts to 6-dec USD by dividing by 10^(decimals-6).
+        if self.icpswap_stable_decimals > 6 {
+            let div = 10u64.pow((self.icpswap_stable_decimals - 6) as u32);
+            self.icpswap_icp_price_ckusdc_native / div
+        } else if self.icpswap_stable_decimals < 6 {
+            let mul = 10u64.pow((6 - self.icpswap_stable_decimals) as u32);
+            self.icpswap_icp_price_ckusdc_native.saturating_mul(mul)
+        } else {
+            self.icpswap_icp_price_ckusdc_native
+        }
     }
 
     pub fn spread_bps(&self) -> i32 {
@@ -181,6 +193,7 @@ pub async fn fetch_all_prices(
     rumi_3pool: Principal,
     icpswap_pool: Principal,
     icpswap_zero_for_one: bool,
+    icpswap_stable_decimals: u8,
 ) -> Result<PriceData, String> {
     let rumi_fut = fetch_rumi_price(rumi_amm, pool_id, icp_ledger);
     let vp_fut = fetch_virtual_price(rumi_3pool);
@@ -191,6 +204,7 @@ pub async fn fetch_all_prices(
         rumi_icp_price_3usd_native: rumi_result?,
         virtual_price: vp_result?,
         icpswap_icp_price_ckusdc_native: icpswap_result?,
+        icpswap_stable_decimals,
     })
 }
 

@@ -44,6 +44,9 @@ fn setup_timer() {
 
 fn require_admin() {
     let caller = ic_cdk::api::caller();
+    if caller == Principal::anonymous() {
+        ic_cdk::trap("Unauthorized: anonymous caller not allowed");
+    }
     let authorized = state::read_state(|s| {
         caller == s.config.owner || s.config.admins.contains(&caller)
     });
@@ -97,12 +100,7 @@ fn get_config() -> BotConfig {
 
 #[query]
 fn get_trade_history(offset: u64, limit: u64) -> Vec<TradeRecord> {
-    state::read_state(|s| {
-        let len = s.trades.len();
-        let start = (len as u64).saturating_sub(offset + limit) as usize;
-        let end = (len as u64).saturating_sub(offset) as usize;
-        s.trades[start..end].to_vec()
-    })
+    state::get_trades_page(offset, limit)
 }
 
 #[derive(CandidType)]
@@ -121,76 +119,54 @@ pub struct TradeSummary {
 
 #[query]
 fn get_trade_legs(offset: u64, limit: u64) -> Vec<TradeLeg> {
-    state::read_state(|s| {
-        let len = s.trade_legs.len();
-        let start = (len as u64).saturating_sub(offset + limit) as usize;
-        let end = (len as u64).saturating_sub(offset) as usize;
-        s.trade_legs[start..end].to_vec()
-    })
+    state::get_trade_legs_page(offset, limit)
 }
 
 #[query]
 fn get_summary() -> TradeSummary {
-    state::read_state(|s| {
-        let mut summary = TradeSummary {
-            total_legs: s.trade_legs.len() as u64,
-            total_usd_in: 0,
-            total_usd_out: 0,
-            total_fees_usd: 0,
-            net_pnl_usd: 0,
-            leg1_count: 0,
-            leg2_count: 0,
-            drain_count: 0,
-            rumi_count: 0,
-            icpswap_count: 0,
-        };
-        for leg in &s.trade_legs {
-            // Stablecoins sold = cost, stablecoins bought = revenue
-            // ICP values are 0 so they don't affect the sum
-            summary.total_usd_in += leg.sold_usd_value;
-            summary.total_usd_out += leg.bought_usd_value;
-            summary.total_fees_usd += leg.fees_usd;
-            match leg.leg_type {
-                state::LegType::Leg1 => summary.leg1_count += 1,
-                state::LegType::Leg2 => summary.leg2_count += 1,
-                state::LegType::Drain => summary.drain_count += 1,
-            }
-            if leg.dex == "Rumi" { summary.rumi_count += 1; }
-            else { summary.icpswap_count += 1; }
+    let mut summary = TradeSummary {
+        total_legs: state::trade_legs_len(),
+        total_usd_in: 0,
+        total_usd_out: 0,
+        total_fees_usd: 0,
+        net_pnl_usd: 0,
+        leg1_count: 0,
+        leg2_count: 0,
+        drain_count: 0,
+        rumi_count: 0,
+        icpswap_count: 0,
+    };
+    state::fold_trade_legs((), |_, leg| {
+        // Stablecoins sold = cost, stablecoins bought = revenue
+        // ICP values are 0 so they don't affect the sum
+        summary.total_usd_in += leg.sold_usd_value;
+        summary.total_usd_out += leg.bought_usd_value;
+        summary.total_fees_usd += leg.fees_usd;
+        match leg.leg_type {
+            state::LegType::Leg1 => summary.leg1_count += 1,
+            state::LegType::Leg2 => summary.leg2_count += 1,
+            state::LegType::Drain => summary.drain_count += 1,
         }
-        summary.net_pnl_usd = summary.total_usd_out - summary.total_usd_in - summary.total_fees_usd;
-        summary
-    })
+        if leg.dex == "Rumi" { summary.rumi_count += 1; }
+        else { summary.icpswap_count += 1; }
+    });
+    summary.net_pnl_usd = summary.total_usd_out - summary.total_usd_in - summary.total_fees_usd;
+    summary
 }
 
 #[query]
 fn get_errors(offset: u64, limit: u64) -> Vec<ErrorRecord> {
-    state::read_state(|s| {
-        let len = s.errors.len();
-        let start = (len as u64).saturating_sub(offset + limit) as usize;
-        let end = (len as u64).saturating_sub(offset) as usize;
-        s.errors[start..end].to_vec()
-    })
+    state::get_errors_page(offset, limit)
 }
 
 #[query]
 fn get_activity_log(offset: u64, limit: u64) -> Vec<ActivityRecord> {
-    state::read_state(|s| {
-        let len = s.activity_log.len();
-        let start = (len as u64).saturating_sub(offset + limit) as usize;
-        let end = (len as u64).saturating_sub(offset) as usize;
-        s.activity_log[start..end].to_vec()
-    })
+    state::get_activity_page(offset, limit)
 }
 
 #[query]
 fn get_snapshots(offset: u64, limit: u64) -> Vec<CycleSnapshot> {
-    state::read_state(|s| {
-        let len = s.snapshots.len();
-        let start = (len as u64).saturating_sub(offset + limit) as usize;
-        let end = (len as u64).saturating_sub(offset) as usize;
-        s.snapshots[start..end].to_vec()
-    })
+    state::get_snapshots_page(offset, limit)
 }
 
 // ─── Price Query ───
@@ -215,6 +191,7 @@ async fn get_prices() -> PriceInfo {
     let strategy_a_fut = prices::fetch_all_prices(
         config.rumi_amm, pool_id, config.icp_ledger,
         config.rumi_3pool, config.icpswap_pool, config.icpswap_icp_is_token0,
+        6, // ckUSDC = 6 decimals
     );
 
     let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
@@ -513,16 +490,13 @@ async fn rumi_manual_swap(token_in: Principal, amount: u64, min_out: u64) {
     }
 }
 
-/// One-time backfill: insert historical trade legs (prepends to existing).
+/// One-time backfill: append historical trade legs to the log.
+/// NOTE: Post stable-memory migration, this now APPENDS (previously prepended).
+/// Chronological ordering of historical entries is not preserved.
 #[update]
 fn backfill_trade_legs(legs: Vec<TradeLeg>) {
     require_admin();
-    let count = legs.len();
-    state::mutate_state(|s| {
-        let mut combined = legs;
-        combined.append(&mut s.trade_legs);
-        s.trade_legs = combined;
-    });
+    let count = state::append_trade_legs_batch(legs);
     state::log_activity("admin", &format!("Backfilled {} historical trade legs", count));
 }
 
@@ -580,6 +554,7 @@ async fn dry_run_arb_cycle() -> arb::DryRunResult {
         stable_fee: 10_000,
         stable_ledger: config.ckusdc_ledger,
         pool_enum: state::Pool::IcpswapCkusdc,
+        stable_decimals: 6,
     };
     match arb::compute_optimal_trade(&config, &target_a).await {
         Ok(dr) => dr,
@@ -629,12 +604,63 @@ async fn dry_run_strategy_c() -> arb::DryRunResult {
         stable_fee: 10_000,
         stable_ledger: config.ckusdt_ledger,
         pool_enum: state::Pool::IcpswapCkusdt,
+        stable_decimals: 6,
     };
     match arb::compute_optimal_trade(&config, &target_c).await {
         Ok(dr) => dr,
         Err(e) => {
             let mut result = arb::DryRunResult::default();
             result.message = format!("[C] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_d() -> arb::DryRunResult {
+    require_admin();
+
+    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
+        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
+    });
+    if !has_icusd_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy D not configured (no icUSD pool)".to_string();
+        return result;
+    }
+    if !icusd_resolved {
+        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
+                    s.icusd_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    let target_d = arb::IcpswapTarget {
+        pool: config.icpswap_icusd_pool,
+        icp_is_token0: config.icpswap_icusd_icp_is_token0,
+        label: "ICPSwap-icUSD",
+        strategy_tag: "D",
+        stable_token_name: "icUSD",
+        stable_fee: 100_000,
+        stable_ledger: config.icusd_ledger,
+        pool_enum: state::Pool::IcpswapIcusd,
+        stable_decimals: 8,
+    };
+    match arb::compute_optimal_trade(&config, &target_d).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[D] Computation failed: {}", e);
             result
         }
     }

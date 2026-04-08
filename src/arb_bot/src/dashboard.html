@@ -343,13 +343,16 @@
 
     /* ── Spread Thermometer ── */
     .spread-row { }
-    .spread-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }
-    .spread-label { font-family: var(--font-ui); font-size: 12px; color: var(--text-secondary); }
-    .spread-value { font-family: var(--font-data); font-size: 13px; font-weight: 500; }
+    .spread-pair { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; margin-bottom: var(--sp-2); gap: var(--sp-3); }
+    .spread-pool { font-family: var(--font-ui); font-size: 12px; color: var(--text-secondary); }
+    .spread-pool-left { text-align: left; }
+    .spread-pool-right { text-align: right; }
+    .spread-value { font-family: var(--font-data); font-size: 13px; font-weight: 500; text-align: center; white-space: nowrap; }
     .spread-gauge-track { height: 6px; background: var(--surface-3); border-radius: 3px; position: relative; }
     .spread-gauge-fill { height: 100%; border-radius: 3px; position: absolute; top: 0; transition: all 0.4s ease; background: var(--text-muted); }
     .spread-gauge-center { position: absolute; left: 50%; top: -3px; width: 1px; height: 12px; background: var(--text-muted); }
     .spread-gauge-threshold { position: absolute; top: -4px; width: 1px; height: 14px; background: var(--text-tertiary); }
+    .spread-action { font-family: var(--font-ui); font-size: 10px; color: var(--text-tertiary); margin-top: var(--sp-1); text-align: center; min-height: 14px; letter-spacing: 0.04em; }
     .chart-tabs, .chart-ranges { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 
     /* ── Activity Entries ── */
@@ -477,9 +480,10 @@
       <div class="card" style="margin-top:var(--sp-4)">
         <div class="card-header">SPREAD</div>
         <div class="spread-row">
-          <div class="spread-meta">
-            <span class="spread-label">Strategy A — Rumi vs ICPSwap</span>
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left">Rumi 3USD / ICP</span>
             <span class="spread-value" id="spread-a-value">--</span>
+            <span class="spread-pool spread-pool-right">ICPSwap ckUSDC / ICP</span>
           </div>
           <div class="spread-gauge-track">
             <div class="spread-gauge-fill" id="spread-a-fill"></div>
@@ -487,11 +491,13 @@
             <div class="spread-gauge-threshold" id="spread-a-thresh-l"></div>
             <div class="spread-gauge-threshold" id="spread-a-thresh-r"></div>
           </div>
+          <div class="spread-action" id="spread-a-action"></div>
         </div>
-        <div class="spread-row" style="margin-top:var(--sp-4)">
-          <div class="spread-meta">
-            <span class="spread-label">Strategy B — icUSD vs ckUSDC</span>
+        <div class="spread-row" style="margin-top:var(--sp-3)">
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left">ICPSwap icUSD / ICP</span>
             <span class="spread-value" id="spread-b-value">--</span>
+            <span class="spread-pool spread-pool-right">ICPSwap ckUSDC / ICP</span>
           </div>
           <div class="spread-gauge-track">
             <div class="spread-gauge-fill" id="spread-b-fill"></div>
@@ -499,11 +505,13 @@
             <div class="spread-gauge-threshold" id="spread-b-thresh-l"></div>
             <div class="spread-gauge-threshold" id="spread-b-thresh-r"></div>
           </div>
+          <div class="spread-action" id="spread-b-action"></div>
         </div>
-        <div class="spread-row" style="margin-top:var(--sp-4)">
-          <div class="spread-meta">
-            <span class="spread-label">Strategy C — Rumi vs ICPSwap ckUSDT</span>
+        <div class="spread-row" style="margin-top:var(--sp-3)">
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left">Rumi 3USD / ICP</span>
             <span class="spread-value" id="spread-c-value">--</span>
+            <span class="spread-pool spread-pool-right">ICPSwap ckUSDT / ICP</span>
           </div>
           <div class="spread-gauge-track">
             <div class="spread-gauge-fill" id="spread-c-fill"></div>
@@ -511,6 +519,21 @@
             <div class="spread-gauge-threshold" id="spread-c-thresh-l"></div>
             <div class="spread-gauge-threshold" id="spread-c-thresh-r"></div>
           </div>
+          <div class="spread-action" id="spread-c-action"></div>
+        </div>
+        <div class="spread-row" style="margin-top:var(--sp-3)">
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left">Rumi 3USD / ICP</span>
+            <span class="spread-value" id="spread-d-value">--</span>
+            <span class="spread-pool spread-pool-right">ICPSwap icUSD / ICP</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-d-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-d-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-d-thresh-r"></div>
+          </div>
+          <div class="spread-action" id="spread-d-action"></div>
         </div>
       </div>
 
@@ -703,6 +726,7 @@
           <button class="btn btn-block" onclick="doDryRun(this, 'a')" style="flex:1">Strategy A</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'b')" style="flex:1">Strategy B</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'c')" style="flex:1">Strategy C</button>
+          <button class="btn btn-block" onclick="doDryRun(this, 'd')" style="flex:1">Strategy D</button>
         </div>
         <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run All</button>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
@@ -853,6 +877,7 @@
       icpswap_icp_price_icusd: IDL.Nat64, spread_b_bps: IDL.Int32,
       balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_ckusdt: IDL.Nat64, balance_icusd: IDL.Nat64,
       icpswap_icp_price_ckusdt: IDL.Nat64, spread_c_bps: IDL.Int32,
+      spread_d_bps: IDL.Int32,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -876,6 +901,7 @@
       dry_run_arb_cycle: I.Func([], [DryRunResult], []),
       dry_run_strategy_b: I.Func([], [DryRunResult], []),
       dry_run_strategy_c: I.Func([], [DryRunResult], []),
+      dry_run_strategy_d: I.Func([], [DryRunResult], []),
       withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
       pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
       pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
@@ -1121,12 +1147,14 @@
       return `${fmtTok(amount, dec)} ${token}`;
     }
 
-    function updateSpreadGauge(fillEl, valueEl, threshLEl, threshREl, spreadBps, minSpreadBps) {
+    function updateSpreadGauge(fillEl, valueEl, threshLEl, threshREl, spreadBps, minSpreadBps, actionEl) {
       const maxBps = 200;
       const pct = Math.min(Math.abs(spreadBps) / maxBps, 1) * 50;
       const isAboveThreshold = Math.abs(spreadBps) >= minSpreadBps;
       const color = isAboveThreshold ? 'var(--accent)' : 'var(--text-muted)';
 
+      // Positive spread: right pool is richer → fill from center to the right.
+      // Negative spread: left pool is richer → fill from center to the left.
       if (spreadBps >= 0) {
         fillEl.style.left = '50%';
         fillEl.style.width = pct + '%';
@@ -1140,10 +1168,21 @@
       threshLEl.style.left = (50 - threshPct) + '%';
       threshREl.style.left = (50 + threshPct) + '%';
 
-      const sign = spreadBps >= 0 ? '+' : '';
       const dot = isAboveThreshold ? ' \u25cf' : '';
-      valueEl.textContent = sign + spreadBps + ' bps' + dot;
+      valueEl.textContent = Math.abs(spreadBps) + ' bps' + dot;
       valueEl.style.color = isAboveThreshold ? 'var(--accent)' : 'var(--text-secondary)';
+
+      if (actionEl) {
+        // Action label points where ICP flows: into the richer pool.
+        if (spreadBps > 0) {
+          actionEl.textContent = 'sell ICP →';
+        } else if (spreadBps < 0) {
+          actionEl.textContent = '← sell ICP';
+        } else {
+          actionEl.textContent = '';
+        }
+        actionEl.style.color = isAboveThreshold ? 'var(--accent)' : 'var(--text-tertiary)';
+      }
     }
 
     function updateBalanceTotal() {
@@ -1223,16 +1262,17 @@
         };
         updateBalanceTotal();
 
-        // Update spread thermometers
+        // Update spread thermometers (live get_prices only covers A and B; C and D
+        // come from the snapshot loader since get_prices doesn't query those pools)
         const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
         updateSpreadGauge(
           document.getElementById('spread-a-fill'),
           document.getElementById('spread-a-value'),
           document.getElementById('spread-a-thresh-l'),
           document.getElementById('spread-a-thresh-r'),
-          bi(p.spread_bps), minSpread
+          bi(p.spread_bps), minSpread,
+          document.getElementById('spread-a-action')
         );
-        // Strategy B
         const icusdPrice = bi(p.icpswap_icusd_icp_price);
         if (icusdPrice > 0) {
           updateSpreadGauge(
@@ -1240,7 +1280,8 @@
             document.getElementById('spread-b-value'),
             document.getElementById('spread-b-thresh-l'),
             document.getElementById('spread-b-thresh-r'),
-            bi(p.strategy_b_spread_bps), minSpread
+            bi(p.strategy_b_spread_bps), minSpread,
+            document.getElementById('spread-b-action')
           );
         } else {
           document.getElementById('spread-b-value').textContent = 'N/A';
@@ -1314,7 +1355,8 @@
           document.getElementById('spread-a-value'),
           document.getElementById('spread-a-thresh-l'),
           document.getElementById('spread-a-thresh-r'),
-          bi(s.spread_a_bps), minSpread
+          bi(s.spread_a_bps), minSpread,
+          document.getElementById('spread-a-action')
         );
         if (icusdPrice > 0) {
           updateSpreadGauge(
@@ -1322,7 +1364,8 @@
             document.getElementById('spread-b-value'),
             document.getElementById('spread-b-thresh-l'),
             document.getElementById('spread-b-thresh-r'),
-            bi(s.spread_b_bps), minSpread
+            bi(s.spread_b_bps), minSpread,
+            document.getElementById('spread-b-action')
           );
         } else {
           document.getElementById('spread-b-value').textContent = 'N/A';
@@ -1333,10 +1376,24 @@
             document.getElementById('spread-c-value'),
             document.getElementById('spread-c-thresh-l'),
             document.getElementById('spread-c-thresh-r'),
-            bi(s.spread_c_bps), minSpread
+            bi(s.spread_c_bps), minSpread,
+            document.getElementById('spread-c-action')
           );
         } else {
           document.getElementById('spread-c-value').textContent = 'N/A';
+        }
+        // Strategy D: Rumi 3pool vs ICPSwap icUSD pool
+        if (icusdPrice > 0) {
+          updateSpreadGauge(
+            document.getElementById('spread-d-fill'),
+            document.getElementById('spread-d-value'),
+            document.getElementById('spread-d-thresh-l'),
+            document.getElementById('spread-d-thresh-r'),
+            bi(s.spread_d_bps !== undefined ? s.spread_d_bps : 0), minSpread,
+            document.getElementById('spread-d-action')
+          );
+        } else {
+          document.getElementById('spread-d-value').textContent = 'N/A';
         }
 
         const hint = document.getElementById('prices-login-hint');
@@ -1791,7 +1848,13 @@
         }
         if (strategy === 'c' || strategy === 'both') {
           const r = await authenticatedActor.dry_run_strategy_c();
-          html += '<div><strong style="color:#a78bfa">Strategy C</strong>';
+          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#a78bfa">Strategy C</strong>';
+          html += formatDryRunResult(r);
+          html += '</div>';
+        }
+        if (strategy === 'd' || strategy === 'both') {
+          const r = await authenticatedActor.dry_run_strategy_d();
+          html += '<div><strong style="color:#f0a05b">Strategy D</strong>';
           html += formatDryRunResult(r);
           html += '</div>';
         }
