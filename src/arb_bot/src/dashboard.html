@@ -500,6 +500,18 @@
             <div class="spread-gauge-threshold" id="spread-b-thresh-r"></div>
           </div>
         </div>
+        <div class="spread-row" style="margin-top:var(--sp-4)">
+          <div class="spread-meta">
+            <span class="spread-label">Strategy C — Rumi vs ICPSwap ckUSDT</span>
+            <span class="spread-value" id="spread-c-value">--</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-c-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-c-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-c-thresh-r"></div>
+          </div>
+        </div>
       </div>
 
       <!-- Live Prices + Balances -->
@@ -514,7 +526,9 @@
           <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy B</div>
           <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-icusd">--</span></div>
           <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap-b">--</span></div>
-          <div id="prices-login-hint" style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-3)">Login to refresh prices ↻</div>
+          <div class="divider"></div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy C</div>
+          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-ckusdt">--</span></div>
         </div>
 
         <div class="card">
@@ -1201,6 +1215,7 @@
         document.getElementById('price-vp').textContent = (bi(p.virtual_price) / 1e18).toFixed(6);
         document.getElementById('price-icusd').textContent = (bi(p.icpswap_icusd_icp_price) / 1e8).toFixed(6) + ' ICP';
         document.getElementById('price-icpswap-b').textContent = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
+        // Strategy C ckUSDT price comes from snapshot loader, not get_prices
 
         window._latestPrices = {
           vp: bi(p.virtual_price) / 1e18,
@@ -1231,20 +1246,33 @@
           document.getElementById('spread-b-value').textContent = 'N/A';
         }
 
-        // Hide login hint if authed
-        if (authenticatedActor) document.getElementById('prices-login-hint').style.display = 'none';
+        const hint = document.getElementById('prices-login-hint');
+        if (hint && authenticatedActor) hint.style.display = 'none';
       } catch (e) { console.error('loadPrices:', e); }
     }
 
     async function loadRecentTrades() {
       try {
-        const legs = await anonymousActor.get_trade_legs(BigInt(0), BigInt(5));
+        const legs = await anonymousActor.get_trade_legs(BigInt(0), BigInt(20));
         const tbody = document.getElementById('recent-trades-body');
         if (!legs.length) {
           tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades yet</td></tr>';
           return;
         }
-        tbody.innerHTML = [...legs].reverse().map(t => {
+        let lastLeg1Cost = 0, lastLeg1Fees = 0;
+        const rows = legs.map(t => {
+          let profitHtml = '--';
+          if ('Leg1' in t.leg_type) {
+            lastLeg1Cost = bi(t.sold_usd_value);
+            lastLeg1Fees = bi(t.fees_usd);
+          } else if (('Leg2' in t.leg_type || 'Drain' in t.leg_type) && lastLeg1Cost > 0) {
+            const revenue = bi(t.bought_usd_value);
+            const totalFees = lastLeg1Fees + bi(t.fees_usd);
+            const profit = revenue - lastLeg1Cost - totalFees;
+            const cls = profit > 0 ? 'positive' : profit < 0 ? 'negative' : '';
+            profitHtml = `<span class="${cls}">${fmt$(profit)}</span>`;
+            if ('Leg2' in t.leg_type) { lastLeg1Cost = 0; lastLeg1Fees = 0; }
+          }
           const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'var(--warning)';
           const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'Drain';
           return `<tr>
@@ -1253,10 +1281,67 @@
             <td>${t.dex}</td>
             <td>${fmtTokAmt(t.sold_amount, t.sold_token)}</td>
             <td>${fmtTokAmt(t.bought_amount, t.bought_token)}</td>
-            <td>--</td>
+            <td>${profitHtml}</td>
           </tr>`;
-        }).join('');
+        });
+        tbody.innerHTML = [...rows].reverse().join('');
       } catch (e) { console.error('loadRecentTrades:', e); }
+    }
+
+    async function loadOverviewFromSnapshot() {
+      try {
+        const snaps = await anonymousActor.get_snapshots(BigInt(0), BigInt(1));
+        if (!snaps.length) return;
+        const s = snaps[0];
+        const vp = bi(s.virtual_price) / 1e18;
+        const rumiUsd = bi(s.rumi_icp_price_usd) / 1e6;
+        const icpswapCkusdc = bi(s.icpswap_icp_price_ckusdc) / 1e6;
+        const icusdPrice = bi(s.icpswap_icp_price_icusd);
+        const ckusdtPrice = bi(s.icpswap_icp_price_ckusdt);
+
+        document.getElementById('price-rumi-usd').textContent = '$' + rumiUsd.toFixed(4);
+        document.getElementById('price-icpswap').textContent = '$' + icpswapCkusdc.toFixed(4);
+        document.getElementById('price-vp').textContent = vp.toFixed(6);
+        document.getElementById('price-icusd').textContent = icusdPrice > 0 ? (icusdPrice / 1e8).toFixed(6) + ' ICP' : 'N/A';
+        document.getElementById('price-icpswap-b').textContent = '$' + icpswapCkusdc.toFixed(4);
+        document.getElementById('price-ckusdt').textContent = ckusdtPrice > 0 ? '$' + (ckusdtPrice / 1e6).toFixed(4) : 'N/A';
+
+        window._latestPrices = { vp, icpswap: icpswapCkusdc };
+
+        const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
+        updateSpreadGauge(
+          document.getElementById('spread-a-fill'),
+          document.getElementById('spread-a-value'),
+          document.getElementById('spread-a-thresh-l'),
+          document.getElementById('spread-a-thresh-r'),
+          bi(s.spread_a_bps), minSpread
+        );
+        if (icusdPrice > 0) {
+          updateSpreadGauge(
+            document.getElementById('spread-b-fill'),
+            document.getElementById('spread-b-value'),
+            document.getElementById('spread-b-thresh-l'),
+            document.getElementById('spread-b-thresh-r'),
+            bi(s.spread_b_bps), minSpread
+          );
+        } else {
+          document.getElementById('spread-b-value').textContent = 'N/A';
+        }
+        if (ckusdtPrice > 0) {
+          updateSpreadGauge(
+            document.getElementById('spread-c-fill'),
+            document.getElementById('spread-c-value'),
+            document.getElementById('spread-c-thresh-l'),
+            document.getElementById('spread-c-thresh-r'),
+            bi(s.spread_c_bps), minSpread
+          );
+        } else {
+          document.getElementById('spread-c-value').textContent = 'N/A';
+        }
+
+        const hint = document.getElementById('prices-login-hint');
+        if (hint) hint.style.display = 'none';
+      } catch (e) { console.error('loadOverviewFromSnapshot:', e); }
     }
 
     // ═══════ Trades View ═══════
@@ -1372,6 +1457,7 @@
       loadSummary();
       if (currentConfig) loadBalances(currentConfig);
       loadRecentTrades();
+      loadOverviewFromSnapshot();
       loadTrades();
       loadActivity();
       loadErrors();
