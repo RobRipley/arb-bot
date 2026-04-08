@@ -319,6 +319,12 @@ async fn setup_approvals() -> String {
         approvals.push(("ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool));
     }
 
+    // Strategy C approvals (if ckUSDT pool is configured)
+    if config.icpswap_ckusdt_pool != Principal::anonymous() {
+        approvals.push(("ckUSDT→ICPSwap-ckUSDT", config.ckusdt_ledger, config.icpswap_ckusdt_pool));
+        approvals.push(("ICP→ICPSwap-ckUSDT", config.icp_ledger, config.icpswap_ckusdt_pool));
+    }
+
     for (label, ledger, spender) in approvals {
         match swaps::approve_infinite(ledger, spender).await {
             Ok(_) => {
@@ -565,11 +571,70 @@ async fn dry_run_arb_cycle() -> arb::DryRunResult {
     }
 
     let config = state::read_state(|s| s.config.clone());
-    match arb::compute_optimal_trade(&config).await {
+    let target_a = arb::IcpswapTarget {
+        pool: config.icpswap_pool,
+        icp_is_token0: config.icpswap_icp_is_token0,
+        label: "ICPSwap",
+        strategy_tag: "A",
+        stable_token_name: "ckUSDC",
+        stable_fee: 10_000,
+        stable_ledger: config.ckusdc_ledger,
+        pool_enum: state::Pool::IcpswapCkusdc,
+    };
+    match arb::compute_optimal_trade(&config, &target_a).await {
         Ok(dr) => dr,
         Err(e) => {
             let mut result = arb::DryRunResult::default();
             result.message = format!("Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_c() -> arb::DryRunResult {
+    require_admin();
+
+    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
+        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
+    });
+    if !has_ckusdt_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy C not configured (no ckUSDT pool)".to_string();
+        return result;
+    }
+    if !ckusdt_resolved {
+        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
+                    s.ckusdt_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    let target_c = arb::IcpswapTarget {
+        pool: config.icpswap_ckusdt_pool,
+        icp_is_token0: config.icpswap_ckusdt_icp_is_token0,
+        label: "ICPSwap-ckUSDT",
+        strategy_tag: "C",
+        stable_token_name: "ckUSDT",
+        stable_fee: 10_000,
+        stable_ledger: config.ckusdt_ledger,
+        pool_enum: state::Pool::IcpswapCkusdt,
+    };
+    match arb::compute_optimal_trade(&config, &target_c).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[C] Computation failed: {}", e);
             result
         }
     }

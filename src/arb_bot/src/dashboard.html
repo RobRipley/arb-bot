@@ -688,11 +688,13 @@
         <div style="display:flex;gap:var(--sp-2)">
           <button class="btn btn-block" onclick="doDryRun(this, 'a')" style="flex:1">Strategy A</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'b')" style="flex:1">Strategy B</button>
+          <button class="btn btn-block" onclick="doDryRun(this, 'c')" style="flex:1">Strategy C</button>
         </div>
-        <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run Both</button>
+        <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run All</button>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
           A = Rumi 3USD/ICP vs ICPSwap ckUSDC/ICP<br>
-          B = ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP
+          B = ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP<br>
+          C = Rumi 3USD/ICP vs ICPSwap ckUSDT/ICP
         </div>
       </div>
       <div id="dry-run-result" style="display:none;margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)"></div>
@@ -819,7 +821,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64 });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
@@ -836,6 +838,7 @@
       icpswap_icp_price_ckusdc: IDL.Nat64, virtual_price: IDL.Nat64, spread_a_bps: IDL.Int32,
       icpswap_icp_price_icusd: IDL.Nat64, spread_b_bps: IDL.Int32,
       balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_ckusdt: IDL.Nat64, balance_icusd: IDL.Nat64,
+      icpswap_icp_price_ckusdt: IDL.Nat64, spread_c_bps: IDL.Int32,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -858,6 +861,7 @@
       manual_arb_cycle: I.Func([], [], []),
       dry_run_arb_cycle: I.Func([], [DryRunResult], []),
       dry_run_strategy_b: I.Func([], [DryRunResult], []),
+      dry_run_strategy_c: I.Func([], [DryRunResult], []),
       withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
       pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
       pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
@@ -1695,7 +1699,13 @@
         }
         if (strategy === 'b' || strategy === 'both') {
           const r = await authenticatedActor.dry_run_strategy_b();
-          html += '<div><strong style="color:#5b8af0">Strategy B</strong>';
+          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#5b8af0">Strategy B</strong>';
+          html += formatDryRunResult(r);
+          html += '</div>';
+        }
+        if (strategy === 'c' || strategy === 'both') {
+          const r = await authenticatedActor.dry_run_strategy_c();
+          html += '<div><strong style="color:#a78bfa">Strategy C</strong>';
           html += formatDryRunResult(r);
           html += '</div>';
         }

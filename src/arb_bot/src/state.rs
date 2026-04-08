@@ -35,6 +35,15 @@ pub struct BotConfig {
     /// Minimum net profit (6-decimal USD) required to execute a trade. 0 = disabled.
     #[serde(default)]
     pub min_profit_usd: i64,
+    /// Strategy C: ICPSwap ckUSDT/ICP pool canister
+    #[serde(default = "default_principal")]
+    pub icpswap_ckusdt_pool: Principal,
+    /// Strategy C: ckUSDT ledger canister
+    #[serde(default = "default_principal")]
+    pub ckusdt_ledger: Principal,
+    /// Whether ICP is token0 in the ICPSwap ckUSDT/ICP pool
+    #[serde(default)]
+    pub icpswap_ckusdt_icp_is_token0: bool,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -97,6 +106,12 @@ pub struct CycleSnapshot {
     #[serde(default)]
     pub balance_ckusdt: u64,
     pub balance_icusd: u64,
+    /// Strategy C: ckUSDT per 1 ICP (6 dec). 0 if N/A.
+    #[serde(default)]
+    pub icpswap_icp_price_ckusdt: u64,
+    /// Strategy C spread, 0 if N/A
+    #[serde(default)]
+    pub spread_c_bps: i32,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", or "B"
@@ -110,6 +125,7 @@ pub enum Pool {
     RumiThreeUsd,
     IcpswapCkusdc,
     IcpswapIcusd,
+    IcpswapCkusdt,
 }
 
 /// Records the intended exit pool after a successful Leg 1, so the drain
@@ -154,6 +170,8 @@ pub struct BotState {
     #[serde(default)]
     pub icusd_token_ordering_resolved: bool,
     #[serde(default)]
+    pub ckusdt_token_ordering_resolved: bool,
+    #[serde(default)]
     pub trade_legs: Vec<TradeLeg>,
     #[serde(default)]
     pub snapshots: Vec<CycleSnapshot>,
@@ -181,12 +199,16 @@ impl Default for BotState {
                 icusd_ledger: Principal::anonymous(),
                 icpswap_icusd_icp_is_token0: false,
                 min_profit_usd: 0,
+                icpswap_ckusdt_pool: Principal::anonymous(),
+                ckusdt_ledger: Principal::anonymous(),
+                icpswap_ckusdt_icp_is_token0: false,
             },
             trades: Vec::new(),
             errors: Vec::new(),
             activity_log: Vec::new(),
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
+            ckusdt_token_ordering_resolved: false,
             trade_legs: Vec::new(),
             snapshots: Vec::new(),
             pending_exit: None,
