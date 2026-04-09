@@ -18,6 +18,8 @@ type BotConfig = record {
   icpswap_ckusdt_pool: principal;
   ckusdt_ledger: principal;
   icpswap_ckusdt_icp_is_token0: bool;
+  icpswap_3usd_pool: principal;
+  icpswap_3usd_icp_is_token0: bool;
 };
 
 type Direction = variant {
@@ -94,6 +96,10 @@ type CycleSnapshot = record {
   spread_c_bps: int32;
   spread_d_bps: int32;
   spread_f_bps: int32;
+  spread_g_bps: int32;
+  spread_h_bps: int32;
+  spread_i_bps: int32;
+  spread_j_bps: int32;
   traded: bool;
   strategy_used: text;
 };
@@ -194,6 +200,10 @@ service : (InitArgs) -> {
   dry_run_strategy_c: () -> (DryRunResult);
   dry_run_strategy_d: () -> (DryRunResult);
   dry_run_strategy_f: () -> (DryRunResult);
+  dry_run_strategy_g: () -> (DryRunResult);
+  dry_run_strategy_h: () -> (DryRunResult);
+  dry_run_strategy_i: () -> (DryRunResult);
+  dry_run_strategy_j: () -> (DryRunResult);
 
   // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
   pool_deposit: (nat8, nat64, nat64) -> ();

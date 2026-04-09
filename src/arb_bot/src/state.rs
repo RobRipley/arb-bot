@@ -53,6 +53,12 @@ pub struct BotConfig {
     /// Whether ICP is token0 in the ICPSwap ckUSDT/ICP pool
     #[serde(default)]
     pub icpswap_ckusdt_icp_is_token0: bool,
+    /// ICPSwap 3USD/ICP pool canister
+    #[serde(default = "default_principal")]
+    pub icpswap_3usd_pool: Principal,
+    /// Whether ICP is token0 in the ICPSwap 3USD/ICP pool
+    #[serde(default)]
+    pub icpswap_3usd_icp_is_token0: bool,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -127,6 +133,18 @@ pub struct CycleSnapshot {
     /// Strategy F spread (ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
     #[serde(default)]
     pub spread_f_bps: i32,
+    /// Strategy G spread (Rumi 3USD/ICP vs ICPSwap 3USD/ICP), 0 if N/A
+    #[serde(default)]
+    pub spread_g_bps: i32,
+    /// Strategy H spread (ICPSwap 3USD/ICP vs ICPSwap icUSD/ICP), 0 if N/A
+    #[serde(default)]
+    pub spread_h_bps: i32,
+    /// Strategy I spread (ICPSwap 3USD/ICP vs ICPSwap ckUSDC/ICP), 0 if N/A
+    #[serde(default)]
+    pub spread_i_bps: i32,
+    /// Strategy J spread (ICPSwap 3USD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
+    #[serde(default)]
+    pub spread_j_bps: i32,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"
@@ -139,6 +157,7 @@ pub enum Pool {
     IcpswapCkusdc,
     IcpswapIcusd,
     IcpswapCkusdt,
+    IcpswapThreeUsd,
 }
 
 /// Records the intended exit pool after a successful Leg 1, so the drain
@@ -184,6 +203,8 @@ pub struct BotState {
     #[serde(default)]
     pub ckusdt_token_ordering_resolved: bool,
     #[serde(default)]
+    pub icpswap_3usd_token_ordering_resolved: bool,
+    #[serde(default)]
     pub pending_exit: Option<PendingExit>,
 }
 
@@ -210,10 +231,13 @@ impl Default for BotState {
                 icpswap_ckusdt_pool: Principal::anonymous(),
                 ckusdt_ledger: Principal::anonymous(),
                 icpswap_ckusdt_icp_is_token0: false,
+                icpswap_3usd_pool: Principal::anonymous(),
+                icpswap_3usd_icp_is_token0: false,
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
+            icpswap_3usd_token_ordering_resolved: false,
             pending_exit: None,
         }
     }
@@ -236,6 +260,8 @@ struct LegacyBotState {
     icusd_token_ordering_resolved: bool,
     #[serde(default)]
     ckusdt_token_ordering_resolved: bool,
+    #[serde(default)]
+    icpswap_3usd_token_ordering_resolved: bool,
     #[serde(default)]
     trade_legs: Vec<TradeLeg>,
     #[serde(default)]
@@ -595,6 +621,7 @@ pub fn load_from_stable_memory() {
             token_ordering_resolved: legacy.token_ordering_resolved,
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
+            icpswap_3usd_token_ordering_resolved: legacy.icpswap_3usd_token_ordering_resolved,
             pending_exit: legacy.pending_exit,
         };
 
