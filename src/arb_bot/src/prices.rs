@@ -255,54 +255,6 @@ pub async fn fetch_icpswap_quote_for_amount(
     }
 }
 
-// ─── Strategy B Price Data ───
-
-pub struct StrategyBPriceData {
-    /// icUSD per 1 ICP (8 decimals) from the icUSD/ICP pool
-    pub icusd_icp_price_native: u64,
-    /// ckUSDC per 1 ICP (6 decimals) from the ckUSDC/ICP reference pool
-    pub ckusdc_icp_price_native: u64,
-}
-
-impl StrategyBPriceData {
-    /// icUSD/ICP price in 6-dec USD. icUSD ≈ $1.00 (8 decimals), so /100 → 6 dec.
-    pub fn icusd_price_usd_6dec(&self) -> u64 {
-        self.icusd_icp_price_native / 100
-    }
-
-    /// ckUSDC/ICP price is already in 6-dec USD.
-    pub fn ckusdc_price_usd_6dec(&self) -> u64 {
-        self.ckusdc_icp_price_native
-    }
-
-    /// Spread in bps: positive = ICP cheaper on icUSD pool (buy icUSD→ICP, sell ICP→ckUSDC)
-    pub fn spread_bps(&self) -> i32 {
-        let icusd = self.icusd_price_usd_6dec() as i64;
-        let ckusdc = self.ckusdc_price_usd_6dec() as i64;
-        if icusd == 0 || ckusdc == 0 {
-            return 0;
-        }
-        let diff = ckusdc - icusd;
-        let min_price = icusd.min(ckusdc);
-        (diff * 10_000 / min_price) as i32
-    }
-}
-
-pub async fn fetch_strategy_b_prices(
-    icpswap_icusd_pool: Principal,
-    icpswap_icusd_zero_for_one: bool,
-    icpswap_ref_pool: Principal,
-    icpswap_ref_zero_for_one: bool,
-) -> Result<StrategyBPriceData, String> {
-    let icusd_fut = fetch_icpswap_price(icpswap_icusd_pool, icpswap_icusd_zero_for_one);
-    let ref_fut = fetch_icpswap_price(icpswap_ref_pool, icpswap_ref_zero_for_one);
-    let (icusd_res, ref_res) = futures::future::join(icusd_fut, ref_fut).await;
-    Ok(StrategyBPriceData {
-        icusd_icp_price_native: icusd_res?,
-        ckusdc_icp_price_native: ref_res?,
-    })
-}
-
 pub fn nat_to_u64(n: &Nat) -> u64 {
     n.0.to_string().parse::<u64>().unwrap_or(0)
 }

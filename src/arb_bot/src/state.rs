@@ -124,6 +124,9 @@ pub struct CycleSnapshot {
     /// Strategy D spread (Rumi 3pool vs ICPSwap icUSD), 0 if N/A
     #[serde(default)]
     pub spread_d_bps: i32,
+    /// Strategy F spread (ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
+    #[serde(default)]
+    pub spread_f_bps: i32,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"

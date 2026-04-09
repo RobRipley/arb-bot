@@ -197,28 +197,34 @@ async fn get_prices() -> PriceInfo {
     let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
     let icusd_resolved = state::read_state(|s| s.icusd_token_ordering_resolved);
 
-    let strategy_b_fut = async {
+    let icusd_price_fut = async {
         if has_icusd_pool && icusd_resolved {
-            prices::fetch_strategy_b_prices(
-                config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0,
-                config.icpswap_pool, config.icpswap_icp_is_token0,
-            ).await.ok()
+            prices::fetch_icpswap_price(config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0).await.ok()
         } else {
             None
         }
     };
 
-    let (a_result, b_result) = futures::future::join(strategy_a_fut, strategy_b_fut).await;
+    let (a_result, icusd_price) = futures::future::join(strategy_a_fut, icusd_price_fut).await;
 
     match a_result {
-        Ok(p) => PriceInfo {
-            rumi_icp_price_3usd: p.rumi_icp_price_3usd_native,
-            rumi_icp_price_usd_6dec: p.rumi_price_usd_6dec(),
-            icpswap_icp_price_ckusdc: p.icpswap_icp_price_ckusdc_native,
-            virtual_price: p.virtual_price,
-            spread_bps: p.spread_bps(),
-            icpswap_icusd_icp_price: b_result.as_ref().map(|b| b.icusd_icp_price_native).unwrap_or(0),
-            strategy_b_spread_bps: b_result.as_ref().map(|b| b.spread_bps()).unwrap_or(0),
+        Ok(p) => {
+            // Strategy B spread: icUSD/ICP vs ckUSDC/ICP (both in 6-dec USD)
+            let icusd_usd = icusd_price.map(|v| v / 100).unwrap_or(0);  // 8 dec → 6 dec
+            let ckusdc_usd = p.icpswap_price_usd_6dec();
+            let b_spread = if icusd_usd > 0 && ckusdc_usd > 0 {
+                let (i, c) = (icusd_usd as i64, ckusdc_usd as i64);
+                ((c - i) * 10_000 / i.min(c)) as i32
+            } else { 0 };
+            PriceInfo {
+                rumi_icp_price_3usd: p.rumi_icp_price_3usd_native,
+                rumi_icp_price_usd_6dec: p.rumi_price_usd_6dec(),
+                icpswap_icp_price_ckusdc: p.icpswap_icp_price_ckusdc_native,
+                virtual_price: p.virtual_price,
+                spread_bps: p.spread_bps(),
+                icpswap_icusd_icp_price: icusd_price.unwrap_or(0),
+                strategy_b_spread_bps: b_spread,
+            }
         },
         Err(e) => ic_cdk::trap(&format!("Price fetch failed: {}", e)),
     }
@@ -707,13 +713,150 @@ async fn dry_run_strategy_b() -> arb::DryRunResult {
     }
 
     let config = state::read_state(|s| s.config.clone());
-    match arb::compute_optimal_trade_b(&config).await {
+    let target = build_cross_b(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
         Ok(dr) => dr,
         Err(e) => {
             let mut result = arb::DryRunResult::default();
             result.message = format!("[B] Computation failed: {}", e);
             result
         }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_f() -> arb::DryRunResult {
+    require_admin();
+
+    // Resolve ckUSDC/ICP pool ordering (needed as reference)
+    let resolved = state::read_state(|s| s.token_ordering_resolved);
+    if !resolved {
+        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
+        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
+            state::mutate_state(|s| {
+                s.config.icpswap_icp_is_token0 = icp_is_token0;
+                s.token_ordering_resolved = true;
+            });
+        }
+    }
+    // Resolve icUSD pool ordering
+    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
+        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
+    });
+    if !has_icusd_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy F not configured (no icUSD pool)".to_string();
+        return result;
+    }
+    if !icusd_resolved {
+        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
+                    s.icusd_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    // Resolve ckUSDT pool ordering
+    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
+        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
+    });
+    if !has_ckusdt_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy F not configured (no ckUSDT pool)".to_string();
+        return result;
+    }
+    if !ckusdt_resolved {
+        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
+                    s.ckusdt_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+
+    let config = state::read_state(|s| s.config.clone());
+    let target = build_cross_f(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[F] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+// ─── Cross-pool target builders ───
+
+const ICUSD_FEE: u64 = 100_000;
+const CKUSDC_FEE: u64 = 10_000;
+const CKUSDT_FEE: u64 = 10_000;
+
+fn build_cross_b(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "B",
+        buy_side: arb::CrossPoolSide {
+            pool: config.icpswap_icusd_pool,
+            icp_is_token0: config.icpswap_icusd_icp_is_token0,
+            stable_token_name: "icUSD",
+            stable_fee: ICUSD_FEE,
+            stable_ledger: config.icusd_ledger,
+            stable_decimals: 8,
+            pool_enum: state::Pool::IcpswapIcusd,
+            dex_label: "ICPSwap-icUSD",
+        },
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_pool,
+            icp_is_token0: config.icpswap_icp_is_token0,
+            stable_token_name: "ckUSDC",
+            stable_fee: CKUSDC_FEE,
+            stable_ledger: config.ckusdc_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdc,
+            dex_label: "ICPSwap",
+        },
+    }
+}
+
+fn build_cross_f(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "F",
+        buy_side: arb::CrossPoolSide {
+            pool: config.icpswap_icusd_pool,
+            icp_is_token0: config.icpswap_icusd_icp_is_token0,
+            stable_token_name: "icUSD",
+            stable_fee: ICUSD_FEE,
+            stable_ledger: config.icusd_ledger,
+            stable_decimals: 8,
+            pool_enum: state::Pool::IcpswapIcusd,
+            dex_label: "ICPSwap-icUSD",
+        },
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_ckusdt_pool,
+            icp_is_token0: config.icpswap_ckusdt_icp_is_token0,
+            stable_token_name: "ckUSDT",
+            stable_fee: CKUSDT_FEE,
+            stable_ledger: config.ckusdt_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdt,
+            dex_label: "ICPSwap-ckUSDT",
+        },
     }
 }
 
