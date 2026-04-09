@@ -552,20 +552,44 @@
       </div>
 
       <!-- Live Prices + Balances -->
-      <div class="grid-2" style="margin-top:var(--sp-4)">
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
         <div class="card">
-          <div class="card-header">LIVE PRICES</div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy A</div>
-          <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-rumi-usd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap">--</span></div>
-          <div class="stat-row"><span class="stat-label">3pool Virtual Price</span><span class="stat-value" id="price-vp">--</span></div>
-          <div class="divider"></div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy B</div>
-          <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-icusd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-icpswap-b">--</span></div>
-          <div class="divider"></div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Strategy C</div>
-          <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-ckusdt">--</span></div>
+          <div class="card-header">STRATEGY PRICES</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)">
+            <!-- Strategy A: Rumi vs ICPSwap ckUSDC -->
+            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#00d4aa;margin-bottom:var(--sp-2);font-weight:600">A · Rumi vs ckUSDC</div>
+              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-a-rumi">--</span></div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-a-icpswap">--</span></div>
+              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-a-vp" style="color:var(--text-tertiary)">--</span></div>
+            </div>
+            <!-- Strategy B: ICPSwap icUSD vs ICPSwap ckUSDC -->
+            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#5b8af0;margin-bottom:var(--sp-2);font-weight:600">B · icUSD vs ckUSDC</div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-b-icusd">--</span></div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-b-ckusdc">--</span></div>
+            </div>
+            <!-- Strategy C: Rumi vs ICPSwap ckUSDT -->
+            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#a78bfa;margin-bottom:var(--sp-2);font-weight:600">C · Rumi vs ckUSDT</div>
+              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-c-rumi">--</span></div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-c-ckusdt">--</span></div>
+              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-c-vp" style="color:var(--text-tertiary)">--</span></div>
+            </div>
+            <!-- Strategy D: Rumi vs ICPSwap icUSD -->
+            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f0a05b;margin-bottom:var(--sp-2);font-weight:600">D · Rumi vs icUSD</div>
+              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-d-rumi">--</span></div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-d-icusd">--</span></div>
+              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-d-vp" style="color:var(--text-tertiary)">--</span></div>
+            </div>
+            <!-- Strategy F: ICPSwap icUSD vs ICPSwap ckUSDT -->
+            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f06292;margin-bottom:var(--sp-2);font-weight:600">F · icUSD vs ckUSDT</div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-f-icusd">--</span></div>
+              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-f-ckusdt">--</span></div>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -1268,12 +1292,27 @@
       try {
         const p = await authenticatedActor.get_prices();
 
-        document.getElementById('price-rumi-usd').textContent = '$' + (bi(p.rumi_icp_price_usd_6dec) / 1e6).toFixed(4);
-        document.getElementById('price-icpswap').textContent = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
-        document.getElementById('price-vp').textContent = (bi(p.virtual_price) / 1e18).toFixed(6);
-        document.getElementById('price-icusd').textContent = (bi(p.icpswap_icusd_icp_price) / 1e8).toFixed(6) + ' ICP';
-        document.getElementById('price-icpswap-b').textContent = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
-        // Strategy C ckUSDT price comes from snapshot loader, not get_prices
+        const rumiUsdStr = '$' + (bi(p.rumi_icp_price_usd_6dec) / 1e6).toFixed(4);
+        const ckusdcStr = '$' + (bi(p.icpswap_icp_price_ckusdc) / 1e6).toFixed(4);
+        const vpStr = (bi(p.virtual_price) / 1e18).toFixed(6);
+        const icusdVal = bi(p.icpswap_icusd_icp_price);
+        const icusdStr = icusdVal > 0 ? '$' + (icusdVal / 1e8).toFixed(4) : 'N/A';
+        // Strategy A
+        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
+        document.getElementById('price-a-vp').textContent = vpStr;
+        // Strategy B
+        document.getElementById('price-b-icusd').textContent = icusdStr;
+        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
+        // Strategy C (ckUSDT price comes from snapshot loader, not get_prices)
+        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-c-vp').textContent = vpStr;
+        // Strategy D
+        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-d-icusd').textContent = icusdStr;
+        document.getElementById('price-d-vp').textContent = vpStr;
+        // Strategy F
+        document.getElementById('price-f-icusd').textContent = icusdStr;
 
         window._latestPrices = {
           vp: bi(p.virtual_price) / 1e18,
@@ -1359,12 +1398,29 @@
         const icusdPrice = bi(s.icpswap_icp_price_icusd);
         const ckusdtPrice = bi(s.icpswap_icp_price_ckusdt);
 
-        document.getElementById('price-rumi-usd').textContent = '$' + rumiUsd.toFixed(4);
-        document.getElementById('price-icpswap').textContent = '$' + icpswapCkusdc.toFixed(4);
-        document.getElementById('price-vp').textContent = vp.toFixed(6);
-        document.getElementById('price-icusd').textContent = icusdPrice > 0 ? (icusdPrice / 1e8).toFixed(6) + ' ICP' : 'N/A';
-        document.getElementById('price-icpswap-b').textContent = '$' + icpswapCkusdc.toFixed(4);
-        document.getElementById('price-ckusdt').textContent = ckusdtPrice > 0 ? '$' + (ckusdtPrice / 1e6).toFixed(4) : 'N/A';
+        const rumiUsdStr = '$' + rumiUsd.toFixed(4);
+        const ckusdcStr = '$' + icpswapCkusdc.toFixed(4);
+        const vpStr = vp.toFixed(6);
+        const icusdStr = icusdPrice > 0 ? '$' + (icusdPrice / 1e8).toFixed(4) : 'N/A';
+        const ckusdtStr = ckusdtPrice > 0 ? '$' + (ckusdtPrice / 1e6).toFixed(4) : 'N/A';
+        // Strategy A
+        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
+        document.getElementById('price-a-vp').textContent = vpStr;
+        // Strategy B
+        document.getElementById('price-b-icusd').textContent = icusdStr;
+        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
+        // Strategy C
+        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-c-ckusdt').textContent = ckusdtStr;
+        document.getElementById('price-c-vp').textContent = vpStr;
+        // Strategy D
+        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
+        document.getElementById('price-d-icusd').textContent = icusdStr;
+        document.getElementById('price-d-vp').textContent = vpStr;
+        // Strategy F
+        document.getElementById('price-f-icusd').textContent = icusdStr;
+        document.getElementById('price-f-ckusdt').textContent = ckusdtStr;
 
         window._latestPrices = { vp, icpswap: icpswapCkusdc };
 
