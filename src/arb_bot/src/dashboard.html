@@ -535,6 +535,20 @@
           </div>
           <div class="spread-action" id="spread-d-action"></div>
         </div>
+        <div class="spread-row" style="margin-top:var(--sp-3)">
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left">ICPSwap icUSD / ICP</span>
+            <span class="spread-value" id="spread-f-value">--</span>
+            <span class="spread-pool spread-pool-right">ICPSwap ckUSDT / ICP</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-f-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-f-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-f-thresh-r"></div>
+          </div>
+          <div class="spread-action" id="spread-f-action"></div>
+        </div>
       </div>
 
       <!-- Live Prices + Balances -->
@@ -727,12 +741,15 @@
           <button class="btn btn-block" onclick="doDryRun(this, 'b')" style="flex:1">Strategy B</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'c')" style="flex:1">Strategy C</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'd')" style="flex:1">Strategy D</button>
+          <button class="btn btn-block" onclick="doDryRun(this, 'f')" style="flex:1">Strategy F</button>
         </div>
         <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run All</button>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
           A = Rumi 3USD/ICP vs ICPSwap ckUSDC/ICP<br>
           B = ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP<br>
-          C = Rumi 3USD/ICP vs ICPSwap ckUSDT/ICP
+          C = Rumi 3USD/ICP vs ICPSwap ckUSDT/ICP<br>
+          D = Rumi 3USD/ICP vs ICPSwap icUSD/ICP<br>
+          F = ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP
         </div>
       </div>
       <div id="dry-run-result" style="display:none;margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)"></div>
@@ -878,6 +895,7 @@
       balance_icp: IDL.Nat64, balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, balance_ckusdt: IDL.Nat64, balance_icusd: IDL.Nat64,
       icpswap_icp_price_ckusdt: IDL.Nat64, spread_c_bps: IDL.Int32,
       spread_d_bps: IDL.Int32,
+      spread_f_bps: IDL.Int32,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -902,6 +920,7 @@
       dry_run_strategy_b: I.Func([], [DryRunResult], []),
       dry_run_strategy_c: I.Func([], [DryRunResult], []),
       dry_run_strategy_d: I.Func([], [DryRunResult], []),
+      dry_run_strategy_f: I.Func([], [DryRunResult], []),
       withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
       pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
       pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
@@ -1395,6 +1414,19 @@
         } else {
           document.getElementById('spread-d-value').textContent = 'N/A';
         }
+        // Strategy F: ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP
+        if (icusdPrice > 0 && ckusdtPrice > 0) {
+          updateSpreadGauge(
+            document.getElementById('spread-f-fill'),
+            document.getElementById('spread-f-value'),
+            document.getElementById('spread-f-thresh-l'),
+            document.getElementById('spread-f-thresh-r'),
+            bi(s.spread_f_bps !== undefined ? s.spread_f_bps : 0), minSpread,
+            document.getElementById('spread-f-action')
+          );
+        } else {
+          document.getElementById('spread-f-value').textContent = 'N/A';
+        }
 
         const hint = document.getElementById('prices-login-hint');
         if (hint) hint.style.display = 'none';
@@ -1624,19 +1656,25 @@
 
       const seriesA = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
       const seriesB = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'Strategy B' });
+      const seriesF = chartInstance.addLineSeries({ color: '#f06292', lineWidth: 2, title: 'Strategy F' });
 
       const dataA = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) }));
       const dataB = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_b_bps) }));
+      const dataF = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_f_bps !== undefined ? s.spread_f_bps : 0) }));
 
       seriesA.setData(dataA);
       seriesB.setData(dataB);
+      seriesF.setData(dataF);
 
       const markersA = snapshots.filter(s => s.traded && s.strategy_used === 'A')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#00d4aa', shape: 'circle', size: 1 }));
       const markersB = snapshots.filter(s => s.traded && s.strategy_used === 'B')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#5b8af0', shape: 'circle', size: 1 }));
+      const markersF = snapshots.filter(s => s.traded && s.strategy_used === 'F')
+        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#f06292', shape: 'circle', size: 1 }));
       if (markersA.length) seriesA.setMarkers(markersA);
       if (markersB.length) seriesB.setMarkers(markersB);
+      if (markersF.length) seriesF.setMarkers(markersF);
 
       const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
       seriesA.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
@@ -1854,7 +1892,13 @@
         }
         if (strategy === 'd' || strategy === 'both') {
           const r = await authenticatedActor.dry_run_strategy_d();
-          html += '<div><strong style="color:#f0a05b">Strategy D</strong>';
+          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#f0a05b">Strategy D</strong>';
+          html += formatDryRunResult(r);
+          html += '</div>';
+        }
+        if (strategy === 'f' || strategy === 'both') {
+          const r = await authenticatedActor.dry_run_strategy_f();
+          html += '<div><strong style="color:#f06292">Strategy F</strong>';
           html += formatDryRunResult(r);
           html += '</div>';
         }
