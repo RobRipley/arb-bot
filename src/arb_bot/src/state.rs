@@ -671,7 +671,7 @@ pub fn get_snapshots_page(offset: u64, limit: u64) -> Vec<CycleSnapshot> {
     })
 }
 
-pub fn log_volume_trade(leg: VolumeTradeLeg) {
+pub fn append_volume_trade(leg: VolumeTradeLeg) {
     VOLUME_TRADES.with(|t| {
         t.borrow().append(&leg).expect("failed to log volume trade");
     });
@@ -686,7 +686,7 @@ pub fn get_volume_trades_page(offset: u64, limit: u64) -> Vec<VolumeTradeLeg> {
         }
         let end = total.saturating_sub(offset);
         let start = end.saturating_sub(limit);
-        (start..end).rev().filter_map(|i| log.get(i)).collect()
+        (start..end).filter_map(|i| log.get(i)).collect()
     })
 }
 
