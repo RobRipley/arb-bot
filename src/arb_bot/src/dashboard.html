@@ -180,6 +180,101 @@
       color: var(--text-primary);
     }
 
+    /* ── Price Sources ── */
+    .price-sources {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: var(--sp-2);
+    }
+    .price-source {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px var(--sp-2) 10px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .price-source::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--source-color);
+    }
+    .price-source::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 60%;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.015), transparent);
+      pointer-events: none;
+    }
+    .price-source-label {
+      font-family: var(--font-ui);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--source-color);
+      margin-bottom: 6px;
+      position: relative; z-index: 1;
+    }
+    .price-source-value {
+      font-family: var(--font-data);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      position: relative; z-index: 1;
+    }
+    .price-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--sp-2);
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .price-meta-value {
+      font-family: var(--font-data);
+      font-weight: 500;
+      color: var(--text-tertiary);
+    }
+    .strategy-legend {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0 var(--sp-4);
+      margin-top: var(--sp-3);
+      padding-top: var(--sp-3);
+      border-top: 1px solid var(--border);
+    }
+    .strat-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 0;
+      font-family: var(--font-ui);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .strat-letter {
+      font-family: var(--font-data);
+      font-weight: 700;
+      font-size: 10px;
+      width: 18px; height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+    .strat-vs {
+      color: var(--text-muted);
+      font-size: 9px;
+      margin: 0 1px;
+    }
+
     /* ── Buttons ── */
     .btn {
       background: var(--surface-2);
@@ -442,6 +537,7 @@
         <a class="nav-item" data-view="charts">Charts</a>
         <a class="nav-item" data-view="trades">Trades</a>
         <a class="nav-item" data-view="admin" id="nav-admin" style="display:none">Admin</a>
+        <a class="nav-item" data-view="volume" id="nav-volume" style="display:none">Volume Bot</a>
       </nav>
     </div>
     <div class="sidebar-bottom">
@@ -611,65 +707,39 @@
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
         <div class="card">
           <div class="card-header">STRATEGY PRICES</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)">
-            <!-- Strategy A: Rumi vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#00d4aa;margin-bottom:var(--sp-2);font-weight:600">A · Rumi vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-a-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-a-icpswap">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-a-vp" style="color:var(--text-tertiary)">--</span></div>
+          <div class="price-sources">
+            <div class="price-source" style="--source-color:#00d4aa">
+              <div class="price-source-label">Rumi</div>
+              <div class="price-source-value" id="src-rumi">--</div>
             </div>
-            <!-- Strategy B: ICPSwap icUSD vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#5b8af0;margin-bottom:var(--sp-2);font-weight:600">B · icUSD vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-b-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-b-ckusdc">--</span></div>
+            <div class="price-source" style="--source-color:#5b8af0">
+              <div class="price-source-label">ckUSDC</div>
+              <div class="price-source-value" id="src-ckusdc">--</div>
             </div>
-            <!-- Strategy C: Rumi vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#a78bfa;margin-bottom:var(--sp-2);font-weight:600">C · Rumi vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-c-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-c-ckusdt">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-c-vp" style="color:var(--text-tertiary)">--</span></div>
+            <div class="price-source" style="--source-color:#a78bfa">
+              <div class="price-source-label">ckUSDT</div>
+              <div class="price-source-value" id="src-ckusdt">--</div>
             </div>
-            <!-- Strategy D: Rumi vs ICPSwap icUSD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f0a05b;margin-bottom:var(--sp-2);font-weight:600">D · Rumi vs icUSD</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-d-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-d-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-d-vp" style="color:var(--text-tertiary)">--</span></div>
+            <div class="price-source" style="--source-color:#f0a05b">
+              <div class="price-source-label">icUSD</div>
+              <div class="price-source-value" id="src-icusd">--</div>
             </div>
-            <!-- Strategy F: ICPSwap icUSD vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f06292;margin-bottom:var(--sp-2);font-weight:600">F · icUSD vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-f-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-f-ckusdt">--</span></div>
+            <div class="price-source" style="--source-color:#66bb6a">
+              <div class="price-source-label">3USD</div>
+              <div class="price-source-value" id="src-3usd">--</div>
             </div>
-            <!-- Strategy G: Rumi 3USD vs ICPSwap 3USD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#66bb6a;margin-bottom:var(--sp-2);font-weight:600">G · Rumi 3USD vs ICPSwap 3USD</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-g-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-g-icpswap3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-g-vp" style="color:var(--text-tertiary)">--</span></div>
-            </div>
-            <!-- Strategy H: ICPSwap 3USD vs ICPSwap icUSD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#29b6f6;margin-bottom:var(--sp-2);font-weight:600">H · 3USD vs icUSD</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-h-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-h-icusd">--</span></div>
-            </div>
-            <!-- Strategy I: ICPSwap 3USD vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#ffa726;margin-bottom:var(--sp-2);font-weight:600">I · 3USD vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-i-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-i-ckusdc">--</span></div>
-            </div>
-            <!-- Strategy J: ICPSwap 3USD vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#ef5350;margin-bottom:var(--sp-2);font-weight:600">J · 3USD vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-j-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-j-ckusdt">--</span></div>
-            </div>
+          </div>
+          <div class="price-meta"><span>3pool VP</span><span class="price-meta-value" id="src-vp">--</span></div>
+          <div class="strategy-legend">
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(0,212,170,0.15);color:#00d4aa">A</span>Rumi <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(91,138,240,0.15);color:#5b8af0">B</span>icUSD <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(167,139,250,0.15);color:#a78bfa">C</span>Rumi <span class="strat-vs">↔</span> ckUSDT</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,160,91,0.15);color:#f0a05b">D</span>Rumi <span class="strat-vs">↔</span> icUSD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,98,146,0.15);color:#f06292">F</span>icUSD <span class="strat-vs">↔</span> ckUSDT</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(102,187,106,0.15);color:#66bb6a">G</span>Rumi <span class="strat-vs">↔</span> 3USD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(41,182,246,0.15);color:#29b6f6">H</span>3USD <span class="strat-vs">↔</span> icUSD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(255,167,38,0.15);color:#ffa726">I</span>3USD <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(239,83,80,0.15);color:#ef5350">J</span>3USD <span class="strat-vs">↔</span> ckUSDT</div>
           </div>
         </div>
 
@@ -964,6 +1034,167 @@
 
   </div>
 </section>
+    <section class="view" id="view-volume">
+  <div class="admin-grid">
+
+    <!-- Status -->
+    <div class="card">
+      <div class="card-header">Volume Bot Status</div>
+      <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-4);font-size:13px;font-weight:500">
+        <span class="status-dot" id="vol-status-dot"></span>
+        <span id="vol-status-text">Loading...</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">icUSD/ICP</span><span class="stat-value" id="vol-icusd-status">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Direction</span><span class="stat-value" id="vol-icusd-dir">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Trades</span><span class="stat-value" id="vol-icusd-count">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD/ICP</span><span class="stat-value" id="vol-3usd-status">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Direction</span><span class="stat-value" id="vol-3usd-dir">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Trades</span><span class="stat-value" id="vol-3usd-count">--</span></div>
+      </div>
+    </div>
+
+    <!-- Analytics -->
+    <div class="card">
+      <div class="card-header">Volume Analytics</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">Daily Spend</span><span class="stat-value" id="vol-daily-spend">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Volume</span><span class="stat-value" id="vol-icusd-volume">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Cost</span><span class="stat-value" id="vol-icusd-cost">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Volume</span><span class="stat-value" id="vol-3usd-volume">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Cost</span><span class="stat-value" id="vol-3usd-cost">--</span></div>
+        <div class="stat-row"><span class="stat-label">Total Trades</span><span class="stat-value" id="vol-total-trades">--</span></div>
+        <div class="stat-row"><span class="stat-label">Interval</span><span class="stat-value" id="vol-interval">--</span></div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-header">Volume Controls</div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+        <button class="btn" id="vol-pause-btn" onclick="doAction(this, () => authenticatedActor.pause_volume(), 'Volume paused')" style="background:#e06b9f;color:#fff;border-color:#e06b9f">Pause</button>
+        <button class="btn" id="vol-resume-btn" onclick="doAction(this, () => authenticatedActor.resume_volume(), 'Volume resumed')" style="background:#34d399;color:#0c0e14;border-color:#34d399;font-weight:600">Resume</button>
+        <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_cycle(), 'Volume cycle triggered')">Run Cycle</button>
+        <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_rebalance(), 'Rebalance triggered')">Rebalance</button>
+      </div>
+    </div>
+
+    <!-- icUSD/ICP Config -->
+    <div class="card">
+      <div class="card-header">icUSD/ICP Config</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <input type="checkbox" id="vol-icusd-enabled"> <label for="vol-icusd-enabled" style="margin:0">Enabled</label>
+        </div>
+        <div>
+          <label>Trade Size (USD)</label>
+          <input type="number" id="vol-icusd-trade-size" placeholder="5.00" step="0.01">
+        </div>
+        <div>
+          <label>Variance %</label>
+          <input type="number" id="vol-icusd-variance" placeholder="20">
+        </div>
+        <div>
+          <label>Idle Threshold (bps)</label>
+          <input type="number" id="vol-icusd-idle-threshold" placeholder="10">
+        </div>
+        <div>
+          <label>Daily Cost Cap (USD)</label>
+          <input type="number" id="vol-icusd-daily-cap" placeholder="50.00" step="0.01">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumePoolConfig('icusd')">Save icUSD Config</button>
+      </div>
+    </div>
+
+    <!-- 3USD/ICP Config -->
+    <div class="card">
+      <div class="card-header">3USD/ICP Config</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <input type="checkbox" id="vol-3usd-enabled"> <label for="vol-3usd-enabled" style="margin:0">Enabled</label>
+        </div>
+        <div>
+          <label>Trade Size (USD)</label>
+          <input type="number" id="vol-3usd-trade-size" placeholder="5.00" step="0.01">
+        </div>
+        <div>
+          <label>Variance %</label>
+          <input type="number" id="vol-3usd-variance" placeholder="20">
+        </div>
+        <div>
+          <label>Idle Threshold (bps)</label>
+          <input type="number" id="vol-3usd-idle-threshold" placeholder="10">
+        </div>
+        <div>
+          <label>Daily Cost Cap (USD)</label>
+          <input type="number" id="vol-3usd-daily-cap" placeholder="50.00" step="0.01">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumePoolConfig('3usd')">Save 3USD Config</button>
+      </div>
+    </div>
+
+    <!-- Global Settings -->
+    <div class="card">
+      <div class="card-header">Global Settings</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label>Interval (seconds)</label>
+          <input type="number" id="vol-global-interval" placeholder="300">
+        </div>
+        <div>
+          <label>Rebalance Drift %</label>
+          <input type="number" id="vol-global-drift" placeholder="5">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumeGlobal()">Save Global Settings</button>
+      </div>
+    </div>
+
+    <!-- Fund / Withdraw -->
+    <div class="card">
+      <div class="card-header">Fund / Withdraw Volume Subaccount</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label>Token</label>
+          <select id="vol-fund-token">
+            <option value="icp">ICP</option>
+            <option value="icusd">icUSD</option>
+            <option value="3usd">3USD</option>
+          </select>
+        </div>
+        <div>
+          <label>Amount</label>
+          <input type="text" id="vol-fund-amount" placeholder="0.00">
+        </div>
+        <div style="display:flex;gap:var(--sp-2)">
+          <button class="btn btn-primary" onclick="fundVolume(this)">Fund</button>
+          <button class="btn btn-danger" onclick="withdrawVolume(this)">Withdraw</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Recent Trades (full width) -->
+  <div class="card" style="margin-top:var(--sp-4)">
+    <div class="card-header">Recent Volume Trades</div>
+    <div class="data-table-wrap">
+      <table class="data-table" id="vol-trades-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Pool</th>
+            <th>Direction</th>
+            <th>Type</th>
+            <th>In</th>
+            <th>Out</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="vol-trades-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
   </main>
 
   <div id="toast"></div>
@@ -1015,40 +1246,96 @@
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
-    const idlFactory = ({ IDL: I }) => I.Service({
-      get_config: I.Func([], [BotConfig], ['query']),
-      set_config: I.Func([BotConfig], [], []),
-      get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
-      get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
-      get_summary: I.Func([], [TradeSummary], ['query']),
-      get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
-      get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
-      get_prices: I.Func([], [PriceInfo], []),
-      get_snapshots: I.Func([I.Nat64, I.Nat64], [I.Vec(CycleSnapshot)], ['query']),
-      is_admin: I.Func([I.Principal], [I.Bool], ['query']),
-      add_admin: I.Func([I.Principal], [], []),
-      remove_admin: I.Func([I.Principal], [], []),
-      pause: I.Func([], [], []),
-      resume: I.Func([], [], []),
-      setup_approvals: I.Func([], [I.Text], []),
-      manual_arb_cycle: I.Func([], [], []),
-      dry_run_arb_cycle: I.Func([], [DryRunResult], []),
-      dry_run_strategy_b: I.Func([], [DryRunResult], []),
-      dry_run_strategy_c: I.Func([], [DryRunResult], []),
-      dry_run_strategy_d: I.Func([], [DryRunResult], []),
-      dry_run_strategy_f: I.Func([], [DryRunResult], []),
-      dry_run_strategy_g: I.Func([], [DryRunResult], []),
-      dry_run_strategy_h: I.Func([], [DryRunResult], []),
-      dry_run_strategy_i: I.Func([], [DryRunResult], []),
-      dry_run_strategy_j: I.Func([], [DryRunResult], []),
-      withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
-      pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
-      pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
-      pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
-      pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
-      rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
-      rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
-    });
+    const idlFactory = ({ IDL: I }) => {
+      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null });
+      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null });
+      const VolumeTradeType = I.Variant({ PingPong: I.Null, Rebalance: I.Null });
+      const VolumePoolConfig = I.Record({
+        enabled: I.Bool,
+        idle_threshold_bps: I.Nat64,
+        trade_size_usd: I.Nat64,
+        trade_variance_pct: I.Nat64,
+        daily_cost_cap_usd: I.Nat64,
+      });
+      const VolumePoolState = I.Record({
+        last_price: I.Opt(I.Nat64),
+        next_direction: VolumeDirection,
+        trade_count: I.Nat64,
+        total_volume_usd: I.Nat64,
+        total_cost_usd: I.Int64,
+      });
+      const VolumePoolStatus = I.Record({
+        config: VolumePoolConfig,
+        state: VolumePoolState,
+      });
+      const VolumeStats = I.Record({
+        volume_paused: I.Bool,
+        interval_secs: I.Nat64,
+        daily_spend_usd: I.Int64,
+        daily_cost_cap_usd_icusd: I.Nat64,
+        daily_cost_cap_usd_3usd: I.Nat64,
+        icusd_icp: VolumePoolStatus,
+        three_usd_icp: VolumePoolStatus,
+        total_trade_count: I.Nat64,
+      });
+      const VolumeTradeLeg = I.Record({
+        timestamp: I.Nat64,
+        pool: VolumePool,
+        direction: VolumeDirection,
+        trade_type: VolumeTradeType,
+        token_in: I.Principal,
+        token_out: I.Principal,
+        amount_in: I.Nat64,
+        amount_out: I.Nat64,
+        cost_usd: I.Int64,
+        price_before: I.Nat64,
+        price_after: I.Nat64,
+      });
+      return I.Service({
+        get_config: I.Func([], [BotConfig], ['query']),
+        set_config: I.Func([BotConfig], [], []),
+        get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
+        get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
+        get_summary: I.Func([], [TradeSummary], ['query']),
+        get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
+        get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
+        get_prices: I.Func([], [PriceInfo], []),
+        get_snapshots: I.Func([I.Nat64, I.Nat64], [I.Vec(CycleSnapshot)], ['query']),
+        is_admin: I.Func([I.Principal], [I.Bool], ['query']),
+        add_admin: I.Func([I.Principal], [], []),
+        remove_admin: I.Func([I.Principal], [], []),
+        pause: I.Func([], [], []),
+        resume: I.Func([], [], []),
+        setup_approvals: I.Func([], [I.Text], []),
+        manual_arb_cycle: I.Func([], [], []),
+        dry_run_arb_cycle: I.Func([], [DryRunResult], []),
+        dry_run_strategy_b: I.Func([], [DryRunResult], []),
+        dry_run_strategy_c: I.Func([], [DryRunResult], []),
+        dry_run_strategy_d: I.Func([], [DryRunResult], []),
+        dry_run_strategy_f: I.Func([], [DryRunResult], []),
+        dry_run_strategy_g: I.Func([], [DryRunResult], []),
+        dry_run_strategy_h: I.Func([], [DryRunResult], []),
+        dry_run_strategy_i: I.Func([], [DryRunResult], []),
+        dry_run_strategy_j: I.Func([], [DryRunResult], []),
+        withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
+        pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
+        pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
+        pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+        pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+        rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
+        rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
+        get_volume_stats: I.Func([], [VolumeStats], ['query']),
+        get_volume_trades: I.Func([I.Nat64, I.Nat64], [I.Vec(VolumeTradeLeg)], ['query']),
+        set_volume_config: I.Func([VolumePool, VolumePoolConfig], [], []),
+        set_volume_global: I.Func([I.Nat64, I.Nat64], [], []),
+        pause_volume: I.Func([], [], []),
+        resume_volume: I.Func([], [], []),
+        fund_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
+        withdraw_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
+        trigger_volume_cycle: I.Func([], [], []),
+        trigger_volume_rebalance: I.Func([], [], []),
+      });
+    };
 
     const icrc1IdlFactory = ({ IDL: I }) => {
       const Account = I.Record({ owner: I.Principal, subaccount: I.Opt(I.Vec(I.Nat8)) });
@@ -1204,6 +1491,7 @@
         const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
         if (isAdmin) {
           document.getElementById('nav-admin').style.display = '';
+          document.getElementById('nav-volume').style.display = '';
           showToast('Logged in as admin', 'success');
           if (currentConfig) loadMyBalances(currentConfig);
           swapTokenChanged();
@@ -1226,9 +1514,11 @@
       btn.onclick = doLogin;
       btn.disabled = false;
       document.getElementById('nav-admin').style.display = 'none';
-      // Switch away from admin view if active
+      document.getElementById('nav-volume').style.display = 'none';
+      // Switch away from admin/volume view if active
       const adminNav = document.querySelector('.nav-item[data-view="admin"]');
-      if (adminNav && adminNav.classList.contains('active')) {
+      const volumeNav = document.querySelector('.nav-item[data-view="volume"]');
+      if ((adminNav && adminNav.classList.contains('active')) || (volumeNav && volumeNav.classList.contains('active'))) {
         switchView('overview');
       }
       showToast('Logged out', 'success');
@@ -1255,6 +1545,9 @@
           await loadSnapshots();
           renderCurrentChart();
         }, 60000);
+      }
+      if (name === 'volume') {
+        loadVolumeData();
       }
     }
     window.switchView = switchView;
@@ -1393,28 +1686,11 @@
         const vpStr = (bi(p.virtual_price) / 1e18).toFixed(6);
         const icusdVal = bi(p.icpswap_icusd_icp_price);
         const icusdStr = icusdVal > 0 ? '$' + (icusdVal / 1e8).toFixed(4) : 'N/A';
-        // Strategy A
-        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
-        document.getElementById('price-a-vp').textContent = vpStr;
-        // Strategy B
-        document.getElementById('price-b-icusd').textContent = icusdStr;
-        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
-        // Strategy C (ckUSDT price comes from snapshot loader, not get_prices)
-        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-c-vp').textContent = vpStr;
-        // Strategy D
-        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-d-icusd').textContent = icusdStr;
-        document.getElementById('price-d-vp').textContent = vpStr;
-        // Strategy F
-        document.getElementById('price-f-icusd').textContent = icusdStr;
-        // Strategy G (ICPSwap 3USD price comes from snapshot loader)
-        document.getElementById('price-g-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-g-vp').textContent = vpStr;
-        // Strategies H, I, J price subcards populated by snapshot loader
-        document.getElementById('price-h-icusd').textContent = icusdStr;
-        document.getElementById('price-i-ckusdc').textContent = ckusdcStr;
+        // Price sources (deduplicated — ckUSDT and 3USD come from snapshot loader)
+        document.getElementById('src-rumi').textContent = rumiUsdStr;
+        document.getElementById('src-ckusdc').textContent = ckusdcStr;
+        document.getElementById('src-icusd').textContent = icusdStr;
+        document.getElementById('src-vp').textContent = vpStr;
 
         window._latestPrices = {
           vp: bi(p.virtual_price) / 1e18,
@@ -1505,29 +1781,12 @@
         const vpStr = vp.toFixed(6);
         const icusdStr = icusdPrice > 0 ? '$' + (icusdPrice / 1e8).toFixed(4) : 'N/A';
         const ckusdtStr = ckusdtPrice > 0 ? '$' + (ckusdtPrice / 1e6).toFixed(4) : 'N/A';
-        // Strategy A
-        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
-        document.getElementById('price-a-vp').textContent = vpStr;
-        // Strategy B
-        document.getElementById('price-b-icusd').textContent = icusdStr;
-        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
-        // Strategy C
-        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-c-ckusdt').textContent = ckusdtStr;
-        document.getElementById('price-c-vp').textContent = vpStr;
-        // Strategy D
-        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-d-icusd').textContent = icusdStr;
-        document.getElementById('price-d-vp').textContent = vpStr;
-        // Strategy F
-        document.getElementById('price-f-icusd').textContent = icusdStr;
-        document.getElementById('price-f-ckusdt').textContent = ckusdtStr;
-        // Strategy G
-        document.getElementById('price-g-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-g-vp').textContent = vpStr;
-        // Strategy H, I, J — ICPSwap 3USD price is derived from Rumi price + spread G
-        // (no dedicated snapshot field for the raw 3USD/ICP quote)
+        // Price sources (deduplicated)
+        document.getElementById('src-rumi').textContent = rumiUsdStr;
+        document.getElementById('src-ckusdc').textContent = ckusdcStr;
+        document.getElementById('src-ckusdt').textContent = ckusdtStr;
+        document.getElementById('src-icusd').textContent = icusdStr;
+        document.getElementById('src-vp').textContent = vpStr;
 
         window._latestPrices = { vp, icpswap: icpswapCkusdc };
 
@@ -1630,13 +1889,7 @@
         const spreadG = bi(s.spread_g_bps !== undefined ? s.spread_g_bps : 0);
         const icpswap3usdPrice = rumiUsd * (10000 + spreadG) / 10000;
         const icpswap3usdStr = icpswap3usdPrice > 0 ? '$' + icpswap3usdPrice.toFixed(4) : 'N/A';
-        document.getElementById('price-g-icpswap3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-h-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-h-icusd').textContent = icusdStr;
-        document.getElementById('price-i-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-i-ckusdc').textContent = ckusdcStr;
-        document.getElementById('price-j-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-j-ckusdt').textContent = ckusdtStr;
+        document.getElementById('src-3usd').textContent = icpswap3usdStr;
 
         const hint = document.getElementById('prices-login-hint');
         if (hint) hint.style.display = 'none';
@@ -1800,6 +2053,7 @@
           const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
           if (isAdmin) {
             document.getElementById('nav-admin').style.display = '';
+            document.getElementById('nav-volume').style.display = '';
             swapTokenChanged();
             swapUpdateBalances();
           }
@@ -2483,6 +2737,158 @@
         swapUpdateBalances();
       } catch (e) { showToast('Swap failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
+    };
+
+    // ═══════ Volume Bot ═══════
+
+    const VOLUME_TOKEN_PRINCIPALS = {
+      icp: () => currentConfig?.icp_ledger,
+      icusd: () => Principal.fromText('t6bor-paaaa-aaaap-qrd5q-cai'),
+      '3usd': () => currentConfig?.three_usd_ledger,
+    };
+    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 18 };
+
+    function volVariantKey(v) { return Object.keys(v)[0]; }
+    function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
+    function volFmtSignedUsd6(v) { return (Number(v) / 1_000_000).toFixed(4); }
+
+    async function loadVolumeData() {
+      try {
+        const actor = authenticatedActor || anonymousActor;
+        const [stats, trades] = await Promise.all([
+          actor.get_volume_stats(),
+          actor.get_volume_trades(BigInt(0), BigInt(100)),
+        ]);
+
+        // Status
+        const paused = stats.volume_paused;
+        const dot = document.getElementById('vol-status-dot');
+        const txt = document.getElementById('vol-status-text');
+        dot.style.background = paused ? 'var(--loss)' : 'var(--profit)';
+        txt.textContent = paused ? 'Paused' : 'Active';
+
+        const ic = stats.icusd_icp;
+        const tu = stats.three_usd_icp;
+        document.getElementById('vol-icusd-status').textContent = ic.config.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('vol-icusd-dir').textContent = volVariantKey(ic.state.next_direction);
+        document.getElementById('vol-icusd-count').textContent = ic.state.trade_count.toString();
+        document.getElementById('vol-3usd-status').textContent = tu.config.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('vol-3usd-dir').textContent = volVariantKey(tu.state.next_direction);
+        document.getElementById('vol-3usd-count').textContent = tu.state.trade_count.toString();
+
+        // Analytics
+        document.getElementById('vol-daily-spend').textContent = '$' + volFmtSignedUsd6(stats.daily_spend_usd);
+        document.getElementById('vol-icusd-volume').textContent = '$' + volFmtUsd6(ic.state.total_volume_usd);
+        document.getElementById('vol-icusd-cost').textContent = '$' + volFmtSignedUsd6(ic.state.total_cost_usd);
+        document.getElementById('vol-3usd-volume').textContent = '$' + volFmtUsd6(tu.state.total_volume_usd);
+        document.getElementById('vol-3usd-cost').textContent = '$' + volFmtSignedUsd6(tu.state.total_cost_usd);
+        document.getElementById('vol-total-trades').textContent = stats.total_trade_count.toString();
+        document.getElementById('vol-interval').textContent = stats.interval_secs.toString() + 's';
+
+        // Populate config forms
+        document.getElementById('vol-icusd-enabled').checked = ic.config.enabled;
+        document.getElementById('vol-icusd-trade-size').value = volFmtUsd6(ic.config.trade_size_usd);
+        document.getElementById('vol-icusd-variance').value = ic.config.trade_variance_pct.toString();
+        document.getElementById('vol-icusd-idle-threshold').value = ic.config.idle_threshold_bps.toString();
+        document.getElementById('vol-icusd-daily-cap').value = volFmtUsd6(ic.config.daily_cost_cap_usd);
+
+        document.getElementById('vol-3usd-enabled').checked = tu.config.enabled;
+        document.getElementById('vol-3usd-trade-size').value = volFmtUsd6(tu.config.trade_size_usd);
+        document.getElementById('vol-3usd-variance').value = tu.config.trade_variance_pct.toString();
+        document.getElementById('vol-3usd-idle-threshold').value = tu.config.idle_threshold_bps.toString();
+        document.getElementById('vol-3usd-daily-cap').value = volFmtUsd6(tu.config.daily_cost_cap_usd);
+
+        document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
+
+        // Trades table
+        const tbody = document.getElementById('vol-trades-body');
+        tbody.innerHTML = '';
+        for (const t of trades) {
+          const row = document.createElement('tr');
+          const ts = new Date(Number(t.timestamp) / 1_000_000).toLocaleString();
+          const pool = volVariantKey(t.pool);
+          const dir = volVariantKey(t.direction);
+          const ttype = volVariantKey(t.trade_type);
+          const amtIn = volFmtUsd6(t.amount_in);
+          const amtOut = volFmtUsd6(t.amount_out);
+          const cost = volFmtSignedUsd6(t.cost_usd);
+          row.innerHTML = `<td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>$${amtIn}</td><td>$${amtOut}</td><td>$${cost}</td>`;
+          tbody.appendChild(row);
+        }
+      } catch (e) {
+        console.error('loadVolumeData:', e);
+      }
+    }
+
+    window.saveVolumePoolConfig = async function(poolKey) {
+      if (!requireAuth()) return;
+      const prefix = poolKey === 'icusd' ? 'vol-icusd' : 'vol-3usd';
+      const pool = poolKey === 'icusd' ? { IcusdIcp: null } : { ThreeUsdIcp: null };
+      const config = {
+        enabled: document.getElementById(prefix + '-enabled').checked,
+        trade_size_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-trade-size').value || '0') * 1_000_000)),
+        trade_variance_pct: BigInt(parseInt(document.getElementById(prefix + '-variance').value || '0')),
+        idle_threshold_bps: BigInt(parseInt(document.getElementById(prefix + '-idle-threshold').value || '0')),
+        daily_cost_cap_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-daily-cap').value || '0') * 1_000_000)),
+      };
+      try {
+        await authenticatedActor.set_volume_config(pool, config);
+        showToast('Config saved for ' + poolKey, 'success');
+        loadVolumeData();
+      } catch (e) {
+        showToast('Failed to save config: ' + e.message, 'error');
+      }
+    };
+
+    window.saveVolumeGlobal = async function() {
+      if (!requireAuth()) return;
+      const interval = BigInt(parseInt(document.getElementById('vol-global-interval').value || '0'));
+      const drift = BigInt(parseInt(document.getElementById('vol-global-drift').value || '0'));
+      try {
+        await authenticatedActor.set_volume_global(interval, drift);
+        showToast('Global settings saved', 'success');
+        loadVolumeData();
+      } catch (e) {
+        showToast('Failed to save global settings: ' + e.message, 'error');
+      }
+    };
+
+    window.fundVolume = async function(btn) {
+      if (!requireAuth()) return;
+      const tokenKey = document.getElementById('vol-fund-token').value;
+      const amtStr = document.getElementById('vol-fund-amount').value;
+      if (!amtStr) { showToast('Enter an amount', 'error'); return; }
+      const decimals = VOLUME_TOKEN_DECIMALS[tokenKey];
+      const raw = BigInt(Math.round(parseFloat(amtStr) * (10 ** decimals)));
+      const ledger = VOLUME_TOKEN_PRINCIPALS[tokenKey]();
+      if (!ledger) { showToast('Token ledger not available', 'error'); return; }
+      try {
+        btn.disabled = true;
+        await authenticatedActor.fund_volume_subaccount(ledger, raw);
+        showToast('Funded ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
+        document.getElementById('vol-fund-amount').value = '';
+      } catch (e) {
+        showToast('Fund failed: ' + e.message, 'error');
+      } finally { btn.disabled = false; }
+    };
+
+    window.withdrawVolume = async function(btn) {
+      if (!requireAuth()) return;
+      const tokenKey = document.getElementById('vol-fund-token').value;
+      const amtStr = document.getElementById('vol-fund-amount').value;
+      if (!amtStr) { showToast('Enter an amount', 'error'); return; }
+      const decimals = VOLUME_TOKEN_DECIMALS[tokenKey];
+      const raw = BigInt(Math.round(parseFloat(amtStr) * (10 ** decimals)));
+      const ledger = VOLUME_TOKEN_PRINCIPALS[tokenKey]();
+      if (!ledger) { showToast('Token ledger not available', 'error'); return; }
+      try {
+        btn.disabled = true;
+        await authenticatedActor.withdraw_volume_subaccount(ledger, raw);
+        showToast('Withdrew ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
+        document.getElementById('vol-fund-amount').value = '';
+      } catch (e) {
+        showToast('Withdraw failed: ' + e.message, 'error');
+      } finally { btn.disabled = false; }
     };
 
     // ═══════ Init ═══════
