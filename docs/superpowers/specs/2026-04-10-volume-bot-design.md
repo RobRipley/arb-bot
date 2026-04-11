@@ -34,6 +34,12 @@ The volume bot operates from ICRC-1 subaccount `[0, 0, ..., 0, 1]` (32 bytes, la
 
 Note: the canister principal is still visible on-chain for both bots. Subaccounts provide accounting separation, not trader anonymity.
 
+### Implementation Notes
+
+- **Subaccount plumbing:** The existing `icpswap_swap()` and ICRC-2 approval functions hardcode `from_subaccount: None`. These need an optional subaccount parameter added. Verify that ICPSwap's `depositFromAndSwap` Candid interface accepts a subaccount field.
+- **`CYCLE_IN_PROGRESS` visibility:** Currently a thread-local in `arb.rs`. The volume module needs read access — expose via a public function or move to a shared location.
+- **3USD decimal handling:** 3USD is an 18-decimal LP token, while `trade_size_usd` is 6-decimal USD. Size conversions between these representations require care during implementation.
+
 ### Timer
 
 An independent `ic_cdk_timers::set_interval` timer, configurable interval (default 1800 seconds / 30 minutes). The timer is set up during `post_upgrade` and `init`, alongside the existing arb timer.
@@ -78,17 +84,17 @@ Each volume timer tick:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `enabled` | bool | false | Per-pool on/off toggle |
-| `interval_secs` | u64 | 1800 | Seconds between idle checks |
 | `idle_threshold_bps` | u64 | 50 | Price movement threshold to consider pool "active" (0.5%) |
 | `trade_size_usd` | u64 | 10_000_000 | Base trade size in 6-decimal USD |
 | `trade_variance_pct` | u64 | 5 | Randomization radius as percentage of trade size |
-| `daily_cap_usd` | u64 | 5_000_000 | Max daily spend (input - output) before halting |
+| `daily_cost_cap_usd` | u64 | 5_000_000 | Max daily net cost (input value - output value) before halting |
 
 ### Global Volume Settings
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `volume_paused` | bool | true | Master pause for all volume activity |
+| `interval_secs` | u64 | 1800 | Seconds between idle checks (global, single timer) |
 | `rebalance_drift_pct` | u64 | 70 | Token ratio threshold to trigger rebalance (e.g., 70 = rebalance when one side > 70%) |
 | `last_rebalance_ts` | u64 | 0 | Timestamp of last rebalance (nanoseconds) |
 | `daily_spend_reset_ts` | u64 | 0 | Timestamp of last daily spend reset |
