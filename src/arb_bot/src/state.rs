@@ -208,6 +208,8 @@ pub struct VolumePoolState {
     pub trade_count: u64,
     pub total_volume_usd: u64,
     pub total_cost_usd: i64,
+    #[serde(default)]
+    pub daily_cost_usd: i64,
 }
 
 impl Default for VolumePoolState {
@@ -218,6 +220,7 @@ impl Default for VolumePoolState {
             trade_count: 0,
             total_volume_usd: 0,
             total_cost_usd: 0,
+            daily_cost_usd: 0,
         }
     }
 }
@@ -673,7 +676,7 @@ pub fn get_snapshots_page(offset: u64, limit: u64) -> Vec<CycleSnapshot> {
 
 pub fn append_volume_trade(leg: VolumeTradeLeg) {
     VOLUME_TRADES.with(|t| {
-        t.borrow().append(&leg).expect("failed to log volume trade");
+        let _ = t.borrow().append(&leg);
     });
 }
 

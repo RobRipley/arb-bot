@@ -4,6 +4,7 @@ use std::cell::Cell;
 use crate::prices::{self, PriceData, nat_to_u64};
 use crate::state::{self, Direction, Token};
 use crate::swaps;
+use crate::volume;
 
 const ICP_FEE: u64 = 10_000;        // 0.0001 ICP
 const CKUSDC_FEE: u64 = 10_000;      // 0.01 ckUSDC
@@ -1603,6 +1604,12 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
 // ─── Helpers ───
 
 async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
+    // Skip drain if volume bot is mid-trade — its tokens are temporarily
+    // in the default account and must not be touched.
+    if volume::is_volume_cycle_in_progress() {
+        return Ok(());
+    }
+
     let icp_balance = fetch_balance(config.icp_ledger).await?;
 
     // Keep ICP_RESERVE in the bot for approval fees etc.

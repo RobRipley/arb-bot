@@ -188,6 +188,7 @@ type VolumePoolState = record {
     trade_count: nat64;
     total_volume_usd: nat64;
     total_cost_usd: int64;
+    daily_cost_usd: int64;
 };
 
 type VolumePoolStatus = record {
@@ -272,10 +273,13 @@ service : (InitArgs) -> {
   set_volume_global: (nat64, nat64) -> ();
   pause_volume: () -> ();
   resume_volume: () -> ();
-  fund_volume_subaccount: (principal, nat64) -> ();
-  withdraw_volume_subaccount: (principal, nat64) -> ();
+  fund_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
+  withdraw_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
   trigger_volume_cycle: () -> ();
   trigger_volume_rebalance: () -> ();
   get_volume_stats: () -> (VolumeStats) query;
   get_volume_trades: (nat64, nat64) -> (vec VolumeTradeLeg) query;
+
+  // Cycles
+  cycles_balance: () -> (nat) query;
 }

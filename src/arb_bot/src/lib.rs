@@ -1174,19 +1174,21 @@ fn resume_volume() {
 }
 
 #[update]
-async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) {
+async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
     swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
         .await
-        .expect("Failed to fund volume subaccount");
+        .map(|_| ())
+        .map_err(|e| format!("Failed to fund volume subaccount: {:?}", e))
 }
 
 #[update]
-async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) {
+async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
     swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
         .await
-        .expect("Failed to withdraw from volume subaccount");
+        .map(|_| ())
+        .map_err(|e| format!("Failed to withdraw from volume subaccount: {:?}", e))
 }
 
 #[update]
@@ -1227,6 +1229,13 @@ fn get_volume_stats() -> state::VolumeStats {
 #[query]
 fn get_volume_trades(offset: u64, limit: u64) -> Vec<state::VolumeTradeLeg> {
     state::get_volume_trades_page(offset, limit)
+}
+
+// ─── Cycles ───
+
+#[query]
+fn cycles_balance() -> u128 {
+    ic_cdk::api::canister_balance128()
 }
 
 // ─── HTTP Dashboard ───

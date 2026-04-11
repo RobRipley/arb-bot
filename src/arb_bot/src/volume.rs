@@ -1,4 +1,5 @@
 use candid::Nat;
+use std::cell::Cell;
 use crate::arb;
 use crate::prices;
 use crate::state::{self, VolumePool, VolumeDirection, VolumeTradeType, VolumeTradeLeg};
@@ -8,6 +9,15 @@ const ICUSD_FEE: u64 = 100_000;    // 0.001 icUSD (8 dec)
 const ICP_FEE: u64 = 10_000;       // 0.0001 ICP (8 dec)
 const THREE_USD_FEE: u64 = 0; // 3USD has no transfer fee
 const NANOS_PER_DAY: u64 = 86_400_000_000_000;
+const RUMI_POOL_ID: &str = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
+
+thread_local! {
+    static VOLUME_CYCLE_IN_PROGRESS: Cell<bool> = Cell::new(false);
+}
+
+pub fn is_volume_cycle_in_progress() -> bool {
+    VOLUME_CYCLE_IN_PROGRESS.with(|c| c.get())
+}
 
 async fn randomized_trade_size(base_usd: u64, variance_pct: u64) -> u64 {
     if variance_pct == 0 {
@@ -104,14 +114,25 @@ async fn execute_volume_trade(
         .map_err(|e| format!("Transfer from subaccount failed: {:?}", e))?;
 
     // Step 2: Execute the swap on ICPSwap (from default account)
-    let amount_out = swaps::icpswap_swap(
+    let amount_out = match swaps::icpswap_swap(
         icpswap_pool,
         amount_in_native - token_in_fee,
         zero_for_one,
         0, // min_amount_out = 0 for volume trades
         token_in_fee,
         token_out_fee,
-    ).await.map_err(|e| format!("Swap failed: {:?}", e))?;
+    ).await {
+        Ok(out) => out,
+        Err(e) => {
+            // Swap failed — tokens are stranded in default account.
+            // Try to return them to the volume subaccount.
+            let recovery_amount = amount_in_native.saturating_sub(token_in_fee * 2);
+            if recovery_amount > 0 {
+                let _ = swaps::transfer_to_subaccount(token_in, recovery_amount, VOLUME_SUBACCOUNT).await;
+            }
+            return Err(format!("Swap failed (tokens recovered): {:?}", e));
+        }
+    };
 
     // Step 3: Transfer output tokens back to volume subaccount
     let token_out = match direction {
@@ -141,6 +162,17 @@ pub async fn run_volume_cycle() {
         return;
     }
 
+    let already_running = VOLUME_CYCLE_IN_PROGRESS.with(|c| {
+        if c.get() { true } else { c.set(true); false }
+    });
+    if already_running { return; }
+
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) { VOLUME_CYCLE_IN_PROGRESS.with(|c| c.set(false)); }
+    }
+    let _guard = Guard;
+
     let (volume_config, bot_config) = state::read_state(|s| (s.volume.clone(), s.config.clone()));
 
     if volume_config.volume_paused {
@@ -154,6 +186,8 @@ pub async fn run_volume_cycle() {
         state::mutate_state(|s| {
             s.volume.daily_spend_usd = 0;
             s.volume.daily_spend_reset_ts = now;
+            s.volume.icusd_icp_state.daily_cost_usd = 0;
+            s.volume.three_usd_icp_state.daily_cost_usd = 0;
         });
     }
 
@@ -169,8 +203,8 @@ pub async fn run_volume_cycle() {
             continue;
         }
 
-        let current_daily = state::read_state(|s| s.volume.daily_spend_usd);
-        if current_daily >= pool_config.daily_cost_cap_usd as i64 {
+        // Check per-pool daily cost cap
+        if pool_state.daily_cost_usd >= pool_config.daily_cost_cap_usd as i64 {
             continue;
         }
 
@@ -235,11 +269,29 @@ pub async fn run_volume_cycle() {
             Ok((amount_in, amount_out, price_before, price_after)) => {
                 let (in_usd, out_usd) = match (&pool_state.next_direction, &pool) {
                     (VolumeDirection::BuyIcp, VolumePool::IcusdIcp) => {
+                        // in: icUSD (8 dec) → 6 dec; out: ICP (8 dec) * price (8 dec icUSD/ICP) → 6 dec
                         let in_6 = amount_in / 100;
                         let out_6 = (amount_out as u128 * price_before as u128 / 100_000_000u128 / 100) as u64;
                         (in_6, out_6)
                     },
-                    _ => (trade_size, trade_size),
+                    (VolumeDirection::BuyIcp, VolumePool::ThreeUsdIcp) => {
+                        // in: 3USD (18 dec) → 6 dec; out: ICP (8 dec) * price (18 dec 3USD/ICP) → 6 dec
+                        let in_6 = (amount_in / 1_000_000_000_000) as u64;
+                        let out_6 = (amount_out as u128 * price_before as u128 / 100_000_000u128 / 1_000_000_000_000u128) as u64;
+                        (in_6, out_6)
+                    },
+                    (VolumeDirection::SellIcp, VolumePool::IcusdIcp) => {
+                        // in: ICP (8 dec) * price (8 dec icUSD/ICP) → 6 dec; out: icUSD (8 dec) → 6 dec
+                        let in_6 = (amount_in as u128 * price_before as u128 / 100_000_000u128 / 100) as u64;
+                        let out_6 = amount_out / 100;
+                        (in_6, out_6)
+                    },
+                    (VolumeDirection::SellIcp, VolumePool::ThreeUsdIcp) => {
+                        // in: ICP (8 dec) * price (18 dec 3USD/ICP) → 6 dec; out: 3USD (18 dec) → 6 dec
+                        let in_6 = (amount_in as u128 * price_before as u128 / 100_000_000u128 / 1_000_000_000_000u128) as u64;
+                        let out_6 = (amount_out / 1_000_000_000_000) as u64;
+                        (in_6, out_6)
+                    },
                 };
                 let cost = in_usd as i64 - out_usd as i64;
 
@@ -277,6 +329,7 @@ pub async fn run_volume_cycle() {
                     ps.trade_count += 1;
                     ps.total_volume_usd += trade_size;
                     ps.total_cost_usd += cost;
+                    ps.daily_cost_usd += cost;
                     s.volume.daily_spend_usd += cost;
                 });
 
@@ -349,7 +402,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                         continue;
                     }
                 }
-                let rumi_pool_id = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
+                let rumi_pool_id = RUMI_POOL_ID;
                 match swaps::rumi_swap(config.rumi_amm, rumi_pool_id, config.icp_ledger, excess_icp - ICP_FEE, 0).await {
                     Ok(three_usd_out) => {
                         match &pool {
@@ -362,7 +415,10 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                                         let _ = swaps::transfer_to_subaccount(config.icusd_ledger, icusd_out.saturating_sub(ICUSD_FEE), VOLUME_SUBACCOUNT).await;
                                     },
                                     Err(e) => {
-                                        state::log_activity("volume", &format!("rebalance: 3pool redeem failed: {:?}", e));
+                                        // 3pool redeem failed — 3USD is stranded in default account.
+                                        // Return it to subaccount so it's not lost.
+                                        let _ = swaps::transfer_to_subaccount(config.three_usd_ledger, three_usd_out, VOLUME_SUBACCOUNT).await;
+                                        state::log_activity("volume", &format!("rebalance: 3pool redeem failed (3USD recovered): {:?}", e));
                                     }
                                 }
                             }
@@ -387,13 +443,17 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                     VolumePool::ThreeUsdIcp => {
                         match swaps::transfer_from_subaccount(config.three_usd_ledger, excess_stable, VOLUME_SUBACCOUNT).await {
                             Ok(_) => {
-                                let rumi_pool_id = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
+                                let rumi_pool_id = RUMI_POOL_ID;
                                 match swaps::rumi_swap(config.rumi_amm, rumi_pool_id, config.three_usd_ledger, excess_stable - THREE_USD_FEE, 0).await {
                                     Ok(icp_out) => {
                                         let _ = swaps::transfer_to_subaccount(config.icp_ledger, icp_out.saturating_sub(ICP_FEE), VOLUME_SUBACCOUNT).await;
                                         state::log_activity("volume", &format!("rebalance: bought {} ICP with 3USD", icp_out));
                                     },
-                                    Err(e) => state::log_activity("volume", &format!("rebalance: Rumi swap failed: {:?}", e)),
+                                    Err(e) => {
+                                        // Rumi swap failed — 3USD is stranded. Return to subaccount.
+                                        let _ = swaps::transfer_to_subaccount(config.three_usd_ledger, excess_stable, VOLUME_SUBACCOUNT).await;
+                                        state::log_activity("volume", &format!("rebalance: Rumi swap failed (3USD recovered): {:?}", e));
+                                    },
                                 }
                             },
                             Err(e) => state::log_activity("volume", &format!("rebalance: transfer failed: {:?}", e)),
@@ -410,16 +470,27 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                                 ];
                                 match swaps::pool_add_liquidity(config.rumi_3pool, amounts, 0).await {
                                     Ok(lp_out) => {
-                                        let rumi_pool_id = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
+                                        let rumi_pool_id = RUMI_POOL_ID;
                                         match swaps::rumi_swap(config.rumi_amm, rumi_pool_id, config.three_usd_ledger, lp_out, 0).await {
                                             Ok(icp_out) => {
                                                 let _ = swaps::transfer_to_subaccount(config.icp_ledger, icp_out.saturating_sub(ICP_FEE), VOLUME_SUBACCOUNT).await;
                                                 state::log_activity("volume", &format!("rebalance: bought {} ICP with icUSD via 3pool+Rumi", icp_out));
                                             },
-                                            Err(e) => state::log_activity("volume", &format!("rebalance: Rumi swap failed: {:?}", e)),
+                                            Err(e) => {
+                                                // Rumi swap failed — 3USD LP is stranded. Return to subaccount.
+                                                let _ = swaps::transfer_to_subaccount(config.three_usd_ledger, lp_out, VOLUME_SUBACCOUNT).await;
+                                                state::log_activity("volume", &format!("rebalance: Rumi swap failed (3USD recovered): {:?}", e));
+                                            },
                                         }
                                     },
-                                    Err(e) => state::log_activity("volume", &format!("rebalance: 3pool deposit failed: {:?}", e)),
+                                    Err(e) => {
+                                        // 3pool deposit failed — icUSD is stranded. Return to subaccount.
+                                        let recovery = excess_stable.saturating_sub(ICUSD_FEE * 2);
+                                        if recovery > 0 {
+                                            let _ = swaps::transfer_to_subaccount(config.icusd_ledger, recovery, VOLUME_SUBACCOUNT).await;
+                                        }
+                                        state::log_activity("volume", &format!("rebalance: 3pool deposit failed (icUSD recovered): {:?}", e));
+                                    },
                                 }
                             },
                             Err(e) => state::log_activity("volume", &format!("rebalance: transfer failed: {:?}", e)),
