@@ -6,7 +6,7 @@ use crate::swaps::{self, VOLUME_SUBACCOUNT};
 
 const ICUSD_FEE: u64 = 100_000;    // 0.001 icUSD (8 dec)
 const ICP_FEE: u64 = 10_000;       // 0.0001 ICP (8 dec)
-const THREE_USD_FEE: u64 = 100_000_000_000_000; // 3USD fee (18 dec) - verify actual value
+const THREE_USD_FEE: u64 = 0; // 3USD has no transfer fee
 const NANOS_PER_DAY: u64 = 86_400_000_000_000;
 
 async fn randomized_trade_size(base_usd: u64, variance_pct: u64) -> u64 {
