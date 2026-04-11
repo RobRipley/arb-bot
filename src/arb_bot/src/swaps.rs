@@ -1,9 +1,16 @@
 use candid::{CandidType, Deserialize, Nat, Principal};
 use serde::Serialize;
 use icrc_ledger_types::icrc1::account::Account;
+use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use icrc_ledger_types::icrc2::approve::{ApproveArgs, ApproveError};
 
 use crate::prices::{self, nat_to_u64};
+
+pub const VOLUME_SUBACCOUNT: [u8; 32] = {
+    let mut sub = [0u8; 32];
+    sub[31] = 1;
+    sub
+};
 
 #[derive(Debug)]
 pub enum SwapError {
@@ -169,5 +176,97 @@ pub async fn approve_infinite(
         Ok((Ok(_),)) => Ok(()),
         Ok((Err(e),)) => Err(SwapError::ApproveFailed(format!("{:?}", e))),
         Err((code, msg)) => Err(SwapError::ApproveFailed(format!("{:?}: {}", code, msg))),
+    }
+}
+
+pub async fn approve_infinite_subaccount(
+    token_ledger: Principal,
+    spender: Principal,
+    subaccount: [u8; 32],
+) -> Result<(), SwapError> {
+    let approve_args = ApproveArgs {
+        from_subaccount: Some(subaccount),
+        spender: Account { owner: spender, subaccount: None },
+        amount: Nat::from(340_282_366_920_938_463_463_374_607_431_768_211_455u128),
+        expected_allowance: None,
+        expires_at: None,
+        fee: None,
+        memo: None,
+        created_at_time: None,
+    };
+    let result: Result<(Result<Nat, ApproveError>,), _> =
+        ic_cdk::call(token_ledger, "icrc2_approve", (approve_args,)).await;
+    match result {
+        Ok((Ok(_),)) => Ok(()),
+        Ok((Err(e),)) => Err(SwapError::ApproveFailed(format!("{:?}", e))),
+        Err((code, msg)) => Err(SwapError::ApproveFailed(format!("{:?}: {}", code, msg))),
+    }
+}
+
+/// Transfer tokens from the volume subaccount to the default account
+pub async fn transfer_from_subaccount(
+    token_ledger: Principal,
+    amount: u64,
+    from_subaccount: [u8; 32],
+) -> Result<u64, SwapError> {
+    let self_principal = ic_cdk::id();
+    let args = TransferArg {
+        from_subaccount: Some(from_subaccount),
+        to: Account { owner: self_principal, subaccount: None },
+        fee: None,
+        created_at_time: None,
+        memo: None,
+        amount: Nat::from(amount),
+    };
+    let result: Result<(Result<Nat, TransferError>,), _> = ic_cdk::call(
+        token_ledger, "icrc1_transfer", (args,),
+    ).await;
+    match result {
+        Ok((Ok(block),)) => Ok(nat_to_u64(&block)),
+        Ok((Err(e),)) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
+        Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
+    }
+}
+
+/// Transfer tokens from the default account to the volume subaccount
+pub async fn transfer_to_subaccount(
+    token_ledger: Principal,
+    amount: u64,
+    to_subaccount: [u8; 32],
+) -> Result<u64, SwapError> {
+    let self_principal = ic_cdk::id();
+    let args = TransferArg {
+        from_subaccount: None,
+        to: Account { owner: self_principal, subaccount: Some(to_subaccount) },
+        fee: None,
+        created_at_time: None,
+        memo: None,
+        amount: Nat::from(amount),
+    };
+    let result: Result<(Result<Nat, TransferError>,), _> = ic_cdk::call(
+        token_ledger, "icrc1_transfer", (args,),
+    ).await;
+    match result {
+        Ok((Ok(block),)) => Ok(nat_to_u64(&block)),
+        Ok((Err(e),)) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
+        Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
+    }
+}
+
+/// Query ICRC-1 balance for a subaccount
+pub async fn icrc1_balance_of_subaccount(
+    token_ledger: Principal,
+    subaccount: [u8; 32],
+) -> Result<u64, String> {
+    let account = Account {
+        owner: ic_cdk::id(),
+        subaccount: Some(subaccount),
+    };
+    let result: Result<(Nat,), _> = ic_cdk::call(
+        token_ledger, "icrc1_balance_of", (account,),
+    ).await;
+    match result {
+        Ok((balance,)) => Ok(nat_to_u64(&balance)),
+        Err((code, msg)) => Err(format!("Balance call ({:?}): {}", code, msg)),
     }
 }

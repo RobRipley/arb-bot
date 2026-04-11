@@ -30,6 +30,10 @@ thread_local! {
     static CYCLE_IN_PROGRESS: Cell<bool> = Cell::new(false);
 }
 
+pub fn is_cycle_in_progress() -> bool {
+    CYCLE_IN_PROGRESS.with(|c| c.get())
+}
+
 // ─── Dry Run Result ───
 
 #[derive(CandidType, Clone, Debug)]
