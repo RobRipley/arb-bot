@@ -23,6 +23,7 @@ fn init(args: InitArgs) {
     // Can't make inter-canister calls during init, so resolve token ordering
     // on the first timer tick. Start the timer immediately.
     setup_timer();
+    setup_volume_timer();
 }
 
 #[pre_upgrade]
@@ -34,12 +35,21 @@ fn pre_upgrade() {
 fn post_upgrade() {
     state::load_from_stable_memory();
     setup_timer();
+    setup_volume_timer();
 }
 
 fn setup_timer() {
     ic_cdk_timers::set_timer_interval(
         std::time::Duration::from_secs(180),
         || ic_cdk::spawn(arb::run_arb_cycle()),
+    );
+}
+
+fn setup_volume_timer() {
+    let interval = state::read_state(|s| s.volume.interval_secs);
+    ic_cdk_timers::set_timer_interval(
+        std::time::Duration::from_secs(interval),
+        || ic_cdk::spawn(volume::run_volume_cycle()),
     );
 }
 
@@ -325,6 +335,23 @@ async fn setup_approvals() -> String {
                 state::log_activity("approval", &format!("{}: failed — {}", label, e));
                 errors.push(format!("{}: {}", label, e));
             }
+        }
+    }
+
+    // Volume bot subaccount approvals
+    let volume_approvals = vec![
+        ("Vol: icUSD→ICPSwap-icUSD", config.icusd_ledger, config.icpswap_icusd_pool),
+        ("Vol: ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool),
+        ("Vol: 3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool),
+        ("Vol: ICP→ICPSwap-3USD", config.icp_ledger, config.icpswap_3usd_pool),
+        ("Vol: ICP→RumiAMM", config.icp_ledger, config.rumi_amm),
+        ("Vol: 3USD→RumiAMM", config.three_usd_ledger, config.rumi_amm),
+        ("Vol: icUSD→3pool", config.icusd_ledger, config.rumi_3pool),
+    ];
+    for (label, token, spender) in volume_approvals {
+        match swaps::approve_infinite_subaccount(token, spender, swaps::VOLUME_SUBACCOUNT).await {
+            Ok(_) => ok.push(format!("{}: OK", label)),
+            Err(e) => errors.push(format!("{}: FAILED {:?}", label, e)),
         }
     }
 
@@ -1110,6 +1137,96 @@ fn build_cross_j(config: &BotConfig) -> arb::CrossPoolTarget {
             uses_vp: false,
         },
     }
+}
+
+// ─── Volume Bot Admin ───
+
+#[update]
+async fn set_volume_config(pool: state::VolumePool, new_config: state::VolumePoolConfig) {
+    require_admin();
+    state::mutate_state(|s| {
+        match pool {
+            state::VolumePool::IcusdIcp => s.volume.icusd_icp = new_config,
+            state::VolumePool::ThreeUsdIcp => s.volume.three_usd_icp = new_config,
+        }
+    });
+}
+
+#[update]
+fn set_volume_global(interval_secs: u64, rebalance_drift_pct: u64) {
+    require_admin();
+    state::mutate_state(|s| {
+        s.volume.interval_secs = interval_secs;
+        s.volume.rebalance_drift_pct = rebalance_drift_pct;
+    });
+}
+
+#[update]
+fn pause_volume() {
+    require_admin();
+    state::mutate_state(|s| s.volume.volume_paused = true);
+}
+
+#[update]
+fn resume_volume() {
+    require_admin();
+    state::mutate_state(|s| s.volume.volume_paused = false);
+}
+
+#[update]
+async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) {
+    require_admin();
+    swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
+        .await
+        .expect("Failed to fund volume subaccount");
+}
+
+#[update]
+async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) {
+    require_admin();
+    swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
+        .await
+        .expect("Failed to withdraw from volume subaccount");
+}
+
+#[update]
+async fn trigger_volume_cycle() {
+    require_admin();
+    volume::run_volume_cycle().await;
+}
+
+#[update]
+async fn trigger_volume_rebalance() {
+    require_admin();
+    let config = state::read_state(|s| s.config.clone());
+    volume::run_rebalance(&config).await;
+}
+
+// ─── Volume Bot Queries ───
+
+#[query]
+fn get_volume_stats() -> state::VolumeStats {
+    state::read_state(|s| state::VolumeStats {
+        volume_paused: s.volume.volume_paused,
+        interval_secs: s.volume.interval_secs,
+        daily_spend_usd: s.volume.daily_spend_usd,
+        daily_cost_cap_usd_icusd: s.volume.icusd_icp.daily_cost_cap_usd,
+        daily_cost_cap_usd_3usd: s.volume.three_usd_icp.daily_cost_cap_usd,
+        icusd_icp: state::VolumePoolStatus {
+            config: s.volume.icusd_icp.clone(),
+            state: s.volume.icusd_icp_state.clone(),
+        },
+        three_usd_icp: state::VolumePoolStatus {
+            config: s.volume.three_usd_icp.clone(),
+            state: s.volume.three_usd_icp_state.clone(),
+        },
+        total_trade_count: s.volume.icusd_icp_state.trade_count + s.volume.three_usd_icp_state.trade_count,
+    })
+}
+
+#[query]
+fn get_volume_trades(offset: u64, limit: u64) -> Vec<state::VolumeTradeLeg> {
+    state::get_volume_trades_page(offset, limit)
 }
 
 // ─── HTTP Dashboard ───
