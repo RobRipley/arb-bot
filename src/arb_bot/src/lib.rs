@@ -5,6 +5,7 @@ mod state;
 mod prices;
 mod swaps;
 mod arb;
+mod volume;
 
 use state::{BotConfig, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord, CycleSnapshot};
 
