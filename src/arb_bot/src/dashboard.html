@@ -1149,6 +1149,31 @@
       </div>
     </div>
 
+    <!-- Direct Deposit Addresses -->
+    <div class="card">
+      <div class="card-header">Direct Deposit to Volume Bot</div>
+      <p style="font-size:12px;color:var(--text-secondary);margin:0 0 var(--sp-3) 0">Send tokens directly to these addresses. They bypass the arb bot's drain function and land in the volume subaccount.</p>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary)">ICRC-1 (icUSD, 3USD)</label>
+          <div style="display:flex;gap:var(--sp-2);align-items:center">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:2px">Principal</div>
+              <code id="vol-deposit-principal" style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Principal copied')" title="Click to copy">ucjxv-nqaaa-aaaaj-qrsaq-cai</code>
+            </div>
+          </div>
+          <div style="margin-top:var(--sp-1)">
+            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:2px">Subaccount (hex)</div>
+            <code style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Subaccount copied')" title="Click to copy">0000000000000000000000000000000000000000000000000000000000000001</code>
+          </div>
+        </div>
+        <div>
+          <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary)">ICP (Account Identifier)</label>
+          <code style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Account ID copied')" title="Click to copy">f85851515f54f6d313b0df2e678c27096a363dac76652f3a112011cc3ce02c01</code>
+        </div>
+      </div>
+    </div>
+
     <!-- Fund / Withdraw -->
     <div class="card">
       <div class="card-header">Fund / Withdraw Volume Subaccount</div>
@@ -2022,6 +2047,14 @@
     }
 
     // ═══════ Toast ═══════
+
+    function copyToClipboard(text, toastMsg) {
+      navigator.clipboard.writeText(text.trim()).then(() => {
+        showToast(toastMsg || 'Copied!', 'success');
+      }).catch(() => {
+        showToast('Copy failed', 'error');
+      });
+    }
 
     function showToast(msg, type) {
       const el = document.getElementById('toast');
