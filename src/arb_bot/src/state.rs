@@ -160,6 +160,132 @@ pub enum Pool {
     IcpswapThreeUsd,
 }
 
+// ─── Volume bot types ───
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub enum VolumePool {
+    IcusdIcp,
+    ThreeUsdIcp,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub enum VolumeDirection {
+    BuyIcp,
+    SellIcp,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq)]
+pub enum VolumeTradeType {
+    PingPong,
+    Rebalance,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumePoolConfig {
+    pub enabled: bool,
+    pub idle_threshold_bps: u64,
+    pub trade_size_usd: u64,       // 6-decimal USD
+    pub trade_variance_pct: u64,
+    pub daily_cost_cap_usd: u64,   // 6-decimal USD
+}
+
+impl Default for VolumePoolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            idle_threshold_bps: 50,
+            trade_size_usd: 10_000_000,  // $10
+            trade_variance_pct: 5,
+            daily_cost_cap_usd: 5_000_000, // $5
+        }
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumePoolState {
+    pub last_price: Option<u64>,
+    pub next_direction: VolumeDirection,
+    pub trade_count: u64,
+    pub total_volume_usd: u64,
+    pub total_cost_usd: i64,
+}
+
+impl Default for VolumePoolState {
+    fn default() -> Self {
+        Self {
+            last_price: None,
+            next_direction: VolumeDirection::BuyIcp,
+            trade_count: 0,
+            total_volume_usd: 0,
+            total_cost_usd: 0,
+        }
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumeConfig {
+    pub volume_paused: bool,
+    pub interval_secs: u64,
+    pub rebalance_drift_pct: u64,
+    pub last_rebalance_ts: u64,
+    pub daily_spend_reset_ts: u64,
+    pub daily_spend_usd: i64,
+    pub icusd_icp: VolumePoolConfig,
+    pub three_usd_icp: VolumePoolConfig,
+    pub icusd_icp_state: VolumePoolState,
+    pub three_usd_icp_state: VolumePoolState,
+}
+
+impl Default for VolumeConfig {
+    fn default() -> Self {
+        Self {
+            volume_paused: true,
+            interval_secs: 1800,
+            rebalance_drift_pct: 70,
+            last_rebalance_ts: 0,
+            daily_spend_reset_ts: 0,
+            daily_spend_usd: 0,
+            icusd_icp: VolumePoolConfig::default(),
+            three_usd_icp: VolumePoolConfig::default(),
+            icusd_icp_state: VolumePoolState::default(),
+            three_usd_icp_state: VolumePoolState::default(),
+        }
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumeTradeLeg {
+    pub timestamp: u64,
+    pub pool: VolumePool,
+    pub direction: VolumeDirection,
+    pub trade_type: VolumeTradeType,
+    pub token_in: Principal,
+    pub token_out: Principal,
+    pub amount_in: u64,
+    pub amount_out: u64,
+    pub cost_usd: i64,
+    pub price_before: u64,
+    pub price_after: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumeStats {
+    pub volume_paused: bool,
+    pub interval_secs: u64,
+    pub daily_spend_usd: i64,
+    pub daily_cost_cap_usd_icusd: u64,
+    pub daily_cost_cap_usd_3usd: u64,
+    pub icusd_icp: VolumePoolStatus,
+    pub three_usd_icp: VolumePoolStatus,
+    pub total_trade_count: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct VolumePoolStatus {
+    pub config: VolumePoolConfig,
+    pub state: VolumePoolState,
+}
+
 /// Records the intended exit pool after a successful Leg 1, so the drain
 /// can prefer it (and avoid draining back into the entry pool).
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -206,6 +332,8 @@ pub struct BotState {
     pub icpswap_3usd_token_ordering_resolved: bool,
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
+    #[serde(default)]
+    pub volume: VolumeConfig,
 }
 
 impl Default for BotState {
@@ -239,6 +367,7 @@ impl Default for BotState {
             ckusdt_token_ordering_resolved: false,
             icpswap_3usd_token_ordering_resolved: false,
             pending_exit: None,
+            volume: VolumeConfig::default(),
         }
     }
 }
@@ -291,6 +420,7 @@ json_storable!(ErrorRecord);
 json_storable!(ActivityRecord);
 json_storable!(TradeLeg);
 json_storable!(CycleSnapshot);
+json_storable!(VolumeTradeLeg);
 
 // ─── Stable memory layout ───
 //
@@ -300,6 +430,7 @@ json_storable!(CycleSnapshot);
 // MemoryId 5,6:     ACTIVITY log
 // MemoryId 7,8:     TRADE_LEGS log
 // MemoryId 9,10:    SNAPSHOTS log
+// MemoryId 11,12:   VOLUME_TRADES log
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -347,6 +478,13 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(9))),
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(10))),
         ).expect("init SNAPSHOTS"),
+    );
+
+    static VOLUME_TRADES: RefCell<StableLog<VolumeTradeLeg, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(11))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(12))),
+        ).expect("init VOLUME_TRADES"),
     );
 
     // Heap cache mirroring META_CELL for fast reads.
@@ -533,6 +671,29 @@ pub fn get_snapshots_page(offset: u64, limit: u64) -> Vec<CycleSnapshot> {
     })
 }
 
+pub fn log_volume_trade(leg: VolumeTradeLeg) {
+    VOLUME_TRADES.with(|t| {
+        t.borrow().append(&leg).expect("failed to log volume trade");
+    });
+}
+
+pub fn get_volume_trades_page(offset: u64, limit: u64) -> Vec<VolumeTradeLeg> {
+    VOLUME_TRADES.with(|t| {
+        let log = t.borrow();
+        let total = log.len();
+        if total == 0 || offset >= total {
+            return vec![];
+        }
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        (start..end).rev().filter_map(|i| log.get(i)).collect()
+    })
+}
+
+pub fn volume_trades_count() -> u64 {
+    VOLUME_TRADES.with(|t| t.borrow().len())
+}
+
 // ─── log_activity (same signature as before) ───
 
 pub fn log_activity(category: &str, message: &str) {
@@ -623,6 +784,7 @@ pub fn load_from_stable_memory() {
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
             icpswap_3usd_token_ordering_resolved: legacy.icpswap_3usd_token_ordering_resolved,
             pending_exit: legacy.pending_exit,
+            volume: VolumeConfig::default(),
         };
 
         // Touching any thread_local stable structure below triggers
