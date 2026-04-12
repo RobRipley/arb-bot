@@ -344,11 +344,7 @@ pub async fn run_volume_cycle() {
         }
     }
 
-    // Daily rebalance check
-    let volume = state::read_state(|s| s.volume.clone());
-    if now.saturating_sub(volume.last_rebalance_ts) >= NANOS_PER_DAY {
-        run_rebalance(&bot_config).await;
-    }
+    // Auto-rebalance disabled — use manual trigger_volume_rebalance() if needed
 }
 
 pub async fn run_rebalance(config: &state::BotConfig) {
@@ -391,9 +387,12 @@ pub async fn run_rebalance(config: &state::BotConfig) {
 
         let icp_pct = icp_as_stable * 100 / total;
 
-        if icp_pct > drift_threshold {
-            // Too much ICP — sell some via Rumi AMM
-            let excess_icp = icp_bal / 2;
+        // Rebalance when ICP share drifts beyond 50% ± drift_threshold
+        if icp_pct > (50 + drift_threshold) {
+            // Too much ICP — sell some to bring back toward 50/50
+            let target_icp_stable = total / 2;
+            let excess_stable = icp_as_stable.saturating_sub(target_icp_stable);
+            let excess_icp = (excess_stable as u128 * 100_000_000u128 / price as u128) as u64;
             if excess_icp > ICP_FEE * 2 {
                 match swaps::transfer_from_subaccount(config.icp_ledger, excess_icp, VOLUME_SUBACCOUNT).await {
                     Ok(_) => {},
@@ -431,9 +430,10 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                     }
                 }
             }
-        } else if (100 - icp_pct) > drift_threshold {
-            // Too much stable — buy ICP via Rumi AMM
-            let excess_stable = stable_bal / 2;
+        } else if icp_pct < 50u64.saturating_sub(drift_threshold) {
+            // Too much stable — buy ICP to bring back toward 50/50
+            let target_stable = total / 2;
+            let excess_stable = stable_bal.saturating_sub(target_stable);
             let min_amount = match &pool {
                 VolumePool::IcusdIcp => ICUSD_FEE * 3,
                 VolumePool::ThreeUsdIcp => THREE_USD_FEE * 3,

@@ -297,13 +297,21 @@
       background: var(--surface-3);
       border-color: var(--border-emphasis);
     }
+    .btn:active:not(:disabled) {
+      transform: scale(0.97);
+      filter: brightness(0.85);
+      transition: transform 0.05s, filter 0.05s;
+    }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-primary { background: var(--accent); color: #0c0e14; border-color: var(--accent); font-weight: 600; }
-    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:hover:not(:disabled) { background: #00eabc; filter: brightness(1.1); box-shadow: 0 0 8px rgba(0,212,170,0.3); }
+    .btn-primary:active:not(:disabled) { background: #00b893; transform: scale(0.97); filter: brightness(0.9); box-shadow: none; }
     .btn-danger { background: #e06b9f; color: #fff; border-color: #e06b9f; }
-    .btn-danger:hover:not(:disabled) { background: #e87db0; }
+    .btn-danger:hover:not(:disabled) { background: #e87db0; box-shadow: 0 0 8px rgba(224,107,159,0.3); }
+    .btn-danger:active:not(:disabled) { background: #c85a8a; transform: scale(0.97); box-shadow: none; }
     .btn-success { background: #34d399; color: #0c0e14; border-color: #34d399; }
-    .btn-success:hover:not(:disabled) { background: #6ee7b7; }
+    .btn-success:hover:not(:disabled) { background: #6ee7b7; box-shadow: 0 0 8px rgba(52,211,153,0.3); }
+    .btn-success:active:not(:disabled) { background: #2ab883; transform: scale(0.97); box-shadow: none; }
     .btn-sm { padding: 5px 12px; font-size: 12px; min-height: 30px; }
     .btn-ghost { background: transparent; border-color: var(--border); }
     .btn-block { width: 100%; }
@@ -381,6 +389,7 @@
       transition: 0.15s;
     }
     .chip:hover { border-color: var(--border-emphasis); color: var(--text-primary); }
+    .chip:active { transform: scale(0.95); transition: transform 0.05s; }
     .chip.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0, 212, 170, 0.3); }
     .chip-sm { padding: 3px 10px; font-size: 11px; }
 
@@ -744,30 +753,63 @@
         </div>
 
         <div class="card">
-          <div class="card-header">BALANCES</div>
-          <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
-          <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
-          <div class="divider"></div>
-          <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+            <div class="card-header" style="margin-bottom:0">BALANCES</div>
+            <div class="chart-tabs" id="bal-tabs">
+              <button class="chip chip-sm active" onclick="switchBalTab('bot')">Arb</button>
+              <button class="chip chip-sm" onclick="switchBalTab('volume')">Volume</button>
+            </div>
+          </div>
+          <div id="bal-bot-content">
+            <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
+            <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
+            <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
+            <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
+            <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
+            <div class="divider"></div>
+            <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
+          </div>
+          <div id="bal-vol-content" style="display:none">
+            <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vol-bal-icp">--</span></div>
+            <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vol-bal-icusd">--</span></div>
+            <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vol-bal-3usd">--</span></div>
+            <div class="divider"></div>
+            <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="vol-bal-total">--</span></div>
+          </div>
         </div>
       </div>
 
       <!-- Recent Trades -->
       <div class="card" style="margin-top:var(--sp-4)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-          <div class="card-header" style="margin-bottom:0">RECENT TRADES</div>
-          <span style="font-size:12px;color:var(--accent);cursor:pointer" onclick="switchView('trades')">View all →</span>
+          <div style="display:flex;align-items:center;gap:var(--sp-3)">
+            <div class="card-header" style="margin-bottom:0">RECENT TRADES</div>
+            <div class="chart-tabs" id="recent-trade-tabs">
+              <button class="chip chip-sm active" onclick="switchRecentTab('arb')">Arb</button>
+              <button class="chip chip-sm" onclick="switchRecentTab('volume')">Volume</button>
+            </div>
+          </div>
+          <span id="recent-view-all" style="font-size:12px;color:var(--accent);cursor:pointer" onclick="switchView('trades')">View all →</span>
         </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th><th>Profit</th></tr></thead>
-            <tbody id="recent-trades-body">
-              <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
-            </tbody>
-          </table>
+        <div id="recent-arb-content">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th><th>Profit</th></tr></thead>
+              <tbody id="recent-trades-body">
+                <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div id="recent-vol-content" style="display:none">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Pool</th><th>Direction</th><th>Type</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+              <tbody id="recent-vol-trades-body">
+                <tr><td colspan="7" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -1054,6 +1096,17 @@
       </div>
     </div>
 
+    <!-- Volume Balances -->
+    <div class="card">
+      <div class="card-header">Volume Balances</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vp-bal-icp">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vp-bal-icusd">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vp-bal-3usd">--</span></div>
+        <div class="stat-row" style="border-top:1px solid var(--border);padding-top:var(--sp-2);margin-top:var(--sp-1)"><span class="stat-label" style="font-weight:600">Total (USD)</span><span class="stat-value" style="font-weight:600;color:var(--accent)" id="vp-bal-total">--</span></div>
+      </div>
+    </div>
+
     <!-- Analytics -->
     <div class="card">
       <div class="card-header">Volume Analytics</div>
@@ -1149,29 +1202,12 @@
       </div>
     </div>
 
-    <!-- Direct Deposit Addresses -->
+    <!-- Direct Deposit -->
     <div class="card">
-      <div class="card-header">Direct Deposit to Volume Bot</div>
-      <p style="font-size:12px;color:var(--text-secondary);margin:0 0 var(--sp-3) 0">Send tokens directly to these addresses. They bypass the arb bot's drain function and land in the volume subaccount.</p>
-      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
-        <div>
-          <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary)">ICRC-1 (icUSD, 3USD)</label>
-          <div style="display:flex;gap:var(--sp-2);align-items:center">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:11px;color:var(--text-secondary);margin-bottom:2px">Principal</div>
-              <code id="vol-deposit-principal" style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Principal copied')" title="Click to copy">ucjxv-nqaaa-aaaaj-qrsaq-cai</code>
-            </div>
-          </div>
-          <div style="margin-top:var(--sp-1)">
-            <div style="font-size:11px;color:var(--text-secondary);margin-bottom:2px">Subaccount (hex)</div>
-            <code style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Subaccount copied')" title="Click to copy">0000000000000000000000000000000000000000000000000000000000000001</code>
-          </div>
-        </div>
-        <div>
-          <label style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-secondary)">ICP (Account Identifier)</label>
-          <code style="display:block;font-size:11px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:6px 8px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Account ID copied')" title="Click to copy">f85851515f54f6d313b0df2e678c27096a363dac76652f3a112011cc3ce02c01</code>
-        </div>
-      </div>
+      <div class="card-header">Deposit to Volume Bot</div>
+      <p style="font-size:12px;color:var(--text-secondary);margin:0 0 var(--sp-3) 0">Send ICP directly here. Bypasses the arb bot drain.</p>
+      <code style="display:block;font-size:12px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;word-break:break-all;cursor:pointer;transition:border-color 0.15s" onclick="copyToClipboard(this.textContent, 'Address copied')" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" title="Click to copy">f85851515f54f6d313b0df2e678c27096a363dac76652f3a112011cc3ce02c01</code>
+      <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-2)">ICP Account Identifier — click to copy</div>
     </div>
 
     <!-- Fund / Withdraw -->
@@ -1790,6 +1826,100 @@
       } catch (e) { console.error('loadRecentTrades:', e); }
     }
 
+    // ═══════ Balance Tabs ═══════
+
+    window.switchBalTab = function switchBalTab(tab) {
+      document.getElementById('bal-bot-content').style.display = tab === 'bot' ? '' : 'none';
+      document.getElementById('bal-vol-content').style.display = tab === 'volume' ? '' : 'none';
+      document.querySelectorAll('#bal-tabs .chip').forEach(c => c.classList.remove('active'));
+      document.querySelector(`#bal-tabs .chip[onclick*="${tab}"]`).classList.add('active');
+    }
+
+    async function loadVolumeBalances(config) {
+      try {
+        const botPrincipal = Principal.fromText(canisterId);
+        // Volume subaccount: 31 zero bytes + 0x01 — use plain Array for Candid Opt(Vec(Nat8))
+        const volSub = Array.from({length: 31}, () => 0).concat([1]);
+        const volAccount = { owner: botPrincipal, subaccount: [volSub] };
+
+        // NOTE: 3USD ledger (fohh4-yyaaa-aaaap-qtkpa-cai) ignores subaccount in balance_of —
+        // it always returns the owner's total regardless of subaccount. So we skip it here
+        // and show N/A to avoid displaying misleading data.
+        const [bIcp, bIcusd] = await Promise.all([
+          createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
+          createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(volAccount)),
+        ]);
+
+        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = 'N/A';
+        document.getElementById('vol-bal-icp').textContent = fIcp;
+        document.getElementById('vol-bal-icusd').textContent = fIcusd;
+        document.getElementById('vol-bal-3usd').textContent = f3usd;
+
+        // Estimate total in USD using latest prices
+        const prices = window._latestPrices || {};
+        const icpUsd = prices.icpswap || 0;
+        const icpVal = (bi(bIcp) / 1e8) * icpUsd;
+        const icusdVal = bi(bIcusd) / 1e8;
+        const total = icpVal + icusdVal;
+        const fTotal = total > 0 ? '$' + total.toFixed(2) : '--';
+        document.getElementById('vol-bal-total').textContent = fTotal;
+
+        // Also populate volume page balances card
+        const vp = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        vp('vp-bal-icp', fIcp); vp('vp-bal-icusd', fIcusd); vp('vp-bal-3usd', f3usd); vp('vp-bal-total', fTotal);
+      } catch (e) { console.error('loadVolumeBalances:', e); }
+    }
+
+    // ═══════ Recent Trades Tabs ═══════
+
+    let currentRecentTab = 'arb';
+    window.switchRecentTab = function switchRecentTab(tab) {
+      currentRecentTab = tab;
+      document.getElementById('recent-arb-content').style.display = tab === 'arb' ? '' : 'none';
+      document.getElementById('recent-vol-content').style.display = tab === 'volume' ? '' : 'none';
+      document.querySelectorAll('#recent-trade-tabs .chip').forEach(c => c.classList.remove('active'));
+      document.querySelector(`#recent-trade-tabs .chip[onclick*="${tab}"]`).classList.add('active');
+      const viewAllLink = document.getElementById('recent-view-all');
+      viewAllLink.setAttribute('onclick', tab === 'arb' ? "switchView('trades')" : "switchView('volume')");
+    }
+
+    function volTokenName(principal) {
+      const id = principal.toText ? principal.toText() : String(principal);
+      if (currentConfig) {
+        if (id === currentConfig.icp_ledger.toText()) return { name: 'ICP', dec: 8 };
+        if (id === currentConfig.icusd_ledger?.toText()) return { name: 'icUSD', dec: 8 };
+        if (id === currentConfig.three_usd_ledger.toText()) return { name: '3USD', dec: 8 };
+      }
+      // Fallback hardcoded
+      if (id === 'ryjl3-tyaaa-aaaaa-aaaba-cai') return { name: 'ICP', dec: 8 };
+      if (id === 't6bor-paaaa-aaaap-qrd5q-cai') return { name: 'icUSD', dec: 8 };
+      return { name: id.slice(0, 5) + '...', dec: 8 };
+    }
+
+    async function loadRecentVolumeTrades() {
+      try {
+        const trades = await anonymousActor.get_volume_trades(BigInt(0), BigInt(20));
+        const tbody = document.getElementById('recent-vol-trades-body');
+        if (!trades.length) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary)">No volume trades yet</td></tr>';
+          return;
+        }
+        const rows = trades.map(t => {
+          const ts = fmtTime(t.timestamp);
+          const pool = volVariantKey(t.pool);
+          const dir = volVariantKey(t.direction);
+          const ttype = volVariantKey(t.trade_type);
+          const tokIn = volTokenName(t.token_in);
+          const tokOut = volTokenName(t.token_out);
+          const amtIn = fmtTok(t.amount_in, tokIn.dec) + ' ' + tokIn.name;
+          const amtOut = fmtTok(t.amount_out, tokOut.dec) + ' ' + tokOut.name;
+          const cost = volFmtSignedUsd6(t.cost_usd);
+          return `<tr><td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>${amtIn}</td><td>${amtOut}</td><td>$${cost}</td></tr>`;
+        });
+        tbody.innerHTML = rows.reverse().join('');
+      } catch (e) { console.error('loadRecentVolumeTrades:', e); }
+    }
+
     async function loadOverviewFromSnapshot() {
       try {
         const snaps = await anonymousActor.get_snapshots(BigInt(0), BigInt(1));
@@ -2033,7 +2163,9 @@
       await loadConfig();
       loadSummary();
       if (currentConfig) loadBalances(currentConfig);
+      if (currentConfig) loadVolumeBalances(currentConfig);
       loadRecentTrades();
+      loadRecentVolumeTrades();
       loadOverviewFromSnapshot();
       loadTrades();
       loadActivity();
@@ -2048,7 +2180,7 @@
 
     // ═══════ Toast ═══════
 
-    function copyToClipboard(text, toastMsg) {
+    window.copyToClipboard = function copyToClipboard(text, toastMsg) {
       navigator.clipboard.writeText(text.trim()).then(() => {
         showToast(toastMsg || 'Copied!', 'success');
       }).catch(() => {
@@ -2056,7 +2188,7 @@
       });
     }
 
-    function showToast(msg, type) {
+    window.showToast = function showToast(msg, type) {
       const el = document.getElementById('toast');
       el.textContent = msg;
       el.className = type || '';
@@ -2842,10 +2974,12 @@
           const pool = volVariantKey(t.pool);
           const dir = volVariantKey(t.direction);
           const ttype = volVariantKey(t.trade_type);
-          const amtIn = volFmtUsd6(t.amount_in);
-          const amtOut = volFmtUsd6(t.amount_out);
+          const tokIn = volTokenName(t.token_in);
+          const tokOut = volTokenName(t.token_out);
+          const amtIn = fmtTok(t.amount_in, tokIn.dec) + ' ' + tokIn.name;
+          const amtOut = fmtTok(t.amount_out, tokOut.dec) + ' ' + tokOut.name;
           const cost = volFmtSignedUsd6(t.cost_usd);
-          row.innerHTML = `<td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>$${amtIn}</td><td>$${amtOut}</td><td>$${cost}</td>`;
+          row.innerHTML = `<td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>${amtIn}</td><td>${amtOut}</td><td>$${cost}</td>`;
           tbody.appendChild(row);
         }
       } catch (e) {
