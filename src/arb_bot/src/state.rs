@@ -296,6 +296,9 @@ pub struct PendingExit {
     pub entry_pool: Pool,
     pub intended_exit_pool: Pool,
     pub timestamp: u64,
+    /// ICP received by Leg1 — drain must not exceed this amount.
+    #[serde(default)]
+    pub icp_amount: u64,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
