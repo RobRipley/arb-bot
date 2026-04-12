@@ -1238,6 +1238,7 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
                     entry_pool: state::Pool::RumiThreeUsd,
                     intended_exit_pool: target.pool_enum,
                     timestamp: ic_cdk::api::time(),
+                    icp_amount: amount,
                 });
             });
             amount
@@ -1328,6 +1329,7 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
                     entry_pool: target.pool_enum,
                     intended_exit_pool: state::Pool::RumiThreeUsd,
                     timestamp: ic_cdk::api::time(),
+                    icp_amount: amount,
                 });
             });
             amount
@@ -1432,6 +1434,7 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
                     entry_pool: target.buy_side.pool_enum,
                     intended_exit_pool: target.sell_side.pool_enum,
                     timestamp: ic_cdk::api::time(),
+                    icp_amount: amount,
                 });
             });
             amount
@@ -1534,6 +1537,7 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
                     entry_pool: target.sell_side.pool_enum,
                     intended_exit_pool: target.buy_side.pool_enum,
                     timestamp: ic_cdk::api::time(),
+                    icp_amount: amount,
                 });
             });
             amount
@@ -1621,8 +1625,18 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
         return Ok(());
     }
 
-    // Reserve fee for the icrc2_transfer_from the DEX will trigger
-    let drain_amount = drainable - ICP_FEE;
+    // Cap drain to the Leg1 ICP amount — only drain what the arb bot put there.
+    // If pending_exit has an icp_amount, use it as the ceiling.
+    let leg1_cap = state::read_state(|s| {
+        s.pending_exit.as_ref().and_then(|pe| if pe.icp_amount > 0 { Some(pe.icp_amount) } else { None })
+    });
+    let drain_amount = match leg1_cap {
+        Some(cap) => drainable.min(cap).saturating_sub(ICP_FEE),
+        None => drainable - ICP_FEE,
+    };
+    if drain_amount <= ICP_FEE {
+        return Ok(());
+    }
 
     state::log_activity("drain", &format!("Draining {} residual ICP (balance: {})", drain_amount, icp_balance));
 
