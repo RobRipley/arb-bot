@@ -180,6 +180,101 @@
       color: var(--text-primary);
     }
 
+    /* ── Price Sources ── */
+    .price-sources {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: var(--sp-2);
+    }
+    .price-source {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 14px var(--sp-2) 10px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .price-source::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: var(--source-color);
+    }
+    .price-source::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 60%;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.015), transparent);
+      pointer-events: none;
+    }
+    .price-source-label {
+      font-family: var(--font-ui);
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--source-color);
+      margin-bottom: 6px;
+      position: relative; z-index: 1;
+    }
+    .price-source-value {
+      font-family: var(--font-data);
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-primary);
+      position: relative; z-index: 1;
+    }
+    .price-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: var(--sp-2);
+      margin-top: 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .price-meta-value {
+      font-family: var(--font-data);
+      font-weight: 500;
+      color: var(--text-tertiary);
+    }
+    .strategy-legend {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0 var(--sp-4);
+      margin-top: var(--sp-3);
+      padding-top: var(--sp-3);
+      border-top: 1px solid var(--border);
+    }
+    .strat-chip {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 0;
+      font-family: var(--font-ui);
+      font-size: 11px;
+      color: var(--text-secondary);
+    }
+    .strat-letter {
+      font-family: var(--font-data);
+      font-weight: 700;
+      font-size: 10px;
+      width: 18px; height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-sm);
+      flex-shrink: 0;
+    }
+    .strat-vs {
+      color: var(--text-muted);
+      font-size: 9px;
+      margin: 0 1px;
+    }
+
     /* ── Buttons ── */
     .btn {
       background: var(--surface-2);
@@ -202,13 +297,21 @@
       background: var(--surface-3);
       border-color: var(--border-emphasis);
     }
+    .btn:active:not(:disabled) {
+      transform: scale(0.97);
+      filter: brightness(0.85);
+      transition: transform 0.05s, filter 0.05s;
+    }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn-primary { background: var(--accent); color: #0c0e14; border-color: var(--accent); font-weight: 600; }
-    .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+    .btn-primary:hover:not(:disabled) { background: #00eabc; filter: brightness(1.1); box-shadow: 0 0 8px rgba(0,212,170,0.3); }
+    .btn-primary:active:not(:disabled) { background: #00b893; transform: scale(0.97); filter: brightness(0.9); box-shadow: none; }
     .btn-danger { background: #e06b9f; color: #fff; border-color: #e06b9f; }
-    .btn-danger:hover:not(:disabled) { background: #e87db0; }
+    .btn-danger:hover:not(:disabled) { background: #e87db0; box-shadow: 0 0 8px rgba(224,107,159,0.3); }
+    .btn-danger:active:not(:disabled) { background: #c85a8a; transform: scale(0.97); box-shadow: none; }
     .btn-success { background: #34d399; color: #0c0e14; border-color: #34d399; }
-    .btn-success:hover:not(:disabled) { background: #6ee7b7; }
+    .btn-success:hover:not(:disabled) { background: #6ee7b7; box-shadow: 0 0 8px rgba(52,211,153,0.3); }
+    .btn-success:active:not(:disabled) { background: #2ab883; transform: scale(0.97); box-shadow: none; }
     .btn-sm { padding: 5px 12px; font-size: 12px; min-height: 30px; }
     .btn-ghost { background: transparent; border-color: var(--border); }
     .btn-block { width: 100%; }
@@ -286,6 +389,7 @@
       transition: 0.15s;
     }
     .chip:hover { border-color: var(--border-emphasis); color: var(--text-primary); }
+    .chip:active { transform: scale(0.95); transition: transform 0.05s; }
     .chip.active { background: var(--accent-dim); color: var(--accent); border-color: rgba(0, 212, 170, 0.3); }
     .chip-sm { padding: 3px 10px; font-size: 11px; }
 
@@ -442,6 +546,7 @@
         <a class="nav-item" data-view="charts">Charts</a>
         <a class="nav-item" data-view="trades">Trades</a>
         <a class="nav-item" data-view="admin" id="nav-admin" style="display:none">Admin</a>
+        <a class="nav-item" data-view="volume" id="nav-volume" style="display:none">Volume Bot</a>
       </nav>
     </div>
     <div class="sidebar-bottom">
@@ -469,9 +574,10 @@
             <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
           </div>
           <div class="hero-right">
+            <div class="hero-stat"><span class="stat-label">Arb Profit</span><span class="stat-value" id="hero-arb-profit"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">Recovered ICP</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
-            <div class="hero-stat"><span class="stat-label">DEXes</span><span class="stat-value" id="hero-dex"><span class="skeleton skeleton-text"></span></span></div>
           </div>
         </div>
       </div>
@@ -611,93 +717,100 @@
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
         <div class="card">
           <div class="card-header">STRATEGY PRICES</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-3)">
-            <!-- Strategy A: Rumi vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#00d4aa;margin-bottom:var(--sp-2);font-weight:600">A · Rumi vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-a-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-a-icpswap">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-a-vp" style="color:var(--text-tertiary)">--</span></div>
+          <div class="price-sources">
+            <div class="price-source" style="--source-color:#00d4aa">
+              <div class="price-source-label">Rumi</div>
+              <div class="price-source-value" id="src-rumi">--</div>
             </div>
-            <!-- Strategy B: ICPSwap icUSD vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#5b8af0;margin-bottom:var(--sp-2);font-weight:600">B · icUSD vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-b-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-b-ckusdc">--</span></div>
+            <div class="price-source" style="--source-color:#5b8af0">
+              <div class="price-source-label">ckUSDC</div>
+              <div class="price-source-value" id="src-ckusdc">--</div>
             </div>
-            <!-- Strategy C: Rumi vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#a78bfa;margin-bottom:var(--sp-2);font-weight:600">C · Rumi vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-c-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-c-ckusdt">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-c-vp" style="color:var(--text-tertiary)">--</span></div>
+            <div class="price-source" style="--source-color:#a78bfa">
+              <div class="price-source-label">ckUSDT</div>
+              <div class="price-source-value" id="src-ckusdt">--</div>
             </div>
-            <!-- Strategy D: Rumi vs ICPSwap icUSD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f0a05b;margin-bottom:var(--sp-2);font-weight:600">D · Rumi vs icUSD</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-d-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-d-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-d-vp" style="color:var(--text-tertiary)">--</span></div>
+            <div class="price-source" style="--source-color:#f0a05b">
+              <div class="price-source-label">icUSD</div>
+              <div class="price-source-value" id="src-icusd">--</div>
             </div>
-            <!-- Strategy F: ICPSwap icUSD vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#f06292;margin-bottom:var(--sp-2);font-weight:600">F · icUSD vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-f-icusd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-f-ckusdt">--</span></div>
+            <div class="price-source" style="--source-color:#66bb6a">
+              <div class="price-source-label">3USD</div>
+              <div class="price-source-value" id="src-3usd">--</div>
             </div>
-            <!-- Strategy G: Rumi 3USD vs ICPSwap 3USD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#66bb6a;margin-bottom:var(--sp-2);font-weight:600">G · Rumi 3USD vs ICPSwap 3USD</div>
-              <div class="stat-row"><span class="stat-label">Rumi ICP/USD</span><span class="stat-value" id="price-g-rumi">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-g-icpswap3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label" style="color:var(--text-tertiary)">3pool VP</span><span class="stat-value" id="price-g-vp" style="color:var(--text-tertiary)">--</span></div>
-            </div>
-            <!-- Strategy H: ICPSwap 3USD vs ICPSwap icUSD -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#29b6f6;margin-bottom:var(--sp-2);font-weight:600">H · 3USD vs icUSD</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-h-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/icUSD</span><span class="stat-value" id="price-h-icusd">--</span></div>
-            </div>
-            <!-- Strategy I: ICPSwap 3USD vs ICPSwap ckUSDC -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#ffa726;margin-bottom:var(--sp-2);font-weight:600">I · 3USD vs ckUSDC</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-i-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDC</span><span class="stat-value" id="price-i-ckusdc">--</span></div>
-            </div>
-            <!-- Strategy J: ICPSwap 3USD vs ICPSwap ckUSDT -->
-            <div style="background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:var(--sp-3)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#ef5350;margin-bottom:var(--sp-2);font-weight:600">J · 3USD vs ckUSDT</div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/3USD</span><span class="stat-value" id="price-j-3usd">--</span></div>
-              <div class="stat-row"><span class="stat-label">ICPSwap ICP/ckUSDT</span><span class="stat-value" id="price-j-ckusdt">--</span></div>
-            </div>
+          </div>
+          <div class="price-meta"><span>3pool VP</span><span class="price-meta-value" id="src-vp">--</span></div>
+          <div class="strategy-legend">
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(0,212,170,0.15);color:#00d4aa">A</span>Rumi <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(91,138,240,0.15);color:#5b8af0">B</span>icUSD <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(167,139,250,0.15);color:#a78bfa">C</span>Rumi <span class="strat-vs">↔</span> ckUSDT</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,160,91,0.15);color:#f0a05b">D</span>Rumi <span class="strat-vs">↔</span> icUSD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,98,146,0.15);color:#f06292">F</span>icUSD <span class="strat-vs">↔</span> ckUSDT</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(102,187,106,0.15);color:#66bb6a">G</span>Rumi <span class="strat-vs">↔</span> 3USD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(41,182,246,0.15);color:#29b6f6">H</span>3USD <span class="strat-vs">↔</span> icUSD</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(255,167,38,0.15);color:#ffa726">I</span>3USD <span class="strat-vs">↔</span> ckUSDC</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(239,83,80,0.15);color:#ef5350">J</span>3USD <span class="strat-vs">↔</span> ckUSDT</div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header">BALANCES</div>
-          <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
-          <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
-          <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
-          <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
-          <div class="divider"></div>
-          <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+            <div class="card-header" style="margin-bottom:0">BALANCES</div>
+            <div class="chart-tabs" id="bal-tabs">
+              <button class="chip chip-sm active" onclick="switchBalTab('bot')">Arb</button>
+              <button class="chip chip-sm" onclick="switchBalTab('volume')">Volume</button>
+            </div>
+          </div>
+          <div id="bal-bot-content">
+            <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="bal-3usd">--</span></div>
+            <div class="stat-row"><span class="stat-label">ckUSDC</span><span class="stat-value" id="bal-ckusdc">--</span></div>
+            <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
+            <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
+            <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
+            <div class="divider"></div>
+            <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
+          </div>
+          <div id="bal-vol-content" style="display:none">
+            <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vol-bal-icp">--</span></div>
+            <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vol-bal-icusd">--</span></div>
+            <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vol-bal-3usd">--</span></div>
+            <div class="divider"></div>
+            <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="vol-bal-total">--</span></div>
+          </div>
         </div>
       </div>
 
       <!-- Recent Trades -->
       <div class="card" style="margin-top:var(--sp-4)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-          <div class="card-header" style="margin-bottom:0">RECENT TRADES</div>
-          <span style="font-size:12px;color:var(--accent);cursor:pointer" onclick="switchView('trades')">View all →</span>
+          <div style="display:flex;align-items:center;gap:var(--sp-3)">
+            <div class="card-header" style="margin-bottom:0">RECENT TRADES</div>
+            <div class="chart-tabs" id="recent-trade-tabs">
+              <button class="chip chip-sm active" onclick="switchRecentTab('arb')">Arb</button>
+              <button class="chip chip-sm" onclick="switchRecentTab('volume')">Volume</button>
+            </div>
+          </div>
+          <span id="recent-view-all" style="font-size:12px;color:var(--accent);cursor:pointer" onclick="switchView('trades')">View all →</span>
         </div>
-        <div class="table-wrap">
-          <table class="data-table">
-            <thead><tr><th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th><th>Profit</th></tr></thead>
-            <tbody id="recent-trades-body">
-              <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
-            </tbody>
-          </table>
+        <div id="recent-arb-content">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Type</th><th>DEX</th><th>Sold</th><th>Bought</th><th>Profit</th></tr></thead>
+              <tbody id="recent-trades-body">
+                <tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div id="recent-vol-content" style="display:none">
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Time</th><th>Pool</th><th>Direction</th><th>Type</th><th>In</th><th>Out</th><th>Cost</th></tr></thead>
+              <tbody id="recent-vol-trades-body">
+                <tr><td colspan="7" style="text-align:center;color:var(--text-tertiary)">Loading...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -964,6 +1077,226 @@
 
   </div>
 </section>
+    <section class="view" id="view-volume">
+  <div class="admin-grid">
+
+    <!-- Status -->
+    <div class="card">
+      <div class="card-header">Volume Bot Status</div>
+      <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-4);font-size:13px;font-weight:500">
+        <span class="status-dot" id="vol-status-dot"></span>
+        <span id="vol-status-text">Loading...</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">icUSD/ICP</span><span class="stat-value" id="vol-icusd-status">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Direction</span><span class="stat-value" id="vol-icusd-dir">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Trades</span><span class="stat-value" id="vol-icusd-count">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD/ICP</span><span class="stat-value" id="vol-3usd-status">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Direction</span><span class="stat-value" id="vol-3usd-dir">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Trades</span><span class="stat-value" id="vol-3usd-count">--</span></div>
+      </div>
+    </div>
+
+    <!-- Volume Balances -->
+    <div class="card">
+      <div class="card-header">Volume Balances</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vp-bal-icp">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vp-bal-icusd">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vp-bal-3usd">--</span></div>
+        <div class="stat-row" style="border-top:1px solid var(--border);padding-top:var(--sp-2);margin-top:var(--sp-1)"><span class="stat-label" style="font-weight:600">Total (USD)</span><span class="stat-value" style="font-weight:600;color:var(--accent)" id="vp-bal-total">--</span></div>
+      </div>
+    </div>
+
+    <!-- Volume Swap Widget -->
+    <div class="card">
+      <div class="card-header">Swap (Volume)</div>
+      <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)" id="vol-swap-route-info"></div>
+      <!-- From -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-bottom:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">From</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--accent);cursor:pointer" id="vol-swap-from-bal" onclick="volSwapSetMax()">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="vol-swap-from-amount" placeholder="0.00" oninput="volSwapQuote()" style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data)">
+          <select id="vol-swap-from-token" onchange="volSwapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="icp">ICP</option>
+            <option value="icusd">icUSD</option>
+          </select>
+        </div>
+      </div>
+      <!-- Arrow -->
+      <div style="display:flex;justify-content:center;margin:-4px 0;position:relative;z-index:1">
+        <button class="btn btn-sm" onclick="volSwapFlip()" style="width:36px;height:36px;padding:0;font-size:14px;border-radius:var(--radius-md);background:var(--surface-2);border:2px solid var(--border)">&#8597;</button>
+      </div>
+      <!-- To -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-top:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">To (estimated)</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--text-tertiary)" id="vol-swap-to-bal">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="vol-swap-to-amount" placeholder="0.00" readonly style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data);color:var(--text-secondary)">
+          <select id="vol-swap-to-token" onchange="volSwapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="icusd">icUSD</option>
+            <option value="icp">ICP</option>
+          </select>
+        </div>
+      </div>
+      <div id="vol-swap-quote-info" style="text-align:center;padding:var(--sp-2);font-size:12px;color:var(--text-tertiary);min-height:28px"></div>
+      <button class="btn btn-primary btn-block" id="vol-swap-execute-btn" onclick="volSwapExecute(this)">Swap</button>
+    </div>
+
+    <!-- Analytics -->
+    <div class="card">
+      <div class="card-header">Volume Analytics</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-2)">
+        <div class="stat-row"><span class="stat-label">Daily Spend</span><span class="stat-value" id="vol-daily-spend">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Volume</span><span class="stat-value" id="vol-icusd-volume">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD Cost</span><span class="stat-value" id="vol-icusd-cost">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Volume</span><span class="stat-value" id="vol-3usd-volume">--</span></div>
+        <div class="stat-row"><span class="stat-label">3USD Cost</span><span class="stat-value" id="vol-3usd-cost">--</span></div>
+        <div class="stat-row"><span class="stat-label">Total Trades</span><span class="stat-value" id="vol-total-trades">--</span></div>
+        <div class="stat-row"><span class="stat-label">Interval</span><span class="stat-value" id="vol-interval">--</span></div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="card">
+      <div class="card-header">Volume Controls</div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+        <button class="btn" id="vol-pause-btn" onclick="doAction(this, () => authenticatedActor.pause_volume(), 'Volume paused')" style="background:#e06b9f;color:#fff;border-color:#e06b9f">Pause</button>
+        <button class="btn" id="vol-resume-btn" onclick="doAction(this, () => authenticatedActor.resume_volume(), 'Volume resumed')" style="background:#34d399;color:#0c0e14;border-color:#34d399;font-weight:600">Resume</button>
+        <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_cycle(), 'Volume cycle triggered')">Run Cycle</button>
+        <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_rebalance(), 'Rebalance triggered')">Rebalance</button>
+      </div>
+    </div>
+
+    <!-- icUSD/ICP Config -->
+    <div class="card">
+      <div class="card-header">icUSD/ICP Config</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <input type="checkbox" id="vol-icusd-enabled"> <label for="vol-icusd-enabled" style="margin:0">Enabled</label>
+        </div>
+        <div>
+          <label>Trade Size (USD)</label>
+          <input type="number" id="vol-icusd-trade-size" placeholder="5.00" step="0.01">
+        </div>
+        <div>
+          <label>Variance %</label>
+          <input type="number" id="vol-icusd-variance" placeholder="20">
+        </div>
+        <div>
+          <label>Idle Threshold (bps)</label>
+          <input type="number" id="vol-icusd-idle-threshold" placeholder="10">
+        </div>
+        <div>
+          <label>Daily Cost Cap (USD)</label>
+          <input type="number" id="vol-icusd-daily-cap" placeholder="50.00" step="0.01">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumePoolConfig('icusd')">Save icUSD Config</button>
+      </div>
+    </div>
+
+    <!-- 3USD/ICP Config -->
+    <div class="card">
+      <div class="card-header">3USD/ICP Config</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <input type="checkbox" id="vol-3usd-enabled"> <label for="vol-3usd-enabled" style="margin:0">Enabled</label>
+        </div>
+        <div>
+          <label>Trade Size (USD)</label>
+          <input type="number" id="vol-3usd-trade-size" placeholder="5.00" step="0.01">
+        </div>
+        <div>
+          <label>Variance %</label>
+          <input type="number" id="vol-3usd-variance" placeholder="20">
+        </div>
+        <div>
+          <label>Idle Threshold (bps)</label>
+          <input type="number" id="vol-3usd-idle-threshold" placeholder="10">
+        </div>
+        <div>
+          <label>Daily Cost Cap (USD)</label>
+          <input type="number" id="vol-3usd-daily-cap" placeholder="50.00" step="0.01">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumePoolConfig('3usd')">Save 3USD Config</button>
+      </div>
+    </div>
+
+    <!-- Global Settings -->
+    <div class="card">
+      <div class="card-header">Global Settings</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label>Interval (seconds)</label>
+          <input type="number" id="vol-global-interval" placeholder="300">
+        </div>
+        <div>
+          <label>Rebalance Drift %</label>
+          <input type="number" id="vol-global-drift" placeholder="5">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumeGlobal()">Save Global Settings</button>
+      </div>
+    </div>
+
+    <!-- Direct Deposit -->
+    <div class="card">
+      <div class="card-header">Deposit to Volume Bot</div>
+      <p style="font-size:12px;color:var(--text-secondary);margin:0 0 var(--sp-3) 0">Send ICP directly here. Bypasses the arb bot drain.</p>
+      <code style="display:block;font-size:12px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;word-break:break-all;cursor:pointer;transition:border-color 0.15s" onclick="copyToClipboard(this.textContent, 'Address copied')" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" title="Click to copy">f85851515f54f6d313b0df2e678c27096a363dac76652f3a112011cc3ce02c01</code>
+      <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-2)">ICP Account Identifier — click to copy</div>
+    </div>
+
+    <!-- Fund / Withdraw -->
+    <div class="card">
+      <div class="card-header">Fund / Withdraw Volume Subaccount</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div>
+          <label>Token</label>
+          <select id="vol-fund-token">
+            <option value="icp">ICP</option>
+            <option value="icusd">icUSD</option>
+            <option value="3usd">3USD</option>
+          </select>
+        </div>
+        <div>
+          <label>Amount</label>
+          <input type="text" id="vol-fund-amount" placeholder="0.00">
+        </div>
+        <div style="display:flex;gap:var(--sp-2)">
+          <button class="btn btn-primary" onclick="fundVolume(this)">Fund</button>
+          <button class="btn btn-danger" onclick="withdrawVolume(this)">Withdraw</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Recent Trades (full width) -->
+  <div class="card" style="margin-top:var(--sp-4)">
+    <div class="card-header">Recent Volume Trades</div>
+    <div class="data-table-wrap">
+      <table class="data-table" id="vol-trades-table">
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Pool</th>
+            <th>Direction</th>
+            <th>Type</th>
+            <th>In</th>
+            <th>Out</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody id="vol-trades-body"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
   </main>
 
   <div id="toast"></div>
@@ -993,7 +1326,7 @@
 
     const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
-    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64 });
+    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
     const TradeLeg = IDL.Record({ timestamp: IDL.Nat64, leg_type: LegType, dex: IDL.Text, sold_token: IDL.Text, sold_amount: IDL.Nat64, bought_token: IDL.Text, bought_amount: IDL.Nat64, sold_usd_value: IDL.Int64, bought_usd_value: IDL.Int64, fees_usd: IDL.Int64 });
     const ErrorRecord = IDL.Record({ timestamp: IDL.Nat64, message: IDL.Text });
@@ -1015,40 +1348,97 @@
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
-    const idlFactory = ({ IDL: I }) => I.Service({
-      get_config: I.Func([], [BotConfig], ['query']),
-      set_config: I.Func([BotConfig], [], []),
-      get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
-      get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
-      get_summary: I.Func([], [TradeSummary], ['query']),
-      get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
-      get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
-      get_prices: I.Func([], [PriceInfo], []),
-      get_snapshots: I.Func([I.Nat64, I.Nat64], [I.Vec(CycleSnapshot)], ['query']),
-      is_admin: I.Func([I.Principal], [I.Bool], ['query']),
-      add_admin: I.Func([I.Principal], [], []),
-      remove_admin: I.Func([I.Principal], [], []),
-      pause: I.Func([], [], []),
-      resume: I.Func([], [], []),
-      setup_approvals: I.Func([], [I.Text], []),
-      manual_arb_cycle: I.Func([], [], []),
-      dry_run_arb_cycle: I.Func([], [DryRunResult], []),
-      dry_run_strategy_b: I.Func([], [DryRunResult], []),
-      dry_run_strategy_c: I.Func([], [DryRunResult], []),
-      dry_run_strategy_d: I.Func([], [DryRunResult], []),
-      dry_run_strategy_f: I.Func([], [DryRunResult], []),
-      dry_run_strategy_g: I.Func([], [DryRunResult], []),
-      dry_run_strategy_h: I.Func([], [DryRunResult], []),
-      dry_run_strategy_i: I.Func([], [DryRunResult], []),
-      dry_run_strategy_j: I.Func([], [DryRunResult], []),
-      withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
-      pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
-      pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
-      pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
-      pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
-      rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
-      rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
-    });
+    const idlFactory = ({ IDL: I }) => {
+      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null });
+      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null });
+      const VolumeTradeType = I.Variant({ PingPong: I.Null, Rebalance: I.Null });
+      const VolumePoolConfig = I.Record({
+        enabled: I.Bool,
+        idle_threshold_bps: I.Nat64,
+        trade_size_usd: I.Nat64,
+        trade_variance_pct: I.Nat64,
+        daily_cost_cap_usd: I.Nat64,
+      });
+      const VolumePoolState = I.Record({
+        last_price: I.Opt(I.Nat64),
+        next_direction: VolumeDirection,
+        trade_count: I.Nat64,
+        total_volume_usd: I.Nat64,
+        total_cost_usd: I.Int64,
+      });
+      const VolumePoolStatus = I.Record({
+        config: VolumePoolConfig,
+        state: VolumePoolState,
+      });
+      const VolumeStats = I.Record({
+        volume_paused: I.Bool,
+        interval_secs: I.Nat64,
+        daily_spend_usd: I.Int64,
+        daily_cost_cap_usd_icusd: I.Nat64,
+        daily_cost_cap_usd_3usd: I.Nat64,
+        icusd_icp: VolumePoolStatus,
+        three_usd_icp: VolumePoolStatus,
+        total_trade_count: I.Nat64,
+      });
+      const VolumeTradeLeg = I.Record({
+        timestamp: I.Nat64,
+        pool: VolumePool,
+        direction: VolumeDirection,
+        trade_type: VolumeTradeType,
+        token_in: I.Principal,
+        token_out: I.Principal,
+        amount_in: I.Nat64,
+        amount_out: I.Nat64,
+        cost_usd: I.Int64,
+        price_before: I.Nat64,
+        price_after: I.Nat64,
+      });
+      return I.Service({
+        get_config: I.Func([], [BotConfig], ['query']),
+        set_config: I.Func([BotConfig], [], []),
+        get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
+        get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
+        get_summary: I.Func([], [TradeSummary], ['query']),
+        get_errors: I.Func([I.Nat64, I.Nat64], [I.Vec(ErrorRecord)], ['query']),
+        get_activity_log: I.Func([I.Nat64, I.Nat64], [I.Vec(ActivityRecord)], ['query']),
+        get_prices: I.Func([], [PriceInfo], []),
+        get_snapshots: I.Func([I.Nat64, I.Nat64], [I.Vec(CycleSnapshot)], ['query']),
+        is_admin: I.Func([I.Principal], [I.Bool], ['query']),
+        add_admin: I.Func([I.Principal], [], []),
+        remove_admin: I.Func([I.Principal], [], []),
+        pause: I.Func([], [], []),
+        resume: I.Func([], [], []),
+        setup_approvals: I.Func([], [I.Text], []),
+        manual_arb_cycle: I.Func([], [], []),
+        dry_run_arb_cycle: I.Func([], [DryRunResult], []),
+        dry_run_strategy_b: I.Func([], [DryRunResult], []),
+        dry_run_strategy_c: I.Func([], [DryRunResult], []),
+        dry_run_strategy_d: I.Func([], [DryRunResult], []),
+        dry_run_strategy_f: I.Func([], [DryRunResult], []),
+        dry_run_strategy_g: I.Func([], [DryRunResult], []),
+        dry_run_strategy_h: I.Func([], [DryRunResult], []),
+        dry_run_strategy_i: I.Func([], [DryRunResult], []),
+        dry_run_strategy_j: I.Func([], [DryRunResult], []),
+        withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
+        pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
+        pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
+        pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+        pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+        rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
+        rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
+        get_volume_stats: I.Func([], [VolumeStats], ['query']),
+        get_volume_trades: I.Func([I.Nat64, I.Nat64], [I.Vec(VolumeTradeLeg)], ['query']),
+        set_volume_config: I.Func([VolumePool, VolumePoolConfig], [], []),
+        set_volume_global: I.Func([I.Nat64, I.Nat64], [], []),
+        pause_volume: I.Func([], [], []),
+        resume_volume: I.Func([], [], []),
+        fund_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
+        withdraw_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
+        trigger_volume_cycle: I.Func([], [], []),
+        trigger_volume_rebalance: I.Func([], [], []),
+        volume_swap: I.Func([I.Bool, I.Nat64, I.Nat64], [], []),
+      });
+    };
 
     const icrc1IdlFactory = ({ IDL: I }) => {
       const Account = I.Record({ owner: I.Principal, subaccount: I.Opt(I.Vec(I.Nat8)) });
@@ -1204,6 +1594,7 @@
         const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
         if (isAdmin) {
           document.getElementById('nav-admin').style.display = '';
+          document.getElementById('nav-volume').style.display = '';
           showToast('Logged in as admin', 'success');
           if (currentConfig) loadMyBalances(currentConfig);
           swapTokenChanged();
@@ -1226,9 +1617,11 @@
       btn.onclick = doLogin;
       btn.disabled = false;
       document.getElementById('nav-admin').style.display = 'none';
-      // Switch away from admin view if active
+      document.getElementById('nav-volume').style.display = 'none';
+      // Switch away from admin/volume view if active
       const adminNav = document.querySelector('.nav-item[data-view="admin"]');
-      if (adminNav && adminNav.classList.contains('active')) {
+      const volumeNav = document.querySelector('.nav-item[data-view="volume"]');
+      if ((adminNav && adminNav.classList.contains('active')) || (volumeNav && volumeNav.classList.contains('active'))) {
         switchView('overview');
       }
       showToast('Logged out', 'success');
@@ -1255,6 +1648,11 @@
           await loadSnapshots();
           renderCurrentChart();
         }, 60000);
+      }
+      if (name === 'volume') {
+        loadVolumeData();
+        volSwapUpdateRoute();
+        volSwapUpdateBalances();
       }
     }
     window.switchView = switchView;
@@ -1350,13 +1748,21 @@
       try {
         const s = await anonymousActor.get_summary();
         const pnl = bi(s.net_pnl_usd);
+        const recovered = bi(s.unpaired_drain_usd || 0);
+        const arbProfit = pnl - recovered;
         const el = document.getElementById('hero-pnl');
         el.textContent = fmt$(pnl);
         el.className = 'hero-number ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
 
+        const arbEl = document.getElementById('hero-arb-profit');
+        arbEl.textContent = fmt$(arbProfit);
+        arbEl.className = 'stat-value ' + (arbProfit > 0 ? 'positive' : arbProfit < 0 ? 'negative' : '');
+
+        const recEl = document.getElementById('hero-recovered');
+        recEl.textContent = fmt$(recovered);
+
         document.getElementById('hero-trades').textContent = `${bi(s.leg1_count) + bi(s.leg2_count)} legs`;
         document.getElementById('hero-volume').textContent = fmt$(s.total_usd_in);
-        document.getElementById('hero-dex').textContent = `${bi(s.rumi_count)} Rumi \u00b7 ${bi(s.icpswap_count)} ICPSwap`;
       } catch (e) { console.error('loadSummary:', e); }
     }
 
@@ -1393,28 +1799,11 @@
         const vpStr = (bi(p.virtual_price) / 1e18).toFixed(6);
         const icusdVal = bi(p.icpswap_icusd_icp_price);
         const icusdStr = icusdVal > 0 ? '$' + (icusdVal / 1e8).toFixed(4) : 'N/A';
-        // Strategy A
-        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
-        document.getElementById('price-a-vp').textContent = vpStr;
-        // Strategy B
-        document.getElementById('price-b-icusd').textContent = icusdStr;
-        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
-        // Strategy C (ckUSDT price comes from snapshot loader, not get_prices)
-        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-c-vp').textContent = vpStr;
-        // Strategy D
-        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-d-icusd').textContent = icusdStr;
-        document.getElementById('price-d-vp').textContent = vpStr;
-        // Strategy F
-        document.getElementById('price-f-icusd').textContent = icusdStr;
-        // Strategy G (ICPSwap 3USD price comes from snapshot loader)
-        document.getElementById('price-g-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-g-vp').textContent = vpStr;
-        // Strategies H, I, J price subcards populated by snapshot loader
-        document.getElementById('price-h-icusd').textContent = icusdStr;
-        document.getElementById('price-i-ckusdc').textContent = ckusdcStr;
+        // Price sources (deduplicated — ckUSDT and 3USD come from snapshot loader)
+        document.getElementById('src-rumi').textContent = rumiUsdStr;
+        document.getElementById('src-ckusdc').textContent = ckusdcStr;
+        document.getElementById('src-icusd').textContent = icusdStr;
+        document.getElementById('src-vp').textContent = vpStr;
 
         window._latestPrices = {
           vp: bi(p.virtual_price) / 1e18,
@@ -1489,6 +1878,100 @@
       } catch (e) { console.error('loadRecentTrades:', e); }
     }
 
+    // ═══════ Balance Tabs ═══════
+
+    window.switchBalTab = function switchBalTab(tab) {
+      document.getElementById('bal-bot-content').style.display = tab === 'bot' ? '' : 'none';
+      document.getElementById('bal-vol-content').style.display = tab === 'volume' ? '' : 'none';
+      document.querySelectorAll('#bal-tabs .chip').forEach(c => c.classList.remove('active'));
+      document.querySelector(`#bal-tabs .chip[onclick*="${tab}"]`).classList.add('active');
+    }
+
+    async function loadVolumeBalances(config) {
+      try {
+        const botPrincipal = Principal.fromText(canisterId);
+        // Volume subaccount: 31 zero bytes + 0x01 — use plain Array for Candid Opt(Vec(Nat8))
+        const volSub = Array.from({length: 31}, () => 0).concat([1]);
+        const volAccount = { owner: botPrincipal, subaccount: [volSub] };
+
+        // NOTE: 3USD ledger (fohh4-yyaaa-aaaap-qtkpa-cai) ignores subaccount in balance_of —
+        // it always returns the owner's total regardless of subaccount. So we skip it here
+        // and show N/A to avoid displaying misleading data.
+        const [bIcp, bIcusd] = await Promise.all([
+          createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
+          createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(volAccount)),
+        ]);
+
+        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = 'N/A';
+        document.getElementById('vol-bal-icp').textContent = fIcp;
+        document.getElementById('vol-bal-icusd').textContent = fIcusd;
+        document.getElementById('vol-bal-3usd').textContent = f3usd;
+
+        // Estimate total in USD using latest prices
+        const prices = window._latestPrices || {};
+        const icpUsd = prices.icpswap || 0;
+        const icpVal = (bi(bIcp) / 1e8) * icpUsd;
+        const icusdVal = bi(bIcusd) / 1e8;
+        const total = icpVal + icusdVal;
+        const fTotal = total > 0 ? '$' + total.toFixed(2) : '--';
+        document.getElementById('vol-bal-total').textContent = fTotal;
+
+        // Also populate volume page balances card
+        const vp = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        vp('vp-bal-icp', fIcp); vp('vp-bal-icusd', fIcusd); vp('vp-bal-3usd', f3usd); vp('vp-bal-total', fTotal);
+      } catch (e) { console.error('loadVolumeBalances:', e); }
+    }
+
+    // ═══════ Recent Trades Tabs ═══════
+
+    let currentRecentTab = 'arb';
+    window.switchRecentTab = function switchRecentTab(tab) {
+      currentRecentTab = tab;
+      document.getElementById('recent-arb-content').style.display = tab === 'arb' ? '' : 'none';
+      document.getElementById('recent-vol-content').style.display = tab === 'volume' ? '' : 'none';
+      document.querySelectorAll('#recent-trade-tabs .chip').forEach(c => c.classList.remove('active'));
+      document.querySelector(`#recent-trade-tabs .chip[onclick*="${tab}"]`).classList.add('active');
+      const viewAllLink = document.getElementById('recent-view-all');
+      viewAllLink.setAttribute('onclick', tab === 'arb' ? "switchView('trades')" : "switchView('volume')");
+    }
+
+    function volTokenName(principal) {
+      const id = principal.toText ? principal.toText() : String(principal);
+      if (currentConfig) {
+        if (id === currentConfig.icp_ledger.toText()) return { name: 'ICP', dec: 8 };
+        if (id === currentConfig.icusd_ledger?.toText()) return { name: 'icUSD', dec: 8 };
+        if (id === currentConfig.three_usd_ledger.toText()) return { name: '3USD', dec: 8 };
+      }
+      // Fallback hardcoded
+      if (id === 'ryjl3-tyaaa-aaaaa-aaaba-cai') return { name: 'ICP', dec: 8 };
+      if (id === 't6bor-paaaa-aaaap-qrd5q-cai') return { name: 'icUSD', dec: 8 };
+      return { name: id.slice(0, 5) + '...', dec: 8 };
+    }
+
+    async function loadRecentVolumeTrades() {
+      try {
+        const trades = await anonymousActor.get_volume_trades(BigInt(0), BigInt(20));
+        const tbody = document.getElementById('recent-vol-trades-body');
+        if (!trades.length) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-tertiary)">No volume trades yet</td></tr>';
+          return;
+        }
+        const rows = trades.map(t => {
+          const ts = fmtTime(t.timestamp);
+          const pool = volVariantKey(t.pool);
+          const dir = volVariantKey(t.direction);
+          const ttype = volVariantKey(t.trade_type);
+          const tokIn = volTokenName(t.token_in);
+          const tokOut = volTokenName(t.token_out);
+          const amtIn = fmtTok(t.amount_in, tokIn.dec) + ' ' + tokIn.name;
+          const amtOut = fmtTok(t.amount_out, tokOut.dec) + ' ' + tokOut.name;
+          const cost = volFmtSignedUsd6(t.cost_usd);
+          return `<tr><td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>${amtIn}</td><td>${amtOut}</td><td>$${cost}</td></tr>`;
+        });
+        tbody.innerHTML = rows.reverse().join('');
+      } catch (e) { console.error('loadRecentVolumeTrades:', e); }
+    }
+
     async function loadOverviewFromSnapshot() {
       try {
         const snaps = await anonymousActor.get_snapshots(BigInt(0), BigInt(1));
@@ -1505,29 +1988,12 @@
         const vpStr = vp.toFixed(6);
         const icusdStr = icusdPrice > 0 ? '$' + (icusdPrice / 1e8).toFixed(4) : 'N/A';
         const ckusdtStr = ckusdtPrice > 0 ? '$' + (ckusdtPrice / 1e6).toFixed(4) : 'N/A';
-        // Strategy A
-        document.getElementById('price-a-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-a-icpswap').textContent = ckusdcStr;
-        document.getElementById('price-a-vp').textContent = vpStr;
-        // Strategy B
-        document.getElementById('price-b-icusd').textContent = icusdStr;
-        document.getElementById('price-b-ckusdc').textContent = ckusdcStr;
-        // Strategy C
-        document.getElementById('price-c-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-c-ckusdt').textContent = ckusdtStr;
-        document.getElementById('price-c-vp').textContent = vpStr;
-        // Strategy D
-        document.getElementById('price-d-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-d-icusd').textContent = icusdStr;
-        document.getElementById('price-d-vp').textContent = vpStr;
-        // Strategy F
-        document.getElementById('price-f-icusd').textContent = icusdStr;
-        document.getElementById('price-f-ckusdt').textContent = ckusdtStr;
-        // Strategy G
-        document.getElementById('price-g-rumi').textContent = rumiUsdStr;
-        document.getElementById('price-g-vp').textContent = vpStr;
-        // Strategy H, I, J — ICPSwap 3USD price is derived from Rumi price + spread G
-        // (no dedicated snapshot field for the raw 3USD/ICP quote)
+        // Price sources (deduplicated)
+        document.getElementById('src-rumi').textContent = rumiUsdStr;
+        document.getElementById('src-ckusdc').textContent = ckusdcStr;
+        document.getElementById('src-ckusdt').textContent = ckusdtStr;
+        document.getElementById('src-icusd').textContent = icusdStr;
+        document.getElementById('src-vp').textContent = vpStr;
 
         window._latestPrices = { vp, icpswap: icpswapCkusdc };
 
@@ -1630,13 +2096,7 @@
         const spreadG = bi(s.spread_g_bps !== undefined ? s.spread_g_bps : 0);
         const icpswap3usdPrice = rumiUsd * (10000 + spreadG) / 10000;
         const icpswap3usdStr = icpswap3usdPrice > 0 ? '$' + icpswap3usdPrice.toFixed(4) : 'N/A';
-        document.getElementById('price-g-icpswap3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-h-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-h-icusd').textContent = icusdStr;
-        document.getElementById('price-i-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-i-ckusdc').textContent = ckusdcStr;
-        document.getElementById('price-j-3usd').textContent = icpswap3usdStr;
-        document.getElementById('price-j-ckusdt').textContent = ckusdtStr;
+        document.getElementById('src-3usd').textContent = icpswap3usdStr;
 
         const hint = document.getElementById('prices-login-hint');
         if (hint) hint.style.display = 'none';
@@ -1755,7 +2215,9 @@
       await loadConfig();
       loadSummary();
       if (currentConfig) loadBalances(currentConfig);
+      if (currentConfig) loadVolumeBalances(currentConfig);
       loadRecentTrades();
+      loadRecentVolumeTrades();
       loadOverviewFromSnapshot();
       loadTrades();
       loadActivity();
@@ -1770,7 +2232,15 @@
 
     // ═══════ Toast ═══════
 
-    function showToast(msg, type) {
+    window.copyToClipboard = function copyToClipboard(text, toastMsg) {
+      navigator.clipboard.writeText(text.trim()).then(() => {
+        showToast(toastMsg || 'Copied!', 'success');
+      }).catch(() => {
+        showToast('Copy failed', 'error');
+      });
+    }
+
+    window.showToast = function showToast(msg, type) {
       const el = document.getElementById('toast');
       el.textContent = msg;
       el.className = type || '';
@@ -1800,6 +2270,7 @@
           const isAdmin = await anonymousActor.is_admin(identity.getPrincipal());
           if (isAdmin) {
             document.getElementById('nav-admin').style.display = '';
+            document.getElementById('nav-volume').style.display = '';
             swapTokenChanged();
             swapUpdateBalances();
           }
@@ -2481,6 +2952,312 @@
         document.getElementById('swap-quote-info').textContent = '';
         loadAll();
         swapUpdateBalances();
+      } catch (e) { showToast('Swap failed: ' + e.message, 'error'); }
+      finally { btnDone(btn); }
+    };
+
+    // ═══════ Volume Bot ═══════
+
+    const VOLUME_TOKEN_PRINCIPALS = {
+      icp: () => currentConfig?.icp_ledger,
+      icusd: () => Principal.fromText('t6bor-paaaa-aaaap-qrd5q-cai'),
+      '3usd': () => currentConfig?.three_usd_ledger,
+    };
+    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 18 };
+
+    function volVariantKey(v) { return Object.keys(v)[0]; }
+    function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
+    function volFmtSignedUsd6(v) { return (Number(v) / 1_000_000).toFixed(4); }
+
+    async function loadVolumeData() {
+      try {
+        const actor = authenticatedActor || anonymousActor;
+        const [stats, trades] = await Promise.all([
+          actor.get_volume_stats(),
+          actor.get_volume_trades(BigInt(0), BigInt(100)),
+        ]);
+
+        // Status
+        const paused = stats.volume_paused;
+        const dot = document.getElementById('vol-status-dot');
+        const txt = document.getElementById('vol-status-text');
+        dot.style.background = paused ? 'var(--loss)' : 'var(--profit)';
+        txt.textContent = paused ? 'Paused' : 'Active';
+
+        const ic = stats.icusd_icp;
+        const tu = stats.three_usd_icp;
+        document.getElementById('vol-icusd-status').textContent = ic.config.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('vol-icusd-dir').textContent = volVariantKey(ic.state.next_direction);
+        document.getElementById('vol-icusd-count').textContent = ic.state.trade_count.toString();
+        document.getElementById('vol-3usd-status').textContent = tu.config.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('vol-3usd-dir').textContent = volVariantKey(tu.state.next_direction);
+        document.getElementById('vol-3usd-count').textContent = tu.state.trade_count.toString();
+
+        // Analytics
+        document.getElementById('vol-daily-spend').textContent = '$' + volFmtSignedUsd6(stats.daily_spend_usd);
+        document.getElementById('vol-icusd-volume').textContent = '$' + volFmtUsd6(ic.state.total_volume_usd);
+        document.getElementById('vol-icusd-cost').textContent = '$' + volFmtSignedUsd6(ic.state.total_cost_usd);
+        document.getElementById('vol-3usd-volume').textContent = '$' + volFmtUsd6(tu.state.total_volume_usd);
+        document.getElementById('vol-3usd-cost').textContent = '$' + volFmtSignedUsd6(tu.state.total_cost_usd);
+        document.getElementById('vol-total-trades').textContent = stats.total_trade_count.toString();
+        document.getElementById('vol-interval').textContent = stats.interval_secs.toString() + 's';
+
+        // Populate config forms
+        document.getElementById('vol-icusd-enabled').checked = ic.config.enabled;
+        document.getElementById('vol-icusd-trade-size').value = volFmtUsd6(ic.config.trade_size_usd);
+        document.getElementById('vol-icusd-variance').value = ic.config.trade_variance_pct.toString();
+        document.getElementById('vol-icusd-idle-threshold').value = ic.config.idle_threshold_bps.toString();
+        document.getElementById('vol-icusd-daily-cap').value = volFmtUsd6(ic.config.daily_cost_cap_usd);
+
+        document.getElementById('vol-3usd-enabled').checked = tu.config.enabled;
+        document.getElementById('vol-3usd-trade-size').value = volFmtUsd6(tu.config.trade_size_usd);
+        document.getElementById('vol-3usd-variance').value = tu.config.trade_variance_pct.toString();
+        document.getElementById('vol-3usd-idle-threshold').value = tu.config.idle_threshold_bps.toString();
+        document.getElementById('vol-3usd-daily-cap').value = volFmtUsd6(tu.config.daily_cost_cap_usd);
+
+        document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
+
+        // Trades table (newest first)
+        const tbody = document.getElementById('vol-trades-body');
+        tbody.innerHTML = '';
+        for (const t of [...trades].reverse()) {
+          const row = document.createElement('tr');
+          const ts = new Date(Number(t.timestamp) / 1_000_000).toLocaleString();
+          const pool = volVariantKey(t.pool);
+          const dir = volVariantKey(t.direction);
+          const ttype = volVariantKey(t.trade_type);
+          const tokIn = volTokenName(t.token_in);
+          const tokOut = volTokenName(t.token_out);
+          const amtIn = fmtTok(t.amount_in, tokIn.dec) + ' ' + tokIn.name;
+          const amtOut = fmtTok(t.amount_out, tokOut.dec) + ' ' + tokOut.name;
+          const cost = volFmtSignedUsd6(t.cost_usd);
+          row.innerHTML = `<td>${ts}</td><td>${pool}</td><td>${dir}</td><td>${ttype}</td><td>${amtIn}</td><td>${amtOut}</td><td>$${cost}</td>`;
+          tbody.appendChild(row);
+        }
+      } catch (e) {
+        console.error('loadVolumeData:', e);
+      }
+    }
+
+    window.saveVolumePoolConfig = async function(poolKey) {
+      if (!requireAuth()) return;
+      const prefix = poolKey === 'icusd' ? 'vol-icusd' : 'vol-3usd';
+      const pool = poolKey === 'icusd' ? { IcusdIcp: null } : { ThreeUsdIcp: null };
+      const config = {
+        enabled: document.getElementById(prefix + '-enabled').checked,
+        trade_size_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-trade-size').value || '0') * 1_000_000)),
+        trade_variance_pct: BigInt(parseInt(document.getElementById(prefix + '-variance').value || '0')),
+        idle_threshold_bps: BigInt(parseInt(document.getElementById(prefix + '-idle-threshold').value || '0')),
+        daily_cost_cap_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-daily-cap').value || '0') * 1_000_000)),
+      };
+      try {
+        await authenticatedActor.set_volume_config(pool, config);
+        showToast('Config saved for ' + poolKey, 'success');
+        loadVolumeData();
+      } catch (e) {
+        showToast('Failed to save config: ' + e.message, 'error');
+      }
+    };
+
+    window.saveVolumeGlobal = async function() {
+      if (!requireAuth()) return;
+      const interval = BigInt(parseInt(document.getElementById('vol-global-interval').value || '0'));
+      const drift = BigInt(parseInt(document.getElementById('vol-global-drift').value || '0'));
+      try {
+        await authenticatedActor.set_volume_global(interval, drift);
+        showToast('Global settings saved', 'success');
+        loadVolumeData();
+      } catch (e) {
+        showToast('Failed to save global settings: ' + e.message, 'error');
+      }
+    };
+
+    window.fundVolume = async function(btn) {
+      if (!requireAuth()) return;
+      const tokenKey = document.getElementById('vol-fund-token').value;
+      const amtStr = document.getElementById('vol-fund-amount').value;
+      if (!amtStr) { showToast('Enter an amount', 'error'); return; }
+      const decimals = VOLUME_TOKEN_DECIMALS[tokenKey];
+      const raw = BigInt(Math.round(parseFloat(amtStr) * (10 ** decimals)));
+      const ledger = VOLUME_TOKEN_PRINCIPALS[tokenKey]();
+      if (!ledger) { showToast('Token ledger not available', 'error'); return; }
+      try {
+        btn.disabled = true;
+        await authenticatedActor.fund_volume_subaccount(ledger, raw);
+        showToast('Funded ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
+        document.getElementById('vol-fund-amount').value = '';
+      } catch (e) {
+        showToast('Fund failed: ' + e.message, 'error');
+      } finally { btn.disabled = false; }
+    };
+
+    window.withdrawVolume = async function(btn) {
+      if (!requireAuth()) return;
+      const tokenKey = document.getElementById('vol-fund-token').value;
+      const amtStr = document.getElementById('vol-fund-amount').value;
+      if (!amtStr) { showToast('Enter an amount', 'error'); return; }
+      const decimals = VOLUME_TOKEN_DECIMALS[tokenKey];
+      const raw = BigInt(Math.round(parseFloat(amtStr) * (10 ** decimals)));
+      const ledger = VOLUME_TOKEN_PRINCIPALS[tokenKey]();
+      if (!ledger) { showToast('Token ledger not available', 'error'); return; }
+      try {
+        btn.disabled = true;
+        await authenticatedActor.withdraw_volume_subaccount(ledger, raw);
+        showToast('Withdrew ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
+        document.getElementById('vol-fund-amount').value = '';
+      } catch (e) {
+        showToast('Withdraw failed: ' + e.message, 'error');
+      } finally { btn.disabled = false; }
+    };
+
+    // ═══════ Volume Swap Widget ═══════
+
+    const VOL_SWAP_TOKENS = {
+      icp:   { decimals: 8, label: 'ICP',   getLedger: () => currentConfig?.icp_ledger.toText() },
+      icusd: { decimals: 8, label: 'icUSD', getLedger: () => 't6bor-paaaa-aaaap-qrd5q-cai' },
+    };
+
+    let volQuoteTimer;
+
+    function volSwapRoute() {
+      const from = document.getElementById('vol-swap-from-token').value;
+      const to = document.getElementById('vol-swap-to-token').value;
+      if (from === to) return { type: 'invalid', label: 'Same token' };
+      // ICP ↔ icUSD routes through Rumi AMM + 3pool
+      if (from === 'icp' && to === 'icusd') return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool redeem' };
+      if (from === 'icusd' && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool deposit + Rumi AMM' };
+      return { type: 'invalid', label: 'Unsupported pair' };
+    }
+
+    function volSwapUpdateRoute() {
+      const route = volSwapRoute();
+      document.getElementById('vol-swap-route-info').textContent = route.label;
+      document.getElementById('vol-swap-execute-btn').disabled = route.type === 'invalid';
+    }
+
+    window.volSwapTokenChanged = function() {
+      volSwapUpdateRoute();
+      volSwapUpdateBalances();
+      volSwapQuote();
+    };
+
+    window.volSwapFlip = function() {
+      const fromSel = document.getElementById('vol-swap-from-token');
+      const toSel = document.getElementById('vol-swap-to-token');
+      const tmp = fromSel.value;
+      fromSel.value = toSel.value;
+      toSel.value = tmp;
+      document.getElementById('vol-swap-from-amount').value = '';
+      document.getElementById('vol-swap-to-amount').value = '';
+      document.getElementById('vol-swap-quote-info').textContent = '';
+      volSwapUpdateRoute();
+      volSwapUpdateBalances();
+    };
+
+    window.volSwapUpdateBalances = async function() {
+      if (!currentConfig) return;
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const volSub = Array.from({length: 31}, () => 0).concat([1]);
+      const volAccount = { owner: Principal.fromText(canisterId), subaccount: [volSub] };
+      try {
+        const fromInfo = VOL_SWAP_TOKENS[fromKey];
+        const toInfo = VOL_SWAP_TOKENS[toKey];
+        if (fromInfo?.getLedger()) {
+          const a = await createBalanceActor(fromInfo.getLedger());
+          const b = await a.icrc1_balance_of(volAccount);
+          document.getElementById('vol-swap-from-bal').textContent = 'Balance: ' + fmtTok(b, fromInfo.decimals);
+          document.getElementById('vol-swap-from-bal')._rawBal = b;
+          document.getElementById('vol-swap-from-bal')._decimals = fromInfo.decimals;
+        }
+        if (toInfo?.getLedger()) {
+          const a = await createBalanceActor(toInfo.getLedger());
+          const b = await a.icrc1_balance_of(volAccount);
+          document.getElementById('vol-swap-to-bal').textContent = 'Balance: ' + fmtTok(b, toInfo.decimals);
+        }
+      } catch (e) { console.error('volSwapUpdateBalances:', e); }
+    };
+
+    window.volSwapSetMax = function() {
+      const el = document.getElementById('vol-swap-from-bal');
+      if (el._rawBal != null) {
+        const dec = el._decimals || 8;
+        document.getElementById('vol-swap-from-amount').value = (bi(el._rawBal) / 10**dec).toFixed(4);
+        volSwapQuote();
+      }
+    };
+
+    window.volSwapQuote = function() {
+      clearTimeout(volQuoteTimer);
+      volQuoteTimer = setTimeout(volSwapQuoteNow, 400);
+    };
+
+    async function volSwapQuoteNow() {
+      if (!requireAuth()) return;
+      const route = volSwapRoute();
+      if (route.type === 'invalid') return;
+      const amtStr = document.getElementById('vol-swap-from-amount').value.trim();
+      if (!amtStr || isNaN(Number(amtStr)) || Number(amtStr) <= 0) {
+        document.getElementById('vol-swap-to-amount').value = '';
+        document.getElementById('vol-swap-quote-info').textContent = '';
+        return;
+      }
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const fromInfo = VOL_SWAP_TOKENS[fromKey];
+      const toInfo = VOL_SWAP_TOKENS[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+
+      document.getElementById('vol-swap-quote-info').textContent = 'Quoting...';
+      try {
+        let outRaw;
+        if (route.type === 'rumi+3pool') {
+          // ICP → 3USD via Rumi, then 3USD → icUSD via 3pool redeem
+          const icpLedger = currentConfig.icp_ledger.toText();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(icpLedger), raw);
+          const poolRes = await authenticatedActor.pool_quote_redeem(0, rumiRes.estimated_output); // 0 = icUSD
+          outRaw = poolRes.estimated_output;
+        } else if (route.type === '3pool+rumi') {
+          // icUSD → 3USD via 3pool deposit, then 3USD → ICP via Rumi
+          const poolRes = await authenticatedActor.pool_quote_deposit(0, raw); // 0 = icUSD
+          const threeUsdLedger = currentConfig.three_usd_ledger.toText();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(threeUsdLedger), poolRes.estimated_output);
+          outRaw = rumiRes.estimated_output;
+        }
+        const outNum = bi(outRaw) / 10**toInfo.decimals;
+        document.getElementById('vol-swap-to-amount').value = outNum.toFixed(4);
+        const inNum = Number(amtStr);
+        const rate = inNum > 0 ? (outNum / inNum).toFixed(6) : '--';
+        document.getElementById('vol-swap-quote-info').textContent = `1 ${fromInfo.label} ≈ ${rate} ${toInfo.label}`;
+      } catch (e) {
+        document.getElementById('vol-swap-quote-info').textContent = 'Quote failed';
+        console.error('volSwapQuote:', e);
+      }
+    }
+
+    window.volSwapExecute = async function(btn) {
+      if (!requireAuth()) return;
+      const route = volSwapRoute();
+      if (route.type === 'invalid') { showToast('Invalid swap route', 'error'); return; }
+      const amtStr = document.getElementById('vol-swap-from-amount').value.trim();
+      if (!amtStr || Number(amtStr) <= 0) { showToast('Enter an amount', 'error'); return; }
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const fromInfo = VOL_SWAP_TOKENS[fromKey];
+      const toInfo = VOL_SWAP_TOKENS[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+      const minOut = BigInt(0);
+      const icpToIcusd = fromKey === 'icp';
+
+      btnLoading(btn, 'Swapping...');
+      try {
+        await authenticatedActor.volume_swap(icpToIcusd, raw, minOut);
+        showToast(`Swapped ${amtStr} ${fromInfo.label} → ${toInfo.label} (volume)`, 'success');
+        document.getElementById('vol-swap-from-amount').value = '';
+        document.getElementById('vol-swap-to-amount').value = '';
+        document.getElementById('vol-swap-quote-info').textContent = '';
+        loadVolumeBalances();
+        volSwapUpdateBalances();
       } catch (e) { showToast('Swap failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };

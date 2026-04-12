@@ -57,6 +57,7 @@ type TradeSummary = record {
   drain_count: nat64;
   rumi_count: nat64;
   icpswap_count: nat64;
+  unpaired_drain_usd: int64;
 };
 
 type LegType = variant {
@@ -168,6 +169,59 @@ type InitArgs = record {
   config: BotConfig;
 };
 
+type VolumePool = variant { IcusdIcp; ThreeUsdIcp };
+
+type VolumeDirection = variant { BuyIcp; SellIcp };
+
+type VolumeTradeType = variant { PingPong; Rebalance };
+
+type VolumePoolConfig = record {
+    enabled: bool;
+    idle_threshold_bps: nat64;
+    trade_size_usd: nat64;
+    trade_variance_pct: nat64;
+    daily_cost_cap_usd: nat64;
+};
+
+type VolumePoolState = record {
+    last_price: opt nat64;
+    next_direction: VolumeDirection;
+    trade_count: nat64;
+    total_volume_usd: nat64;
+    total_cost_usd: int64;
+    daily_cost_usd: int64;
+};
+
+type VolumePoolStatus = record {
+    config: VolumePoolConfig;
+    state: VolumePoolState;
+};
+
+type VolumeStats = record {
+    volume_paused: bool;
+    interval_secs: nat64;
+    daily_spend_usd: int64;
+    daily_cost_cap_usd_icusd: nat64;
+    daily_cost_cap_usd_3usd: nat64;
+    icusd_icp: VolumePoolStatus;
+    three_usd_icp: VolumePoolStatus;
+    total_trade_count: nat64;
+};
+
+type VolumeTradeLeg = record {
+    timestamp: nat64;
+    pool: VolumePool;
+    direction: VolumeDirection;
+    trade_type: VolumeTradeType;
+    token_in: principal;
+    token_out: principal;
+    amount_in: nat64;
+    amount_out: nat64;
+    cost_usd: int64;
+    price_before: nat64;
+    price_after: nat64;
+};
+
 service : (InitArgs) -> {
   // Query methods
   get_config: () -> (BotConfig) query;
@@ -214,4 +268,20 @@ service : (InitArgs) -> {
   // Rumi AMM manual swap (ICP ↔ 3USD)
   rumi_quote: (principal, nat64) -> (record { estimated_output: nat64 });
   rumi_manual_swap: (principal, nat64, nat64) -> ();
+
+  // Volume bot
+  set_volume_config: (VolumePool, VolumePoolConfig) -> ();
+  set_volume_global: (nat64, nat64) -> ();
+  pause_volume: () -> ();
+  resume_volume: () -> ();
+  fund_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
+  withdraw_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
+  trigger_volume_cycle: () -> ();
+  trigger_volume_rebalance: () -> ();
+  volume_swap: (bool, nat64, nat64) -> ();
+  get_volume_stats: () -> (VolumeStats) query;
+  get_volume_trades: (nat64, nat64) -> (vec VolumeTradeLeg) query;
+
+  // Cycles
+  cycles_balance: () -> (nat) query;
 }
