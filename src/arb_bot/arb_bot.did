@@ -57,6 +57,7 @@ type TradeSummary = record {
   drain_count: nat64;
   rumi_count: nat64;
   icpswap_count: nat64;
+  unpaired_drain_usd: int64;
 };
 
 type LegType = variant {
@@ -277,6 +278,7 @@ service : (InitArgs) -> {
   withdraw_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
   trigger_volume_cycle: () -> ();
   trigger_volume_rebalance: () -> ();
+  volume_swap: (bool, nat64, nat64) -> ();
   get_volume_stats: () -> (VolumeStats) query;
   get_volume_trades: (nat64, nat64) -> (vec VolumeTradeLeg) query;
 

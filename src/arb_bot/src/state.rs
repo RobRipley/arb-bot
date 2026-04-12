@@ -337,6 +337,10 @@ pub struct BotState {
     pub pending_exit: Option<PendingExit>,
     #[serde(default)]
     pub volume: VolumeConfig,
+    /// ICP amount stranded in the default account after a volume bot
+    /// transfer-to-subaccount failure.  The arb drain must not touch this.
+    #[serde(default)]
+    pub volume_stranded_icp: u64,
 }
 
 impl Default for BotState {
@@ -371,6 +375,7 @@ impl Default for BotState {
             icpswap_3usd_token_ordering_resolved: false,
             pending_exit: None,
             volume: VolumeConfig::default(),
+            volume_stranded_icp: 0,
         }
     }
 }
@@ -788,6 +793,7 @@ pub fn load_from_stable_memory() {
             icpswap_3usd_token_ordering_resolved: legacy.icpswap_3usd_token_ordering_resolved,
             pending_exit: legacy.pending_exit,
             volume: VolumeConfig::default(),
+            volume_stranded_icp: 0,
         };
 
         // Touching any thread_local stable structure below triggers

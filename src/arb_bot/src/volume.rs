@@ -134,7 +134,7 @@ async fn execute_volume_trade(
         }
     };
 
-    // Step 3: Transfer output tokens back to volume subaccount
+    // Step 3: Transfer output tokens back to volume subaccount (with retry)
     let token_out = match direction {
         VolumeDirection::BuyIcp => config.icp_ledger,
         VolumeDirection::SellIcp => stable_ledger,
@@ -144,9 +144,32 @@ async fn execute_volume_trade(
         VolumeDirection::SellIcp => stable_fee,
     };
     if amount_out > out_fee {
-        swaps::transfer_to_subaccount(token_out, amount_out - out_fee, VOLUME_SUBACCOUNT)
-            .await
-            .map_err(|e| format!("Transfer to subaccount failed: {:?}", e))?;
+        let transfer_amount = amount_out - out_fee;
+        let mut transferred = false;
+        for attempt in 0..3 {
+            match swaps::transfer_to_subaccount(token_out, transfer_amount, VOLUME_SUBACCOUNT).await {
+                Ok(_) => {
+                    // Clear any previously stranded amount on success
+                    if matches!(direction, VolumeDirection::BuyIcp) {
+                        state::mutate_state(|s| { s.volume_stranded_icp = 0; });
+                    }
+                    transferred = true;
+                    break;
+                }
+                Err(e) => {
+                    state::log_activity("volume", &format!(
+                        "Transfer to subaccount attempt {}/3 failed: {:?}", attempt + 1, e
+                    ));
+                }
+            }
+        }
+        if !transferred {
+            // Mark the ICP as stranded so the arb drain doesn't eat it
+            if matches!(direction, VolumeDirection::BuyIcp) {
+                state::mutate_state(|s| { s.volume_stranded_icp = transfer_amount; });
+            }
+            return Err(format!("Transfer to subaccount failed after 3 attempts (funds protected from drain)"));
+        }
     }
 
     // Fetch price after trade
@@ -177,6 +200,22 @@ pub async fn run_volume_cycle() {
 
     if volume_config.volume_paused {
         return;
+    }
+
+    // Recover any ICP stranded in the default account from a prior failure
+    let stranded = state::read_state(|s| s.volume_stranded_icp);
+    if stranded > 0 {
+        match swaps::transfer_to_subaccount(bot_config.icp_ledger, stranded, VOLUME_SUBACCOUNT).await {
+            Ok(_) => {
+                state::mutate_state(|s| { s.volume_stranded_icp = 0; });
+                state::log_activity("volume", &format!("Recovered {} stranded ICP to subaccount", stranded));
+            }
+            Err(e) => {
+                state::log_activity("volume", &format!("Stranded ICP recovery failed (will retry): {:?}", e));
+                // Don't proceed with trades while ICP is stranded
+                return;
+            }
+        }
     }
 
     let now = ic_cdk::api::time();

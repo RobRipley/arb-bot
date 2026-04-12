@@ -126,6 +126,7 @@ pub struct TradeSummary {
     pub drain_count: u64,
     pub rumi_count: u64,
     pub icpswap_count: u64,
+    pub unpaired_drain_usd: i64,     // 6-dec: revenue from drains with no matching Leg1
 }
 
 #[query]
@@ -146,17 +147,30 @@ fn get_summary() -> TradeSummary {
         drain_count: 0,
         rumi_count: 0,
         icpswap_count: 0,
+        unpaired_drain_usd: 0,
     };
+    let mut has_pending_leg1 = false;
     state::fold_trade_legs((), |_, leg| {
-        // Stablecoins sold = cost, stablecoins bought = revenue
-        // ICP values are 0 so they don't affect the sum
         summary.total_usd_in += leg.sold_usd_value;
         summary.total_usd_out += leg.bought_usd_value;
         summary.total_fees_usd += leg.fees_usd;
         match leg.leg_type {
-            state::LegType::Leg1 => summary.leg1_count += 1,
-            state::LegType::Leg2 => summary.leg2_count += 1,
-            state::LegType::Drain => summary.drain_count += 1,
+            state::LegType::Leg1 => {
+                summary.leg1_count += 1;
+                has_pending_leg1 = true;
+            }
+            state::LegType::Leg2 => {
+                summary.leg2_count += 1;
+                has_pending_leg1 = false;
+            }
+            state::LegType::Drain => {
+                summary.drain_count += 1;
+                if !has_pending_leg1 {
+                    // This drain has no matching Leg1 — it's recovering
+                    // pre-existing ICP, not arb profit
+                    summary.unpaired_drain_usd += leg.bought_usd_value;
+                }
+            }
         }
         if leg.dex == "Rumi" { summary.rumi_count += 1; }
         else { summary.icpswap_count += 1; }
@@ -527,6 +541,106 @@ async fn rumi_manual_swap(token_in: Principal, amount: u64, min_out: u64) {
             ));
             ic_cdk::trap(&format!("Rumi swap failed: {}", e));
         }
+    }
+}
+
+// ─── Volume Subaccount Manual Swaps ───
+
+const ICP_FEE: u64 = 10_000;
+const THREE_USD_FEE: u64 = 0;
+const VOL_ICUSD_FEE: u64 = 100_000;
+
+/// Swap ICP ↔ icUSD using the volume subaccount.
+/// Handles the full multi-hop route: ICP ↔ 3USD (Rumi AMM) ↔ icUSD (3pool).
+/// direction: "icp_to_icusd" or "icusd_to_icp"
+#[update]
+async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
+    require_admin();
+    let (rumi_amm, icp_ledger, three_usd_ledger, icusd_ledger, rumi_3pool) = state::read_state(|s| {
+        (s.config.rumi_amm, s.config.icp_ledger, s.config.three_usd_ledger,
+         Principal::from_text("t6bor-paaaa-aaaap-qrd5q-cai").unwrap(),
+         s.config.rumi_3pool)
+    });
+    let caller = ic_cdk::api::caller();
+
+    if icp_to_icusd {
+        // ICP → 3USD (Rumi) → icUSD (3pool redeem)
+
+        // Step 1: Transfer ICP from volume subaccount to main
+        if let Err(e) = swaps::transfer_from_subaccount(icp_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
+            ic_cdk::trap(&format!("Volume swap: ICP transfer from subaccount failed: {:?}", e));
+        }
+
+        // Step 2: Swap ICP → 3USD on Rumi
+        let swap_input = amount.saturating_sub(ICP_FEE);
+        let three_usd_out = match swaps::rumi_swap(rumi_amm, RUMI_POOL_ID, icp_ledger, swap_input, 0).await {
+            Ok(out) => out,
+            Err(e) => {
+                let recovery = swap_input.saturating_sub(ICP_FEE);
+                if recovery > 0 { let _ = swaps::transfer_to_subaccount(icp_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await; }
+                ic_cdk::trap(&format!("Volume swap: Rumi ICP→3USD failed: {:?}", e));
+            }
+        };
+
+        // Step 3: Redeem 3USD → icUSD via 3pool (coin_index 0 = icUSD)
+        let icusd_out = match swaps::pool_remove_one_coin(rumi_3pool, three_usd_out, 0, min_out).await {
+            Ok(out) => out,
+            Err(e) => {
+                // 3USD is stuck in main — transfer it back to volume sub
+                if three_usd_out > 0 { let _ = swaps::transfer_to_subaccount(three_usd_ledger, three_usd_out, swaps::VOLUME_SUBACCOUNT).await; }
+                ic_cdk::trap(&format!("Volume swap: 3pool redeem failed: {}", e));
+            }
+        };
+
+        // Step 4: Transfer icUSD back to volume subaccount
+        if icusd_out > VOL_ICUSD_FEE {
+            if let Err(e) = swaps::transfer_to_subaccount(icusd_ledger, icusd_out - VOL_ICUSD_FEE, swaps::VOLUME_SUBACCOUNT).await {
+                state::log_activity("volume_swap", &format!("WARNING: icUSD transfer back failed: {:?}", e));
+            }
+        }
+        state::log_activity("volume_swap", &format!(
+            "Volume swap: {} ICP → {} icUSD by {}", amount, icusd_out, caller
+        ));
+    } else {
+        // icUSD → 3USD (3pool deposit) → ICP (Rumi)
+
+        // Step 1: Transfer icUSD from volume subaccount to main
+        if let Err(e) = swaps::transfer_from_subaccount(icusd_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
+            ic_cdk::trap(&format!("Volume swap: icUSD transfer from subaccount failed: {:?}", e));
+        }
+
+        // Step 2: Deposit icUSD → 3USD via 3pool (coin_index 0 = icUSD)
+        let deposit_amount = amount.saturating_sub(VOL_ICUSD_FEE);
+        let mut amounts = vec![Nat::from(0u64), Nat::from(0u64), Nat::from(0u64)];
+        amounts[0] = Nat::from(deposit_amount);
+        let three_usd_out = match swaps::pool_add_liquidity(rumi_3pool, amounts, 0).await {
+            Ok(lp) => lp,
+            Err(e) => {
+                let recovery = deposit_amount.saturating_sub(VOL_ICUSD_FEE);
+                if recovery > 0 { let _ = swaps::transfer_to_subaccount(icusd_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await; }
+                ic_cdk::trap(&format!("Volume swap: 3pool deposit failed: {}", e));
+            }
+        };
+
+        // Step 3: Swap 3USD → ICP on Rumi
+        let icp_out = match swaps::rumi_swap(rumi_amm, RUMI_POOL_ID, three_usd_ledger, three_usd_out, min_out).await {
+            Ok(out) => out,
+            Err(e) => {
+                // 3USD stuck in main — try to transfer back
+                if three_usd_out > 0 { let _ = swaps::transfer_to_subaccount(three_usd_ledger, three_usd_out, swaps::VOLUME_SUBACCOUNT).await; }
+                ic_cdk::trap(&format!("Volume swap: Rumi 3USD→ICP failed: {:?}", e));
+            }
+        };
+
+        // Step 4: Transfer ICP back to volume subaccount
+        if icp_out > ICP_FEE {
+            if let Err(e) = swaps::transfer_to_subaccount(icp_ledger, icp_out - ICP_FEE, swaps::VOLUME_SUBACCOUNT).await {
+                state::log_activity("volume_swap", &format!("WARNING: ICP transfer back failed: {:?}", e));
+            }
+        }
+        state::log_activity("volume_swap", &format!(
+            "Volume swap: {} icUSD → {} ICP by {}", amount, icp_out, caller
+        ));
     }
 }
 

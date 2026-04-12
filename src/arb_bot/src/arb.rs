@@ -1613,7 +1613,10 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     let icp_balance = fetch_balance(config.icp_ledger).await?;
 
     // Keep ICP_RESERVE in the bot for approval fees etc.
-    let drainable = icp_balance.saturating_sub(ICP_RESERVE);
+    // Also exclude any ICP stranded by the volume bot — those belong to it.
+    let volume_stranded = state::read_state(|s| s.volume_stranded_icp);
+    let reserved = ICP_RESERVE.saturating_add(volume_stranded);
+    let drainable = icp_balance.saturating_sub(reserved);
     if drainable <= ICP_FEE * 2 {
         return Ok(());
     }

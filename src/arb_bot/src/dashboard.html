@@ -574,9 +574,10 @@
             <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
           </div>
           <div class="hero-right">
+            <div class="hero-stat"><span class="stat-label">Arb Profit</span><span class="stat-value" id="hero-arb-profit"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">Recovered ICP</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
-            <div class="hero-stat"><span class="stat-label">DEXes</span><span class="stat-value" id="hero-dex"><span class="skeleton skeleton-text"></span></span></div>
           </div>
         </div>
       </div>
@@ -1107,6 +1108,46 @@
       </div>
     </div>
 
+    <!-- Volume Swap Widget -->
+    <div class="card">
+      <div class="card-header">Swap (Volume)</div>
+      <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)" id="vol-swap-route-info"></div>
+      <!-- From -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-bottom:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">From</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--accent);cursor:pointer" id="vol-swap-from-bal" onclick="volSwapSetMax()">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="vol-swap-from-amount" placeholder="0.00" oninput="volSwapQuote()" style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data)">
+          <select id="vol-swap-from-token" onchange="volSwapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="icp">ICP</option>
+            <option value="icusd">icUSD</option>
+          </select>
+        </div>
+      </div>
+      <!-- Arrow -->
+      <div style="display:flex;justify-content:center;margin:-4px 0;position:relative;z-index:1">
+        <button class="btn btn-sm" onclick="volSwapFlip()" style="width:36px;height:36px;padding:0;font-size:14px;border-radius:var(--radius-md);background:var(--surface-2);border:2px solid var(--border)">&#8597;</button>
+      </div>
+      <!-- To -->
+      <div style="background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-lg);padding:var(--sp-4);margin-top:var(--sp-2)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+          <span style="font-size:11px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:0.06em">To (estimated)</span>
+          <span style="font-family:var(--font-data);font-size:11px;color:var(--text-tertiary)" id="vol-swap-to-bal">Balance: --</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center">
+          <input type="text" id="vol-swap-to-amount" placeholder="0.00" readonly style="flex:1;font-size:18px;background:transparent;border:none;padding:var(--sp-1) 0;font-family:var(--font-data);color:var(--text-secondary)">
+          <select id="vol-swap-to-token" onchange="volSwapTokenChanged()" style="width:auto;min-width:100px;font-family:var(--font-ui);font-weight:600">
+            <option value="icusd">icUSD</option>
+            <option value="icp">ICP</option>
+          </select>
+        </div>
+      </div>
+      <div id="vol-swap-quote-info" style="text-align:center;padding:var(--sp-2);font-size:12px;color:var(--text-tertiary);min-height:28px"></div>
+      <button class="btn btn-primary btn-block" id="vol-swap-execute-btn" onclick="volSwapExecute(this)">Swap</button>
+    </div>
+
     <!-- Analytics -->
     <div class="card">
       <div class="card-header">Volume Analytics</div>
@@ -1285,7 +1326,7 @@
 
     const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
-    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64 });
+    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
     const TradeLeg = IDL.Record({ timestamp: IDL.Nat64, leg_type: LegType, dex: IDL.Text, sold_token: IDL.Text, sold_amount: IDL.Nat64, bought_token: IDL.Text, bought_amount: IDL.Nat64, sold_usd_value: IDL.Int64, bought_usd_value: IDL.Int64, fees_usd: IDL.Int64 });
     const ErrorRecord = IDL.Record({ timestamp: IDL.Nat64, message: IDL.Text });
@@ -1395,6 +1436,7 @@
         withdraw_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
         trigger_volume_cycle: I.Func([], [], []),
         trigger_volume_rebalance: I.Func([], [], []),
+        volume_swap: I.Func([I.Bool, I.Nat64, I.Nat64], [], []),
       });
     };
 
@@ -1609,6 +1651,8 @@
       }
       if (name === 'volume') {
         loadVolumeData();
+        volSwapUpdateRoute();
+        volSwapUpdateBalances();
       }
     }
     window.switchView = switchView;
@@ -1704,13 +1748,21 @@
       try {
         const s = await anonymousActor.get_summary();
         const pnl = bi(s.net_pnl_usd);
+        const recovered = bi(s.unpaired_drain_usd || 0);
+        const arbProfit = pnl - recovered;
         const el = document.getElementById('hero-pnl');
         el.textContent = fmt$(pnl);
         el.className = 'hero-number ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
 
+        const arbEl = document.getElementById('hero-arb-profit');
+        arbEl.textContent = fmt$(arbProfit);
+        arbEl.className = 'stat-value ' + (arbProfit > 0 ? 'positive' : arbProfit < 0 ? 'negative' : '');
+
+        const recEl = document.getElementById('hero-recovered');
+        recEl.textContent = fmt$(recovered);
+
         document.getElementById('hero-trades').textContent = `${bi(s.leg1_count) + bi(s.leg2_count)} legs`;
         document.getElementById('hero-volume').textContent = fmt$(s.total_usd_in);
-        document.getElementById('hero-dex').textContent = `${bi(s.rumi_count)} Rumi \u00b7 ${bi(s.icpswap_count)} ICPSwap`;
       } catch (e) { console.error('loadSummary:', e); }
     }
 
@@ -2965,10 +3017,10 @@
 
         document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
 
-        // Trades table
+        // Trades table (newest first)
         const tbody = document.getElementById('vol-trades-body');
         tbody.innerHTML = '';
-        for (const t of trades) {
+        for (const t of [...trades].reverse()) {
           const row = document.createElement('tr');
           const ts = new Date(Number(t.timestamp) / 1_000_000).toLocaleString();
           const pool = volVariantKey(t.pool);
@@ -3056,6 +3108,158 @@
       } catch (e) {
         showToast('Withdraw failed: ' + e.message, 'error');
       } finally { btn.disabled = false; }
+    };
+
+    // ═══════ Volume Swap Widget ═══════
+
+    const VOL_SWAP_TOKENS = {
+      icp:   { decimals: 8, label: 'ICP',   getLedger: () => currentConfig?.icp_ledger.toText() },
+      icusd: { decimals: 8, label: 'icUSD', getLedger: () => 't6bor-paaaa-aaaap-qrd5q-cai' },
+    };
+
+    let volQuoteTimer;
+
+    function volSwapRoute() {
+      const from = document.getElementById('vol-swap-from-token').value;
+      const to = document.getElementById('vol-swap-to-token').value;
+      if (from === to) return { type: 'invalid', label: 'Same token' };
+      // ICP ↔ icUSD routes through Rumi AMM + 3pool
+      if (from === 'icp' && to === 'icusd') return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool redeem' };
+      if (from === 'icusd' && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool deposit + Rumi AMM' };
+      return { type: 'invalid', label: 'Unsupported pair' };
+    }
+
+    function volSwapUpdateRoute() {
+      const route = volSwapRoute();
+      document.getElementById('vol-swap-route-info').textContent = route.label;
+      document.getElementById('vol-swap-execute-btn').disabled = route.type === 'invalid';
+    }
+
+    window.volSwapTokenChanged = function() {
+      volSwapUpdateRoute();
+      volSwapUpdateBalances();
+      volSwapQuote();
+    };
+
+    window.volSwapFlip = function() {
+      const fromSel = document.getElementById('vol-swap-from-token');
+      const toSel = document.getElementById('vol-swap-to-token');
+      const tmp = fromSel.value;
+      fromSel.value = toSel.value;
+      toSel.value = tmp;
+      document.getElementById('vol-swap-from-amount').value = '';
+      document.getElementById('vol-swap-to-amount').value = '';
+      document.getElementById('vol-swap-quote-info').textContent = '';
+      volSwapUpdateRoute();
+      volSwapUpdateBalances();
+    };
+
+    window.volSwapUpdateBalances = async function() {
+      if (!currentConfig) return;
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const volSub = Array.from({length: 31}, () => 0).concat([1]);
+      const volAccount = { owner: Principal.fromText(canisterId), subaccount: [volSub] };
+      try {
+        const fromInfo = VOL_SWAP_TOKENS[fromKey];
+        const toInfo = VOL_SWAP_TOKENS[toKey];
+        if (fromInfo?.getLedger()) {
+          const a = await createBalanceActor(fromInfo.getLedger());
+          const b = await a.icrc1_balance_of(volAccount);
+          document.getElementById('vol-swap-from-bal').textContent = 'Balance: ' + fmtTok(b, fromInfo.decimals);
+          document.getElementById('vol-swap-from-bal')._rawBal = b;
+          document.getElementById('vol-swap-from-bal')._decimals = fromInfo.decimals;
+        }
+        if (toInfo?.getLedger()) {
+          const a = await createBalanceActor(toInfo.getLedger());
+          const b = await a.icrc1_balance_of(volAccount);
+          document.getElementById('vol-swap-to-bal').textContent = 'Balance: ' + fmtTok(b, toInfo.decimals);
+        }
+      } catch (e) { console.error('volSwapUpdateBalances:', e); }
+    };
+
+    window.volSwapSetMax = function() {
+      const el = document.getElementById('vol-swap-from-bal');
+      if (el._rawBal != null) {
+        const dec = el._decimals || 8;
+        document.getElementById('vol-swap-from-amount').value = (bi(el._rawBal) / 10**dec).toFixed(4);
+        volSwapQuote();
+      }
+    };
+
+    window.volSwapQuote = function() {
+      clearTimeout(volQuoteTimer);
+      volQuoteTimer = setTimeout(volSwapQuoteNow, 400);
+    };
+
+    async function volSwapQuoteNow() {
+      if (!requireAuth()) return;
+      const route = volSwapRoute();
+      if (route.type === 'invalid') return;
+      const amtStr = document.getElementById('vol-swap-from-amount').value.trim();
+      if (!amtStr || isNaN(Number(amtStr)) || Number(amtStr) <= 0) {
+        document.getElementById('vol-swap-to-amount').value = '';
+        document.getElementById('vol-swap-quote-info').textContent = '';
+        return;
+      }
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const fromInfo = VOL_SWAP_TOKENS[fromKey];
+      const toInfo = VOL_SWAP_TOKENS[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+
+      document.getElementById('vol-swap-quote-info').textContent = 'Quoting...';
+      try {
+        let outRaw;
+        if (route.type === 'rumi+3pool') {
+          // ICP → 3USD via Rumi, then 3USD → icUSD via 3pool redeem
+          const icpLedger = currentConfig.icp_ledger.toText();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(icpLedger), raw);
+          const poolRes = await authenticatedActor.pool_quote_redeem(0, rumiRes.estimated_output); // 0 = icUSD
+          outRaw = poolRes.estimated_output;
+        } else if (route.type === '3pool+rumi') {
+          // icUSD → 3USD via 3pool deposit, then 3USD → ICP via Rumi
+          const poolRes = await authenticatedActor.pool_quote_deposit(0, raw); // 0 = icUSD
+          const threeUsdLedger = currentConfig.three_usd_ledger.toText();
+          const rumiRes = await authenticatedActor.rumi_quote(Principal.fromText(threeUsdLedger), poolRes.estimated_output);
+          outRaw = rumiRes.estimated_output;
+        }
+        const outNum = bi(outRaw) / 10**toInfo.decimals;
+        document.getElementById('vol-swap-to-amount').value = outNum.toFixed(4);
+        const inNum = Number(amtStr);
+        const rate = inNum > 0 ? (outNum / inNum).toFixed(6) : '--';
+        document.getElementById('vol-swap-quote-info').textContent = `1 ${fromInfo.label} ≈ ${rate} ${toInfo.label}`;
+      } catch (e) {
+        document.getElementById('vol-swap-quote-info').textContent = 'Quote failed';
+        console.error('volSwapQuote:', e);
+      }
+    }
+
+    window.volSwapExecute = async function(btn) {
+      if (!requireAuth()) return;
+      const route = volSwapRoute();
+      if (route.type === 'invalid') { showToast('Invalid swap route', 'error'); return; }
+      const amtStr = document.getElementById('vol-swap-from-amount').value.trim();
+      if (!amtStr || Number(amtStr) <= 0) { showToast('Enter an amount', 'error'); return; }
+      const fromKey = document.getElementById('vol-swap-from-token').value;
+      const toKey = document.getElementById('vol-swap-to-token').value;
+      const fromInfo = VOL_SWAP_TOKENS[fromKey];
+      const toInfo = VOL_SWAP_TOKENS[toKey];
+      const raw = humanToRaw(amtStr, fromInfo.decimals);
+      const minOut = BigInt(0);
+      const icpToIcusd = fromKey === 'icp';
+
+      btnLoading(btn, 'Swapping...');
+      try {
+        await authenticatedActor.volume_swap(icpToIcusd, raw, minOut);
+        showToast(`Swapped ${amtStr} ${fromInfo.label} → ${toInfo.label} (volume)`, 'success');
+        document.getElementById('vol-swap-from-amount').value = '';
+        document.getElementById('vol-swap-to-amount').value = '';
+        document.getElementById('vol-swap-quote-info').textContent = '';
+        loadVolumeBalances();
+        volSwapUpdateBalances();
+      } catch (e) { showToast('Swap failed: ' + e.message, 'error'); }
+      finally { btnDone(btn); }
     };
 
     // ═══════ Init ═══════
