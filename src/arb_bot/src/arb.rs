@@ -1,5 +1,6 @@
 use candid::{CandidType, Nat, Principal};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use crate::prices::{self, PriceData, nat_to_u64};
 use crate::state::{self, Direction, Token};
@@ -15,11 +16,16 @@ const ICUSD_FEE: u64 = 100_000;      // 0.001 icUSD (8 decimals)
 // Pool ID is deterministic: sorted principals joined by "_"
 const RUMI_POOL_ID: &str = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
 
-/// Slippage tolerance in basis points (50 bps = 0.5%)
-const SLIPPAGE_BPS: u64 = 50;
+/// Slippage tolerance in basis points, read from `state.config.slippage_bps`
+/// at the top of each execute_/drain flow. Clamped to [0, 10_000] so the
+/// `(10_000 - slippage)` math never underflows.
+#[inline]
+fn slippage_bps_clamped(config: &state::BotConfig) -> u64 {
+    config.slippage_bps.min(10_000)
+}
 
 /// Number of candidate trade sizes to evaluate
-const NUM_CANDIDATES: u64 = 6;
+const NUM_CANDIDATES: u64 = 4;
 
 /// VP precision (1e18)
 const VP_PRECISION: u128 = 1_000_000_000_000_000_000;
@@ -29,10 +35,43 @@ const ICP_RESERVE: u64 = 100_000_000; // 1 ICP (8 decimals)
 
 thread_local! {
     static CYCLE_IN_PROGRESS: Cell<bool> = Cell::new(false);
+    /// Per-cycle cache for balances and virtual price. Cleared at the start
+    /// of each `run_arb_cycle`. Lets multiple strategies share inter-canister
+    /// reads (3USD balance, ICP balance, virtual price) instead of refetching.
+    /// Safe within a single cycle: dry-run computation is read-only and runs
+    /// before any swap that would mutate balances.
+    static CYCLE_BALANCE_CACHE: RefCell<HashMap<Principal, u64>> = RefCell::new(HashMap::new());
+    static CYCLE_VP_CACHE: Cell<Option<u64>> = Cell::new(None);
 }
 
 pub fn is_cycle_in_progress() -> bool {
     CYCLE_IN_PROGRESS.with(|c| c.get())
+}
+
+fn clear_cycle_cache() {
+    CYCLE_BALANCE_CACHE.with(|c| c.borrow_mut().clear());
+    CYCLE_VP_CACHE.with(|c| c.set(None));
+}
+
+/// Cached balance fetch for the current arb cycle. First call hits the ledger;
+/// subsequent calls within the same cycle return the cached value.
+pub async fn fetch_balance_cached(ledger: Principal) -> Result<u64, String> {
+    if let Some(v) = CYCLE_BALANCE_CACHE.with(|c| c.borrow().get(&ledger).copied()) {
+        return Ok(v);
+    }
+    let v = fetch_balance(ledger).await?;
+    CYCLE_BALANCE_CACHE.with(|c| { c.borrow_mut().insert(ledger, v); });
+    Ok(v)
+}
+
+/// Cached virtual price fetch for the current arb cycle.
+pub async fn fetch_virtual_price_cached(rumi_3pool: Principal) -> Result<u64, String> {
+    if let Some(v) = CYCLE_VP_CACHE.with(|c| c.get()) {
+        return Ok(v);
+    }
+    let v = prices::fetch_virtual_price(rumi_3pool).await?;
+    CYCLE_VP_CACHE.with(|c| c.set(Some(v)));
+    Ok(v)
 }
 
 // ─── Dry Run Result ───
@@ -98,9 +137,13 @@ pub async fn run_arb_cycle() {
 
     struct Guard;
     impl Drop for Guard {
-        fn drop(&mut self) { CYCLE_IN_PROGRESS.with(|c| c.set(false)); }
+        fn drop(&mut self) {
+            CYCLE_IN_PROGRESS.with(|c| c.set(false));
+            clear_cycle_cache();
+        }
     }
     let _guard = Guard;
+    clear_cycle_cache();
 
     // Resolve ICPSwap token ordering on first cycle (Strategy A: ckUSDC/ICP pool)
     let resolved = state::read_state(|s| s.token_ordering_resolved);
@@ -381,11 +424,11 @@ pub async fn run_arb_cycle() {
         candid::Principal::from_text("cngnf-vqaaa-aaaar-qag4q-cai").unwrap()
     };
     let (bal_icp, bal_icusd, bal_ckusdt) = futures::future::join3(
-        fetch_balance(config.icp_ledger),
+        fetch_balance_cached(config.icp_ledger),
         async {
-            if has_icusd_pool { fetch_balance(config.icusd_ledger).await } else { Ok(0) }
+            if has_icusd_pool { fetch_balance_cached(config.icusd_ledger).await } else { Ok(0) }
         },
-        fetch_balance(ckusdt_fallback_ledger),
+        fetch_balance_cached(ckusdt_fallback_ledger),
     ).await;
 
     // Build snapshot from dry run data
@@ -661,11 +704,13 @@ pub async fn compute_optimal_trade(
 ) -> Result<DryRunResult, String> {
     let mut result = DryRunResult::default();
 
-    // Fetch prices
-    let prices = prices::fetch_all_prices(
+    // Fetch prices (use cycle-cached VP if available)
+    let cached_vp = fetch_virtual_price_cached(config.rumi_3pool).await.ok();
+    let prices = prices::fetch_all_prices_with_vp(
         config.rumi_amm, RUMI_POOL_ID, config.icp_ledger,
         config.rumi_3pool, target.pool, target.icp_is_token0,
         target.stable_decimals,
+        cached_vp,
     ).await?;
 
     result.rumi_price_usd = prices.rumi_price_usd_6dec();
@@ -683,10 +728,10 @@ pub async fn compute_optimal_trade(
         ((i - r) * 10_000 / r.min(i)) as i32
     };
 
-    // Fetch balances (always, even when spread is below minimum — needed for snapshot)
+    // Fetch balances (cycle-cached; used by snapshot even when spread is below minimum)
     let (bal_3usd, bal_stable) = futures::future::join(
-        fetch_balance(config.three_usd_ledger),
-        fetch_balance(target.stable_ledger),
+        fetch_balance_cached(config.three_usd_ledger),
+        fetch_balance_cached(target.stable_ledger),
     ).await;
     result.balance_3usd = bal_3usd.unwrap_or(0);
     result.balance_ckusdc = bal_stable.unwrap_or(0);
@@ -937,10 +982,10 @@ pub async fn compute_optimal_cross_pool_trade(
 ) -> Result<DryRunResult, String> {
     let mut result = DryRunResult::default();
 
-    // Fetch VP if either side is 3USD (uses_vp)
+    // Fetch VP if either side is 3USD (uses_vp) — cycle-cached
     let needs_vp = target.buy_side.uses_vp || target.sell_side.uses_vp;
     let vp = if needs_vp {
-        prices::fetch_virtual_price(config.rumi_3pool).await.unwrap_or(1_000_000_000_000_000_000)
+        fetch_virtual_price_cached(config.rumi_3pool).await.unwrap_or(1_000_000_000_000_000_000)
     } else { 0 };
     result.virtual_price = vp;
 
@@ -965,10 +1010,10 @@ pub async fn compute_optimal_cross_pool_trade(
         ((s - b) * 10_000 / b.min(s)) as i32
     };
 
-    // Fetch balances (always — needed for snapshot)
+    // Fetch balances (cycle-cached — needed for snapshot)
     let (bal_buy, bal_sell) = futures::future::join(
-        fetch_balance(target.buy_side.stable_ledger),
-        fetch_balance(target.sell_side.stable_ledger),
+        fetch_balance_cached(target.buy_side.stable_ledger),
+        fetch_balance_cached(target.sell_side.stable_ledger),
     ).await;
     result.balance_3usd = bal_buy.unwrap_or(0);    // reusing for buy-side balance
     result.balance_ckusdc = bal_sell.unwrap_or(0);  // reusing for sell-side balance
@@ -1205,8 +1250,9 @@ async fn find_optimal_cross_pool_reverse(
 // ─── Execute Trades ───
 
 async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarget, dry_run: &DryRunResult) {
+    let slippage = slippage_bps_clamped(config);
     let trade_amount_3usd = dry_run.optimal_input_amount;
-    let min_icp_out = dry_run.expected_icp_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
 
     // 3USD cost in 6-dec USD
     let cost_usd_6dec = (trade_amount_3usd as u128 * dry_run.virtual_price as u128 / VP_PRECISION / 100) as i64;
@@ -1254,7 +1300,7 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
     // Rumi reports gross output, but the bot receives (icp_out - ICP_FEE) after the
     // output transfer fee, and ICPSwap's depositFromAndSwap costs another ICP_FEE.
     let usable_icp = icp_out.saturating_sub(ICP_FEE * 2);
-    let min_stable_out = dry_run.expected_output_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_stable_out = dry_run.expected_output_amount * (10_000 - slippage) / 10_000;
 
     state::log_activity("swap", &format!(
         "[{}] Leg 2: ICPSwap swap {} ICP → {} (min: {}, raw from Rumi: {})", target.strategy_tag, usable_icp, target.stable_token_name, min_stable_out, icp_out
@@ -1299,8 +1345,9 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
 }
 
 async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarget, dry_run: &DryRunResult) {
+    let slippage = slippage_bps_clamped(config);
     let trade_amount_stable = dry_run.optimal_input_amount;
-    let min_icp_out = dry_run.expected_icp_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
 
     state::log_activity("swap", &format!(
         "[{}] Leg 1: ICPSwap swap {} {} → ICP (min: {})", target.strategy_tag, trade_amount_stable, target.stable_token_name, min_icp_out
@@ -1345,7 +1392,7 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
     // ICPSwap reports gross output, but the bot receives (icp_out - ICP_FEE) after the
     // output transfer fee, and Rumi's transfer_from costs another ICP_FEE.
     let usable_icp = icp_out.saturating_sub(ICP_FEE * 2);
-    let min_3usd_out = dry_run.expected_output_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_3usd_out = dry_run.expected_output_amount * (10_000 - slippage) / 10_000;
 
     state::log_activity("swap", &format!(
         "[{}] Leg 2: Rumi swap {} ICP → 3USD (min: {}, raw from ICPSwap: {})", target.strategy_tag, usable_icp, min_3usd_out, icp_out
@@ -1398,8 +1445,9 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
 
 /// Cross-pool forward: buy_side stable → ICP → sell_side stable
 async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunResult) {
+    let slippage = state::read_state(|s| slippage_bps_clamped(&s.config));
     let trade_amount = dry_run.optimal_input_amount;
-    let min_icp_out = dry_run.expected_icp_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
     let buy_vp = if target.buy_side.uses_vp { dry_run.virtual_price } else { 0 };
     let sell_vp = if target.sell_side.uses_vp { dry_run.virtual_price } else { 0 };
     let cost_usd_6dec = stable_to_usd_6dec_vp(trade_amount, target.buy_side.stable_decimals, buy_vp);
@@ -1449,7 +1497,7 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
     };
 
     let usable_icp = icp_out.saturating_sub(ICP_FEE * 2);
-    let min_out = dry_run.expected_output_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_out = dry_run.expected_output_amount * (10_000 - slippage) / 10_000;
 
     state::log_activity("swap", &format!(
         "[{}] Leg 2: {} swap {} ICP → {} (min: {})",
@@ -1502,8 +1550,9 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
 
 /// Cross-pool reverse: sell_side stable → ICP → buy_side stable
 async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunResult) {
+    let slippage = state::read_state(|s| slippage_bps_clamped(&s.config));
     let trade_amount = dry_run.optimal_input_amount;
-    let min_icp_out = dry_run.expected_icp_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
     let buy_vp = if target.buy_side.uses_vp { dry_run.virtual_price } else { 0 };
     let sell_vp = if target.sell_side.uses_vp { dry_run.virtual_price } else { 0 };
 
@@ -1552,7 +1601,7 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
     };
 
     let usable_icp = icp_out.saturating_sub(ICP_FEE * 2);
-    let min_out = dry_run.expected_output_amount * (10_000 - SLIPPAGE_BPS) / 10_000;
+    let min_out = dry_run.expected_output_amount * (10_000 - slippage) / 10_000;
 
     state::log_activity("swap", &format!(
         "[{}] Leg 2: {} swap {} ICP → {} (min: {})",
@@ -1613,6 +1662,7 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     if volume::is_volume_cycle_in_progress() {
         return Ok(());
     }
+    let slippage = slippage_bps_clamped(config);
 
     let icp_balance = fetch_balance(config.icp_ledger).await?;
 
@@ -1704,33 +1754,33 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
         // quote_per_icp is 3USD (8 dec) per ICP. Scale to drain_amount.
         let out_3usd = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
         let usd_out = (out_3usd as u128 * vp_val as u128 / VP_PRECISION / 100) as u64;
-        let min_out = (out_3usd as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        let min_out = (out_3usd as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         candidates.push(Candidate { pool: state::Pool::RumiThreeUsd, usd_out, min_out });
     }
     if let Ok(quote_per_icp) = icpswap_ck_res {
         // quote is ckUSDC (6 dec) per ICP; ckUSDC ≈ USD.
         let out_ck = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
-        let min_out = (out_ck as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        let min_out = (out_ck as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         candidates.push(Candidate { pool: state::Pool::IcpswapCkusdc, usd_out: out_ck, min_out });
     }
     if let Ok(quote_per_icp) = icpswap_icusd_res {
         // icUSD is 8 dec ≈ $1. Scale then divide by 100 for 6-dec USD.
         let out_icusd = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
         let usd_out = (out_icusd / 100) as u64;
-        let min_out = (out_icusd as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        let min_out = (out_icusd as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         candidates.push(Candidate { pool: state::Pool::IcpswapIcusd, usd_out, min_out });
     }
     if let Ok(quote_per_icp) = icpswap_ckusdt_res {
         // ckUSDT is 6 dec ≈ $1.
         let out_ck = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
-        let min_out = (out_ck as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        let min_out = (out_ck as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         candidates.push(Candidate { pool: state::Pool::IcpswapCkusdt, usd_out: out_ck, min_out });
     }
     if let Ok(quote_per_icp) = icpswap_3usd_res {
         // 3USD is 8 dec, worth VP/1e18 USD each. Scale to drain_amount then VP-adjust for USD.
         let out_3usd = (quote_per_icp as u128 * drain_amount as u128 / 100_000_000) as u64;
         let usd_out = (out_3usd as u128 * vp_val as u128 / VP_PRECISION / 100) as u64;
-        let min_out = (out_3usd as u128 * (10_000 - SLIPPAGE_BPS) as u128 / 10_000) as u64;
+        let min_out = (out_3usd as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         candidates.push(Candidate { pool: state::Pool::IcpswapThreeUsd, usd_out, min_out });
     }
 

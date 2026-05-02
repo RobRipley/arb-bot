@@ -15,6 +15,14 @@ fn default_principal() -> Principal {
     Principal::anonymous()
 }
 
+fn default_slippage_bps() -> u64 {
+    50
+}
+
+fn default_arb_interval_secs() -> u64 {
+    600
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -59,6 +67,16 @@ pub struct BotConfig {
     /// Whether ICP is token0 in the ICPSwap 3USD/ICP pool
     #[serde(default)]
     pub icpswap_3usd_icp_is_token0: bool,
+    /// Leg 1 and Leg 2 slippage tolerance in basis points. Runtime-tunable via
+    /// `set_slippage_bps`. Widening this reduces Leg 2 failure rate (and the
+    /// downstream drain losses) at the cost of accepting worse fills. Default 50.
+    #[serde(default = "default_slippage_bps")]
+    pub slippage_bps: u64,
+    /// Interval between arb cycles in seconds. Runtime-tunable via
+    /// `set_arb_interval_secs`. Higher values reduce cycle burn at the cost
+    /// of slower reaction to arbitrage opportunities. Default 600.
+    #[serde(default = "default_arb_interval_secs")]
+    pub arb_interval_secs: u64,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -151,7 +169,7 @@ pub struct CycleSnapshot {
 }
 
 /// Identifies a specific liquidity pool for drain routing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Pool {
     RumiThreeUsd,
     IcpswapCkusdc,
@@ -289,9 +307,42 @@ pub struct VolumePoolStatus {
     pub state: VolumePoolState,
 }
 
+/// Live health snapshot for a single volume pool. `skip_reason` is the first
+/// gate that would prevent the pool from trading in the next cycle, or None if
+/// it would proceed. Populated by `get_bot_health` — mirrors the gate order in
+/// `volume::run_volume_cycle`.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct PoolHealth {
+    pub pool: VolumePool,
+    pub enabled: bool,
+    pub trade_size_usd: u64,
+    pub daily_cost_usd: i64,
+    pub daily_cost_cap_usd: u64,
+    pub last_price: Option<u64>,
+    pub current_price: Option<u64>,
+    pub next_direction: VolumeDirection,
+    pub input_balance: Option<u64>,
+    pub min_required_native: Option<u64>,
+    pub skip_reason: Option<String>,
+}
+
+/// Admin diagnostic: single call revealing every gate that could block the
+/// arb drain or volume cycle. Returned by `get_bot_health`.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct BotHealthReport {
+    pub arb_cycle_in_progress: bool,
+    pub volume_cycle_in_progress: bool,
+    pub volume_paused: bool,
+    pub arb_paused: bool,
+    pub volume_stranded_icp: u64,
+    pub pending_exit: Option<PendingExit>,
+    pub slippage_bps: u64,
+    pub pools: Vec<PoolHealth>,
+}
+
 /// Records the intended exit pool after a successful Leg 1, so the drain
 /// can prefer it (and avoid draining back into the entry pool).
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct PendingExit {
     pub entry_pool: Pool,
     pub intended_exit_pool: Pool,
@@ -371,6 +422,8 @@ impl Default for BotState {
                 icpswap_ckusdt_icp_is_token0: false,
                 icpswap_3usd_pool: Principal::anonymous(),
                 icpswap_3usd_icp_is_token0: false,
+                slippage_bps: 50,
+                arb_interval_secs: 600,
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,

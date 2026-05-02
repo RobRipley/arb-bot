@@ -128,8 +128,17 @@
       display: inline-block;
       background: var(--text-muted);
     }
-    .status-dot.running { background: var(--profit); }
+    .status-dot.running {
+      background: var(--profit);
+      box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.5);
+      animation: status-pulse 2.2s infinite;
+    }
     .status-dot.paused { background: var(--warning); }
+    @keyframes status-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.45); }
+      70% { box-shadow: 0 0 0 6px rgba(0, 212, 170, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0); }
+    }
     .sidebar-principal {
       font-family: var(--font-data);
       font-size: 11px;
@@ -500,6 +509,323 @@
       gap: var(--sp-3);
     }
 
+    /* ═══════════════════ HEALTH VIEW ═══════════════════ */
+
+    .card-subtitle {
+      font-size: 12px;
+      color: var(--text-tertiary);
+      margin: 0 0 var(--sp-4) 0;
+      line-height: 1.5;
+      max-width: 640px;
+    }
+
+    /* Command deck */
+    .health-deck {
+      background: linear-gradient(135deg, var(--surface-1) 0%, var(--surface-2) 100%);
+      position: relative;
+      overflow: hidden;
+    }
+    .health-deck::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 600px 200px at top right, rgba(0, 212, 170, 0.06), transparent 60%);
+      pointer-events: none;
+    }
+    .deck-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      position: relative;
+    }
+    .deck-stat {
+      background: var(--surface-1);
+      padding: var(--sp-4) var(--sp-5);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+    }
+    .deck-stat-label {
+      font-family: var(--font-data);
+      font-size: 10px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+    }
+    .deck-stat-value {
+      font-family: var(--font-data);
+      font-size: 20px;
+      font-weight: 500;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: var(--sp-2);
+      letter-spacing: -0.01em;
+    }
+
+    /* Pulse dot — live-system heartbeat */
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+      position: relative;
+    }
+    .pulse-dot.live {
+      background: var(--accent);
+      box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.5);
+      animation: pulse-teal 1.6s infinite;
+    }
+    .pulse-dot.paused {
+      background: var(--warning);
+    }
+    .pulse-dot.busy {
+      background: var(--info);
+      box-shadow: 0 0 0 0 rgba(91, 138, 240, 0.5);
+      animation: pulse-blue 1.2s infinite;
+    }
+    @keyframes pulse-teal {
+      0% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0.5); }
+      70% { box-shadow: 0 0 0 10px rgba(0, 212, 170, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 212, 170, 0); }
+    }
+    @keyframes pulse-blue {
+      0% { box-shadow: 0 0 0 0 rgba(91, 138, 240, 0.5); }
+      70% { box-shadow: 0 0 0 10px rgba(91, 138, 240, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(91, 138, 240, 0); }
+    }
+
+    /* Warning card */
+    .warning-card {
+      border-color: rgba(240, 178, 50, 0.3) !important;
+      background: linear-gradient(90deg, rgba(240, 178, 50, 0.04), var(--surface-1) 30%);
+      padding: 0 !important;
+      display: flex;
+      overflow: hidden;
+    }
+    .warning-rail {
+      width: 4px;
+      background: var(--warning);
+      flex-shrink: 0;
+    }
+    .warning-body {
+      padding: var(--sp-5);
+      flex: 1;
+    }
+    .warning-header {
+      display: flex;
+      align-items: center;
+      gap: var(--sp-3);
+      font-family: var(--font-data);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--warning);
+      letter-spacing: 0.04em;
+      margin-bottom: var(--sp-3);
+    }
+    .warning-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
+      background: var(--warning);
+      color: #0c0e14;
+      border-radius: 50%;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .pending-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: var(--sp-4);
+    }
+    .pending-grid > div {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .pending-label {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-tertiary);
+      font-family: var(--font-data);
+    }
+    .pending-val {
+      font-family: var(--font-data);
+      font-size: 14px;
+      color: var(--text-primary);
+    }
+
+    /* Gate cards */
+    .gate-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: var(--sp-4);
+    }
+    .gate-placeholder {
+      grid-column: 1 / -1;
+      padding: var(--sp-8);
+      text-align: center;
+      color: var(--text-tertiary);
+      font-family: var(--font-data);
+      font-size: 12px;
+    }
+    .gate-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface-input);
+      padding: var(--sp-4) var(--sp-5);
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.15s, transform 0.15s;
+    }
+    .gate-card:hover {
+      border-color: var(--border-emphasis);
+    }
+    .gate-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--text-muted);
+    }
+    .gate-card.gate-ready::before { background: var(--accent); }
+    .gate-card.gate-blocked::before { background: var(--warning); }
+    .gate-card.gate-disabled::before { background: var(--text-muted); }
+
+    .gate-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: var(--sp-3);
+    }
+    .gate-title {
+      font-family: var(--font-ui);
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    .gate-status {
+      font-family: var(--font-data);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+    .gate-status.ready {
+      color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .gate-status.blocked {
+      color: var(--warning);
+      background: rgba(240, 178, 50, 0.12);
+    }
+    .gate-status.disabled {
+      color: var(--text-tertiary);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .gate-reason {
+      font-family: var(--font-data);
+      font-size: 12px;
+      color: var(--warning);
+      background: rgba(240, 178, 50, 0.06);
+      border-left: 2px solid var(--warning);
+      padding: 8px 10px;
+      margin-bottom: var(--sp-3);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .gate-facts {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: var(--sp-2) var(--sp-4);
+      font-family: var(--font-data);
+      font-size: 12px;
+    }
+    .gate-fact {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--sp-2);
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .gate-fact:last-child,
+    .gate-fact:nth-last-child(2) {
+      border-bottom: none;
+    }
+    .gate-fact-k {
+      color: var(--text-tertiary);
+      font-size: 11px;
+    }
+    .gate-fact-v {
+      color: var(--text-primary);
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Slippage control */
+    .slip-control {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-4);
+    }
+    .slip-presets {
+      display: flex;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+    .slip-preset {
+      font-family: var(--font-data);
+      font-size: 12px;
+      padding: 6px 12px;
+      background: var(--surface-input);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .slip-preset:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .slip-preset.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .slip-inline {
+      display: flex;
+      align-items: stretch;
+      gap: var(--sp-2);
+      max-width: 360px;
+    }
+    .slip-inline input {
+      flex: 1;
+      font-family: var(--font-data);
+    }
+    .slip-suffix {
+      display: flex;
+      align-items: center;
+      padding: 0 var(--sp-3);
+      font-family: var(--font-data);
+      font-size: 12px;
+      color: var(--text-tertiary);
+      background: var(--surface-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+
     /* ── Responsive ── */
     @media (max-width: 900px) {
       body {
@@ -534,6 +860,9 @@
       #chart-container { height: 350px !important; }
       .hero-strip-content { flex-direction: column; gap: var(--sp-4); }
       .hero-right { flex-direction: row; gap: var(--sp-6); }
+      .deck-grid { grid-template-columns: repeat(2, 1fr); }
+      .pending-grid { grid-template-columns: repeat(2, 1fr); }
+      .gate-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -545,6 +874,7 @@
         <a class="nav-item active" data-view="overview">Overview</a>
         <a class="nav-item" data-view="charts">Charts</a>
         <a class="nav-item" data-view="trades">Trades</a>
+        <a class="nav-item" data-view="health" id="nav-health" style="display:none">Health</a>
         <a class="nav-item" data-view="admin" id="nav-admin" style="display:none">Admin</a>
         <a class="nav-item" data-view="volume" id="nav-volume" style="display:none">Volume Bot</a>
       </nav>
@@ -574,8 +904,8 @@
             <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
           </div>
           <div class="hero-right">
-            <div class="hero-stat"><span class="stat-label">Arb Profit</span><span class="stat-value" id="hero-arb-profit"><span class="skeleton skeleton-text"></span></span></div>
-            <div class="hero-stat"><span class="stat-label">Recovered ICP</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">Fees Paid</span><span class="stat-value" id="hero-fees"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label">Drain Recovery</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
           </div>
@@ -908,6 +1238,88 @@
         </div>
       </div>
     </section>
+
+    <!-- ═════════════════ HEALTH VIEW ═════════════════ -->
+    <section class="view" id="view-health">
+      <!-- Command deck: top-level state at a glance -->
+      <div class="card health-deck">
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+          <span>BOT HEALTH</span>
+          <button class="btn btn-sm btn-ghost" onclick="loadHealth(this)" id="health-refresh-btn">↻ Refresh</button>
+        </div>
+        <div class="deck-grid">
+          <div class="deck-stat">
+            <div class="deck-stat-label">Arb Engine</div>
+            <div class="deck-stat-value" id="deck-arb">
+              <span class="pulse-dot" id="deck-arb-dot"></span>
+              <span id="deck-arb-text">—</span>
+            </div>
+          </div>
+          <div class="deck-stat">
+            <div class="deck-stat-label">Volume Engine</div>
+            <div class="deck-stat-value" id="deck-vol">
+              <span class="pulse-dot" id="deck-vol-dot"></span>
+              <span id="deck-vol-text">—</span>
+            </div>
+          </div>
+          <div class="deck-stat">
+            <div class="deck-stat-label">Stranded ICP</div>
+            <div class="deck-stat-value" id="deck-stranded">—</div>
+          </div>
+          <div class="deck-stat">
+            <div class="deck-stat-label">Slippage Tolerance</div>
+            <div class="deck-stat-value" id="deck-slip">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending exit warning (only when present) -->
+      <div class="card warning-card" id="pending-exit-card" style="display:none">
+        <div class="warning-rail"></div>
+        <div class="warning-body">
+          <div class="warning-header">
+            <span class="warning-icon">!</span>
+            <span>PENDING EXIT — Leg 2 held open</span>
+          </div>
+          <div class="pending-grid">
+            <div><span class="pending-label">Entry Pool</span><span class="pending-val" id="pending-entry">—</span></div>
+            <div><span class="pending-label">Intended Exit</span><span class="pending-val" id="pending-exit">—</span></div>
+            <div><span class="pending-label">Stranded</span><span class="pending-val" id="pending-icp">—</span></div>
+            <div><span class="pending-label">Age</span><span class="pending-val" id="pending-age">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-pool gate cards -->
+      <div class="card">
+        <div class="card-header">VOLUME POOL GATES</div>
+        <p class="card-subtitle">Each card shows the first gate that would block this pool in the next cycle. If <span style="color:var(--accent)">READY</span>, the pool will trade.</p>
+        <div class="gate-grid" id="gate-grid">
+          <div class="gate-placeholder">Click Refresh to load bot health.</div>
+        </div>
+      </div>
+
+      <!-- Slippage control -->
+      <div class="card">
+        <div class="card-header">SLIPPAGE TOLERANCE</div>
+        <p class="card-subtitle">Applied to both arb Leg 2 and the drain. Raise during volatile markets so trades don't fail on min-out. Default 50 bps (0.5%).</p>
+        <div class="slip-control">
+          <div class="slip-presets">
+            <button class="slip-preset" data-bps="25" onclick="setSlipPreset(25)">25 bps</button>
+            <button class="slip-preset" data-bps="50" onclick="setSlipPreset(50)">50 bps</button>
+            <button class="slip-preset" data-bps="100" onclick="setSlipPreset(100)">100 bps</button>
+            <button class="slip-preset" data-bps="200" onclick="setSlipPreset(200)">200 bps</button>
+            <button class="slip-preset" data-bps="500" onclick="setSlipPreset(500)">500 bps</button>
+          </div>
+          <div class="slip-inline">
+            <input type="number" id="slip-input" placeholder="50" min="0" max="10000" step="1">
+            <span class="slip-suffix">bps</span>
+            <button class="btn btn-primary" onclick="saveSlippage(this)">Apply</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="view" id="view-admin">
   <div class="admin-grid">
 
@@ -941,6 +1353,11 @@
         <div>
           <label>Min Profit (USD, 0 = disabled)</label>
           <input type="number" id="cfg-min-profit" placeholder="0" step="0.01">
+        </div>
+        <div>
+          <label>Arb Cycle Interval (seconds)</label>
+          <input type="number" id="cfg-arb-interval" placeholder="600" min="30" max="86400" step="1">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">How often the arb cycle runs. Higher = fewer cycles burned, slower reaction. Min 30s, max 86400s (1 day).</div>
         </div>
         <button class="btn btn-primary btn-block" onclick="saveConfig(this)">Save Configuration</button>
       </div>
@@ -1168,7 +1585,7 @@
       <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
         <button class="btn" id="vol-pause-btn" onclick="doAction(this, () => authenticatedActor.pause_volume(), 'Volume paused')" style="background:#e06b9f;color:#fff;border-color:#e06b9f">Pause</button>
         <button class="btn" id="vol-resume-btn" onclick="doAction(this, () => authenticatedActor.resume_volume(), 'Volume resumed')" style="background:#34d399;color:#0c0e14;border-color:#34d399;font-weight:600">Resume</button>
-        <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_cycle(), 'Volume cycle triggered')">Run Cycle</button>
+        <button class="btn" onclick="runVolumeCycleWithReport(this)">Run Cycle</button>
         <button class="btn" onclick="doAction(this, () => authenticatedActor.trigger_volume_rebalance(), 'Rebalance triggered')">Rebalance</button>
       </div>
     </div>
@@ -1324,9 +1741,9 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64 });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
-    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64 });
+    const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
     const TradeLeg = IDL.Record({ timestamp: IDL.Nat64, leg_type: LegType, dex: IDL.Text, sold_token: IDL.Text, sold_amount: IDL.Nat64, bought_token: IDL.Text, bought_amount: IDL.Nat64, sold_usd_value: IDL.Int64, bought_usd_value: IDL.Int64, fees_usd: IDL.Int64 });
     const ErrorRecord = IDL.Record({ timestamp: IDL.Nat64, message: IDL.Text });
@@ -1352,6 +1769,42 @@
       const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null });
       const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null });
       const VolumeTradeType = I.Variant({ PingPong: I.Null, Rebalance: I.Null });
+      const Pool = I.Variant({
+        RumiThreeUsd: I.Null,
+        IcpswapCkusdc: I.Null,
+        IcpswapIcusd: I.Null,
+        IcpswapCkusdt: I.Null,
+        IcpswapThreeUsd: I.Null,
+      });
+      const PendingExit = I.Record({
+        entry_pool: Pool,
+        intended_exit_pool: Pool,
+        timestamp: I.Nat64,
+        icp_amount: I.Nat64,
+      });
+      const PoolHealth = I.Record({
+        pool: VolumePool,
+        enabled: I.Bool,
+        trade_size_usd: I.Nat64,
+        daily_cost_usd: I.Int64,
+        daily_cost_cap_usd: I.Nat64,
+        last_price: I.Opt(I.Nat64),
+        current_price: I.Opt(I.Nat64),
+        next_direction: VolumeDirection,
+        input_balance: I.Opt(I.Nat64),
+        min_required_native: I.Opt(I.Nat64),
+        skip_reason: I.Opt(I.Text),
+      });
+      const BotHealthReport = I.Record({
+        arb_cycle_in_progress: I.Bool,
+        volume_cycle_in_progress: I.Bool,
+        volume_paused: I.Bool,
+        arb_paused: I.Bool,
+        volume_stranded_icp: I.Nat64,
+        pending_exit: I.Opt(PendingExit),
+        slippage_bps: I.Nat64,
+        pools: I.Vec(PoolHealth),
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -1365,6 +1818,7 @@
         trade_count: I.Nat64,
         total_volume_usd: I.Nat64,
         total_cost_usd: I.Int64,
+        daily_cost_usd: I.Int64,
       });
       const VolumePoolStatus = I.Record({
         config: VolumePoolConfig,
@@ -1424,19 +1878,24 @@
         pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
         pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
         pool_quote_redeem: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
+        pool_exchange: I.Func([I.Nat8, I.Nat8, I.Nat64, I.Nat64], [], []),
+        pool_quote_exchange: I.Func([I.Nat8, I.Nat8, I.Nat64], [PoolQuoteResult], []),
         rumi_quote: I.Func([I.Principal, I.Nat64], [PoolQuoteResult], []),
         rumi_manual_swap: I.Func([I.Principal, I.Nat64, I.Nat64], [], []),
         get_volume_stats: I.Func([], [VolumeStats], ['query']),
         get_volume_trades: I.Func([I.Nat64, I.Nat64], [I.Vec(VolumeTradeLeg)], ['query']),
-        set_volume_config: I.Func([VolumePool, VolumePoolConfig], [], []),
+        set_volume_config: I.Func([VolumePool, VolumePoolConfig], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_volume_global: I.Func([I.Nat64, I.Nat64], [], []),
         pause_volume: I.Func([], [], []),
         resume_volume: I.Func([], [], []),
-        fund_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
-        withdraw_volume_subaccount: I.Func([I.Principal, I.Nat64], [], []),
-        trigger_volume_cycle: I.Func([], [], []),
+        fund_volume_subaccount: I.Func([I.Principal, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        withdraw_volume_subaccount: I.Func([I.Principal, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        trigger_volume_cycle: I.Func([], [I.Text], []),
         trigger_volume_rebalance: I.Func([], [], []),
         volume_swap: I.Func([I.Bool, I.Nat64, I.Nat64], [], []),
+        set_slippage_bps: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_arb_interval_secs: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        get_bot_health: I.Func([], [BotHealthReport], []),
       });
     };
 
@@ -1595,6 +2054,7 @@
         if (isAdmin) {
           document.getElementById('nav-admin').style.display = '';
           document.getElementById('nav-volume').style.display = '';
+          document.getElementById('nav-health').style.display = '';
           showToast('Logged in as admin', 'success');
           if (currentConfig) loadMyBalances(currentConfig);
           swapTokenChanged();
@@ -1618,10 +2078,11 @@
       btn.disabled = false;
       document.getElementById('nav-admin').style.display = 'none';
       document.getElementById('nav-volume').style.display = 'none';
-      // Switch away from admin/volume view if active
-      const adminNav = document.querySelector('.nav-item[data-view="admin"]');
-      const volumeNav = document.querySelector('.nav-item[data-view="volume"]');
-      if ((adminNav && adminNav.classList.contains('active')) || (volumeNav && volumeNav.classList.contains('active'))) {
+      document.getElementById('nav-health').style.display = 'none';
+      // Switch away from admin/volume/health view if active
+      const activeNav = document.querySelector('.nav-item.active');
+      const adminOnlyViews = new Set(['admin', 'volume', 'health']);
+      if (activeNav && adminOnlyViews.has(activeNav.dataset.view)) {
         switchView('overview');
       }
       showToast('Logged out', 'success');
@@ -1653,6 +2114,9 @@
         loadVolumeData();
         volSwapUpdateRoute();
         volSwapUpdateBalances();
+      }
+      if (name === 'health') {
+        loadHealth();
       }
     }
     window.switchView = switchView;
@@ -1748,18 +2212,17 @@
       try {
         const s = await anonymousActor.get_summary();
         const pnl = bi(s.net_pnl_usd);
-        const recovered = bi(s.unpaired_drain_usd || 0);
-        const arbProfit = pnl - recovered;
+        const fees = bi(s.total_fees_usd || 0);
+        const drainOut = bi(s.unpaired_drain_usd || 0);
         const el = document.getElementById('hero-pnl');
         el.textContent = fmt$(pnl);
         el.className = 'hero-number ' + (pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : '');
 
-        const arbEl = document.getElementById('hero-arb-profit');
-        arbEl.textContent = fmt$(arbProfit);
-        arbEl.className = 'stat-value ' + (arbProfit > 0 ? 'positive' : arbProfit < 0 ? 'negative' : '');
+        const feesEl = document.getElementById('hero-fees');
+        feesEl.textContent = fmt$(fees);
 
         const recEl = document.getElementById('hero-recovered');
-        recEl.textContent = fmt$(recovered);
+        recEl.textContent = fmt$(drainOut);
 
         document.getElementById('hero-trades').textContent = `${bi(s.leg1_count) + bi(s.leg2_count)} legs`;
         document.getElementById('hero-volume').textContent = fmt$(s.total_usd_in);
@@ -1894,15 +2357,15 @@
         const volSub = Array.from({length: 31}, () => 0).concat([1]);
         const volAccount = { owner: botPrincipal, subaccount: [volSub] };
 
-        // NOTE: 3USD ledger (fohh4-yyaaa-aaaap-qtkpa-cai) ignores subaccount in balance_of —
-        // it always returns the owner's total regardless of subaccount. So we skip it here
-        // and show N/A to avoid displaying misleading data.
-        const [bIcp, bIcusd] = await Promise.all([
+        // 3USD ledger ignores subaccounts — query default account instead (shared with arb bot)
+        const botAccount = { owner: botPrincipal, subaccount: [] };
+        const [bIcp, bIcusd, b3usd] = await Promise.all([
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(volAccount)),
+          createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(botAccount)),
         ]);
 
-        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = 'N/A';
+        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = fmtTok(b3usd, 8) + '*';
         document.getElementById('vol-bal-icp').textContent = fIcp;
         document.getElementById('vol-bal-icusd').textContent = fIcusd;
         document.getElementById('vol-bal-3usd').textContent = f3usd;
@@ -1912,7 +2375,8 @@
         const icpUsd = prices.icpswap || 0;
         const icpVal = (bi(bIcp) / 1e8) * icpUsd;
         const icusdVal = bi(bIcusd) / 1e8;
-        const total = icpVal + icusdVal;
+        const threeusdVal = bi(b3usd) / 1e8;
+        const total = icpVal + icusdVal + threeusdVal;
         const fTotal = total > 0 ? '$' + total.toFixed(2) : '--';
         document.getElementById('vol-bal-total').textContent = fTotal;
 
@@ -2178,7 +2642,7 @@
           const catColors = {
             trade: 'var(--accent)', swap: 'var(--info)', error: 'var(--loss)',
             admin: '#bc8cff', withdraw: 'var(--warning)', pool_deposit: '#58d68d',
-            pool_redeem: '#f0b27a', approval: 'var(--text-secondary)',
+            pool_redeem: '#f0b27a', pool_exchange: '#85c1e9', approval: 'var(--text-secondary)',
             arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)'
           };
           list.innerHTML = [...filtered].reverse().map(e => {
@@ -2271,6 +2735,7 @@
           if (isAdmin) {
             document.getElementById('nav-admin').style.display = '';
             document.getElementById('nav-volume').style.display = '';
+            document.getElementById('nav-health').style.display = '';
             swapTokenChanged();
             swapUpdateBalances();
           }
@@ -2643,25 +3108,35 @@
       const minSpread = parseInt(document.getElementById('cfg-min-spread').value);
       const maxTradeRaw = parseFloat(document.getElementById('cfg-max-trade').value);
       const minProfitRaw = parseFloat(document.getElementById('cfg-min-profit').value);
+      const arbIntervalRaw = parseInt(document.getElementById('cfg-arb-interval').value);
 
-      if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw)) {
+      if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)) {
         showToast('Enter at least one value to update', 'error');
         return;
       }
 
       btnLoading(btn, 'Saving...');
       try {
-        const cfg = await anonymousActor.get_config();
-        if (!isNaN(minSpread)) cfg.min_spread_bps = minSpread;
-        if (!isNaN(maxTradeRaw)) cfg.max_trade_size_usd = BigInt(Math.round(maxTradeRaw * 1e6));
-        if (!isNaN(minProfitRaw)) cfg.min_profit_usd = BigInt(Math.round(minProfitRaw * 1e6));
-        await authenticatedActor.set_config(cfg);
+        // Update set_config-managed fields first
+        if (!isNaN(minSpread) || !isNaN(maxTradeRaw) || !isNaN(minProfitRaw)) {
+          const cfg = await anonymousActor.get_config();
+          if (!isNaN(minSpread)) cfg.min_spread_bps = minSpread;
+          if (!isNaN(maxTradeRaw)) cfg.max_trade_size_usd = BigInt(Math.round(maxTradeRaw * 1e6));
+          if (!isNaN(minProfitRaw)) cfg.min_profit_usd = BigInt(Math.round(minProfitRaw * 1e6));
+          await authenticatedActor.set_config(cfg);
+        }
+        // Arb interval uses dedicated setter so the timer is reset immediately
+        if (!isNaN(arbIntervalRaw)) {
+          const res = await authenticatedActor.set_arb_interval_secs(BigInt(arbIntervalRaw));
+          if (res.Err) throw new Error(res.Err);
+        }
         showToast('Config updated', 'success');
         await loadConfig();
         displayConfig();
         document.getElementById('cfg-min-spread').value = '';
         document.getElementById('cfg-max-trade').value = '';
         document.getElementById('cfg-min-profit').value = '';
+        document.getElementById('cfg-arb-interval').value = '';
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
@@ -2744,8 +3219,10 @@
       document.getElementById('config-display').innerHTML = `
         <div class="stat-row"><span class="stat-label">Owner</span><span class="stat-value">${short(c.owner)}</span></div>
         <div class="stat-row"><span class="stat-label">Min Spread</span><span class="stat-value">${bi(c.min_spread_bps)} bps</span></div>
+        <div class="stat-row"><span class="stat-label">Slippage Tolerance</span><span class="stat-value">${bi(c.slippage_bps)} bps</span></div>
         <div class="stat-row"><span class="stat-label">Max Trade Size</span><span class="stat-value">${fmt$(c.max_trade_size_usd)}</span></div>
         <div class="stat-row"><span class="stat-label">Min Profit</span><span class="stat-value">$${(bi(c.min_profit_usd) / 1e6).toFixed(2)} USD</span></div>
+        <div class="stat-row"><span class="stat-label">Arb Cycle Interval</span><span class="stat-value">${bi(c.arb_interval_secs)} s</span></div>
         <div class="stat-row"><span class="stat-label">Rumi AMM</span><span class="stat-value">${short(c.rumi_amm)}</span></div>
         <div class="stat-row"><span class="stat-label">ICPSwap Pool</span><span class="stat-value">${short(c.icpswap_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
@@ -2777,7 +3254,7 @@
       if (from === '3usd' && isToStable) return { type: '3pool_redeem', label: 'via 3pool redeem' };
       if (from === 'icp' && isToStable) return { type: 'rumi+3pool', label: 'via Rumi AMM + 3pool' };
       if (isFromStable && to === 'icp') return { type: '3pool+rumi', label: 'via 3pool + Rumi AMM' };
-      if (isFromStable && isToStable) return { type: 'invalid', label: 'Use 3USD as intermediate' };
+      if (isFromStable && isToStable) return { type: '3pool_swap', label: 'via 3pool swap' };
       return { type: 'invalid', label: 'Unsupported pair' };
     }
 
@@ -2875,6 +3352,11 @@
           const coin = POOL_COIN_MAP[toKey];
           const res = await authenticatedActor.pool_quote_redeem(coin.index, raw);
           outRaw = res.estimated_output;
+        } else if (route.type === '3pool_swap') {
+          const coinIn = POOL_COIN_MAP[fromKey];
+          const coinOut = POOL_COIN_MAP[toKey];
+          const res = await authenticatedActor.pool_quote_exchange(coinIn.index, coinOut.index, raw);
+          outRaw = res.estimated_output;
         } else if (route.type === 'rumi+3pool') {
           // ICP -> 3USD via Rumi, then 3USD -> stable via 3pool
           const icpLedger = TOKEN_INFO.icp.getLedger();
@@ -2926,6 +3408,10 @@
         } else if (route.type === '3pool_redeem') {
           const coin = POOL_COIN_MAP[toKey];
           await authenticatedActor.pool_redeem(coin.index, raw, minOut);
+        } else if (route.type === '3pool_swap') {
+          const coinIn = POOL_COIN_MAP[fromKey];
+          const coinOut = POOL_COIN_MAP[toKey];
+          await authenticatedActor.pool_exchange(coinIn.index, coinOut.index, raw, minOut);
         } else if (route.type === 'rumi+3pool') {
           // ICP -> 3USD via Rumi
           const icpLedger = TOKEN_INFO.icp.getLedger();
@@ -2963,7 +3449,7 @@
       icusd: () => Principal.fromText('t6bor-paaaa-aaaap-qrd5q-cai'),
       '3usd': () => currentConfig?.three_usd_ledger,
     };
-    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 18 };
+    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 8 };
 
     function volVariantKey(v) { return Object.keys(v)[0]; }
     function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
@@ -3051,11 +3537,240 @@
         daily_cost_cap_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-daily-cap').value || '0') * 1_000_000)),
       };
       try {
-        await authenticatedActor.set_volume_config(pool, config);
+        const res = await authenticatedActor.set_volume_config(pool, config);
+        if (res && 'Err' in res) {
+          showToast('Rejected: ' + res.Err, 'error');
+          return;
+        }
         showToast('Config saved for ' + poolKey, 'success');
         loadVolumeData();
       } catch (e) {
         showToast('Failed to save config: ' + e.message, 'error');
+      }
+    };
+
+    // ═══════ Health View ═══════
+
+    const POOL_LABELS = {
+      IcusdIcp: 'icUSD / ICP',
+      ThreeUsdIcp: '3USD / ICP',
+      RumiThreeUsd: 'Rumi 3USD',
+      IcpswapCkusdc: 'ICPSwap ckUSDC',
+      IcpswapIcusd: 'ICPSwap icUSD',
+      IcpswapCkusdt: 'ICPSwap ckUSDT',
+      IcpswapThreeUsd: 'ICPSwap 3USD',
+    };
+    const DIRECTION_LABELS = { BuyIcp: 'Buy ICP', SellIcp: 'Sell ICP' };
+
+    function variantKey(v) {
+      if (!v || typeof v !== 'object') return '—';
+      return Object.keys(v)[0] || '—';
+    }
+    function poolLabel(v) { return POOL_LABELS[variantKey(v)] || variantKey(v); }
+    function directionLabel(v) { return DIRECTION_LABELS[variantKey(v)] || variantKey(v); }
+
+    function optVal(o) {
+      if (!Array.isArray(o) || o.length === 0) return null;
+      return o[0];
+    }
+
+    function fmtUsd6(n) {
+      const v = Number(n) / 1e6;
+      return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function fmtSignedUsd6(n) {
+      const v = Number(n) / 1e6;
+      const sign = v >= 0 ? '+' : '';
+      return sign + v.toFixed(2);
+    }
+    function fmtElapsed(nsNow, tsNs) {
+      const secs = Number((nsNow - tsNs) / 1_000_000_000n);
+      if (secs < 60) return secs + 's';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      return h + 'h ' + m + 'm';
+    }
+
+    window.loadHealth = async function(btn) {
+      if (!requireAuth()) return;
+      if (btn) btnLoading(btn, '↻ Loading');
+      try {
+        const report = await authenticatedActor.get_bot_health();
+        renderHealth(report);
+      } catch (e) {
+        showToast('Health load failed: ' + e.message, 'error');
+      } finally {
+        if (btn) btnDone(btn);
+      }
+    };
+
+    function renderHealth(report) {
+      // Deck — arb engine
+      const arbDot = document.getElementById('deck-arb-dot');
+      const arbTxt = document.getElementById('deck-arb-text');
+      if (report.arb_paused) {
+        arbDot.className = 'pulse-dot paused';
+        arbTxt.textContent = 'Paused';
+      } else if (report.arb_cycle_in_progress) {
+        arbDot.className = 'pulse-dot busy';
+        arbTxt.textContent = 'Cycling';
+      } else {
+        arbDot.className = 'pulse-dot live';
+        arbTxt.textContent = 'Idle';
+      }
+
+      // Deck — volume engine
+      const volDot = document.getElementById('deck-vol-dot');
+      const volTxt = document.getElementById('deck-vol-text');
+      if (report.volume_paused) {
+        volDot.className = 'pulse-dot paused';
+        volTxt.textContent = 'Paused';
+      } else if (report.volume_cycle_in_progress) {
+        volDot.className = 'pulse-dot busy';
+        volTxt.textContent = 'Cycling';
+      } else {
+        volDot.className = 'pulse-dot live';
+        volTxt.textContent = 'Idle';
+      }
+
+      // Stranded ICP
+      document.getElementById('deck-stranded').textContent =
+        report.volume_stranded_icp > 0n
+          ? (Number(report.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP'
+          : '0.0000 ICP';
+
+      // Slippage
+      document.getElementById('deck-slip').textContent = report.slippage_bps + ' bps';
+      const slipInput = document.getElementById('slip-input');
+      if (slipInput) slipInput.placeholder = String(report.slippage_bps);
+      document.querySelectorAll('.slip-preset').forEach(b => {
+        b.classList.toggle('active', Number(b.dataset.bps) === Number(report.slippage_bps));
+      });
+
+      // Pending exit
+      const pending = optVal(report.pending_exit);
+      const card = document.getElementById('pending-exit-card');
+      if (pending) {
+        card.style.display = '';
+        document.getElementById('pending-entry').textContent = poolLabel(pending.entry_pool);
+        document.getElementById('pending-exit').textContent = poolLabel(pending.intended_exit_pool);
+        document.getElementById('pending-icp').textContent =
+          (Number(pending.icp_amount) / 1e8).toFixed(4) + ' ICP';
+        const nowNs = BigInt(Date.now()) * 1_000_000n;
+        document.getElementById('pending-age').textContent = fmtElapsed(nowNs, pending.timestamp);
+      } else {
+        card.style.display = 'none';
+      }
+
+      // Gate cards
+      const grid = document.getElementById('gate-grid');
+      grid.innerHTML = '';
+      if (!report.pools || report.pools.length === 0) {
+        grid.innerHTML = '<div class="gate-placeholder">No pools reported.</div>';
+        return;
+      }
+      for (const p of report.pools) {
+        const reason = optVal(p.skip_reason);
+        const statusClass = !p.enabled ? 'disabled' : (reason ? 'blocked' : 'ready');
+        const statusText = !p.enabled ? 'Disabled' : (reason ? 'Blocked' : 'Ready');
+        const cardClass = !p.enabled ? 'gate-disabled' : (reason ? 'gate-blocked' : 'gate-ready');
+
+        const lastPrice = optVal(p.last_price);
+        const currentPrice = optVal(p.current_price);
+        const balance = optVal(p.input_balance);
+        const minRequired = optVal(p.min_required_native);
+
+        // Token decimals: icUSD = 8, 3USD = 8, ICP = 8. All 8 decimals.
+        // For BuyIcp the input is the pool's stable token; for SellIcp the input is ICP.
+        const direction = variantKey(p.next_direction);
+        const poolKey = variantKey(p.pool);
+        const inputDec = 8; // all tokens are 8 decimals
+        const inputSym = direction === 'BuyIcp'
+          ? (poolKey === 'IcusdIcp' ? 'icUSD' : '3USD')
+          : 'ICP';
+
+        const facts = [
+          ['Next Direction', directionLabel(p.next_direction)],
+          ['Trade Size', '$' + fmtUsd6(p.trade_size_usd)],
+          ['Daily Cost', '$' + fmtSignedUsd6(p.daily_cost_usd) + ' / $' + fmtUsd6(p.daily_cost_cap_usd)],
+          ['Input Balance', balance != null
+            ? (Number(balance) / Math.pow(10, inputDec)).toFixed(inputDec === 8 ? 4 : 2) + ' ' + inputSym
+            : '—'],
+          ['Min Required', minRequired != null
+            ? (Number(minRequired) / Math.pow(10, inputDec)).toFixed(inputDec === 8 ? 4 : 2) + ' ' + inputSym
+            : '—'],
+          ['Last Price', lastPrice != null ? (Number(lastPrice) / 1e6).toFixed(6) : '—'],
+          ['Current Price', currentPrice != null ? (Number(currentPrice) / 1e6).toFixed(6) : '—'],
+        ];
+
+        const el = document.createElement('div');
+        el.className = 'gate-card ' + cardClass;
+        el.innerHTML = `
+          <div class="gate-head">
+            <div class="gate-title">${poolLabel(p.pool)}</div>
+            <span class="gate-status ${statusClass}">${statusText}</span>
+          </div>
+          ${reason ? `<div class="gate-reason">${escapeHtml(reason)}</div>` : ''}
+          <div class="gate-facts">
+            ${facts.map(([k, v]) => `<div class="gate-fact"><span class="gate-fact-k">${k}</span><span class="gate-fact-v">${v}</span></div>`).join('')}
+          </div>
+        `;
+        grid.appendChild(el);
+      }
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    window.setSlipPreset = function(bps) {
+      const input = document.getElementById('slip-input');
+      input.value = String(bps);
+      document.querySelectorAll('.slip-preset').forEach(b => {
+        b.classList.toggle('active', Number(b.dataset.bps) === bps);
+      });
+    };
+
+    window.saveSlippage = async function(btn) {
+      if (!requireAuth()) return;
+      const v = document.getElementById('slip-input').value.trim();
+      const bps = parseInt(v, 10);
+      if (!Number.isFinite(bps) || bps < 0 || bps > 10000) {
+        showToast('Enter 0–10000 bps', 'error');
+        return;
+      }
+      btnLoading(btn);
+      try {
+        const res = await authenticatedActor.set_slippage_bps(BigInt(bps));
+        if (res && 'Err' in res) {
+          showToast('Rejected: ' + res.Err, 'error');
+          return;
+        }
+        showToast('Slippage set to ' + bps + ' bps', 'success');
+        loadHealth();
+        loadConfig();
+      } catch (e) {
+        showToast('Failed: ' + e.message, 'error');
+      } finally {
+        btnDone(btn);
+      }
+    };
+
+    // Run Cycle with outcome report
+    window.runVolumeCycleWithReport = async function(btn) {
+      if (!requireAuth()) return;
+      btnLoading(btn);
+      try {
+        const report = await authenticatedActor.trigger_volume_cycle();
+        showToast(report || 'Cycle complete', 'success');
+        loadAll();
+      } catch (e) {
+        showToast('Cycle failed: ' + e.message, 'error');
+      } finally {
+        btnDone(btn);
       }
     };
 
@@ -3083,7 +3798,8 @@
       if (!ledger) { showToast('Token ledger not available', 'error'); return; }
       try {
         btn.disabled = true;
-        await authenticatedActor.fund_volume_subaccount(ledger, raw);
+        const res = await authenticatedActor.fund_volume_subaccount(ledger, raw);
+        if (res && 'Err' in res) { showToast('Fund rejected: ' + res.Err, 'error'); return; }
         showToast('Funded ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
         document.getElementById('vol-fund-amount').value = '';
       } catch (e) {
@@ -3102,7 +3818,8 @@
       if (!ledger) { showToast('Token ledger not available', 'error'); return; }
       try {
         btn.disabled = true;
-        await authenticatedActor.withdraw_volume_subaccount(ledger, raw);
+        const res = await authenticatedActor.withdraw_volume_subaccount(ledger, raw);
+        if (res && 'Err' in res) { showToast('Withdraw rejected: ' + res.Err, 'error'); return; }
         showToast('Withdrew ' + amtStr + ' ' + tokenKey.toUpperCase(), 'success');
         document.getElementById('vol-fund-amount').value = '';
       } catch (e) {

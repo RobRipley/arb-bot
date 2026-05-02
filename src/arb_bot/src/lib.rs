@@ -1,5 +1,7 @@
 use candid::{CandidType, Deserialize, Nat, Principal};
 use ic_cdk_macros::{init, post_upgrade, pre_upgrade, query, update};
+use ic_cdk_timers::TimerId;
+use std::cell::RefCell;
 
 mod state;
 mod prices;
@@ -8,6 +10,11 @@ mod arb;
 mod volume;
 
 use state::{BotConfig, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord, CycleSnapshot};
+
+thread_local! {
+    static ARB_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
+    static VOLUME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
+}
 
 #[derive(CandidType, Deserialize)]
 pub struct InitArgs {
@@ -39,18 +46,31 @@ fn post_upgrade() {
 }
 
 fn setup_timer() {
-    ic_cdk_timers::set_timer_interval(
-        std::time::Duration::from_secs(180),
+    ARB_TIMER_ID.with(|id| {
+        if let Some(prev) = id.borrow_mut().take() {
+            ic_cdk_timers::clear_timer(prev);
+        }
+    });
+    let interval = state::read_state(|s| s.config.arb_interval_secs).max(1);
+    let new_id = ic_cdk_timers::set_timer_interval(
+        std::time::Duration::from_secs(interval),
         || ic_cdk::spawn(arb::run_arb_cycle()),
     );
+    ARB_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
 }
 
 fn setup_volume_timer() {
-    let interval = state::read_state(|s| s.volume.interval_secs);
-    ic_cdk_timers::set_timer_interval(
+    VOLUME_TIMER_ID.with(|id| {
+        if let Some(prev) = id.borrow_mut().take() {
+            ic_cdk_timers::clear_timer(prev);
+        }
+    });
+    let interval = state::read_state(|s| s.volume.interval_secs).max(1);
+    let new_id = ic_cdk_timers::set_timer_interval(
         std::time::Duration::from_secs(interval),
-        || ic_cdk::spawn(volume::run_volume_cycle()),
+        || ic_cdk::spawn(async { let _ = volume::run_volume_cycle().await; }),
     );
+    VOLUME_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
 }
 
 fn require_admin() {
@@ -126,7 +146,8 @@ pub struct TradeSummary {
     pub drain_count: u64,
     pub rumi_count: u64,
     pub icpswap_count: u64,
-    pub unpaired_drain_usd: i64,     // 6-dec: revenue from drains with no matching Leg1
+    pub unpaired_drain_usd: i64,     // 6-dec: bought_usd from drains with no matching Leg1
+    pub unpaired_drain_sold_usd: i64, // 6-dec: sold_usd (ICP cost) from those same drains
 }
 
 #[query]
@@ -148,6 +169,7 @@ fn get_summary() -> TradeSummary {
         rumi_count: 0,
         icpswap_count: 0,
         unpaired_drain_usd: 0,
+        unpaired_drain_sold_usd: 0,
     };
     let mut has_pending_leg1 = false;
     state::fold_trade_legs((), |_, leg| {
@@ -169,6 +191,7 @@ fn get_summary() -> TradeSummary {
                     // This drain has no matching Leg1 — it's recovering
                     // pre-existing ICP, not arb profit
                     summary.unpaired_drain_usd += leg.bought_usd_value;
+                    summary.unpaired_drain_sold_usd += leg.sold_usd_value;
                 }
             }
         }
@@ -505,6 +528,50 @@ async fn pool_quote_redeem(coin_index: u8, lp_amount: u64) -> PoolQuote {
     }
 }
 
+/// Swap one stablecoin for another directly via the 3pool.
+/// coin_in/coin_out: 0=icUSD, 1=ckUSDT, 2=ckUSDC
+#[update]
+async fn pool_exchange(coin_in: u8, coin_out: u8, amount_in: u64, min_out: u64) {
+    require_admin();
+    if coin_in > 2 || coin_out > 2 || coin_in == coin_out {
+        ic_cdk::trap("Invalid coin indices (0-2, must differ)");
+    }
+
+    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
+    let name_in = match coin_in { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
+    let name_out = match coin_out { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
+    match swaps::pool_swap(rumi_3pool, coin_in, coin_out, amount_in, min_out).await {
+        Ok(amount_out) => {
+            state::log_activity("pool_exchange", &format!(
+                "{} {} → {} {} (min: {}) by {}",
+                amount_in, name_in, amount_out, name_out, min_out, ic_cdk::api::caller()
+            ));
+        }
+        Err(e) => {
+            state::log_activity("pool_exchange", &format!(
+                "FAILED: {} {} → {} (min: {}) — {} by {}",
+                amount_in, name_in, name_out, min_out, e, ic_cdk::api::caller()
+            ));
+            ic_cdk::trap(&format!("Pool exchange failed: {}", e));
+        }
+    }
+}
+
+/// Quote a direct stablecoin-to-stablecoin swap via the 3pool.
+#[update]
+async fn pool_quote_exchange(coin_in: u8, coin_out: u8, amount_in: u64) -> PoolQuote {
+    require_admin();
+    if coin_in > 2 || coin_out > 2 || coin_in == coin_out {
+        ic_cdk::trap("Invalid coin indices (0-2, must differ)");
+    }
+
+    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
+    match swaps::pool_calc_swap(rumi_3pool, coin_in, coin_out, amount_in).await {
+        Ok(amount_out) => PoolQuote { estimated_output: amount_out },
+        Err(e) => ic_cdk::trap(&format!("Quote failed: {}", e)),
+    }
+}
+
 // ─── Rumi AMM Manual Swap ───
 
 const RUMI_POOL_ID: &str = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
@@ -586,8 +653,7 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
         let icusd_out = match swaps::pool_remove_one_coin(rumi_3pool, three_usd_out, 0, min_out).await {
             Ok(out) => out,
             Err(e) => {
-                // 3USD is stuck in main — transfer it back to volume sub
-                if three_usd_out > 0 { let _ = swaps::transfer_to_subaccount(three_usd_ledger, three_usd_out, swaps::VOLUME_SUBACCOUNT).await; }
+                // 3USD stays in default account (no subaccount support)
                 ic_cdk::trap(&format!("Volume swap: 3pool redeem failed: {}", e));
             }
         };
@@ -626,8 +692,7 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
         let icp_out = match swaps::rumi_swap(rumi_amm, RUMI_POOL_ID, three_usd_ledger, three_usd_out, min_out).await {
             Ok(out) => out,
             Err(e) => {
-                // 3USD stuck in main — try to transfer back
-                if three_usd_out > 0 { let _ = swaps::transfer_to_subaccount(three_usd_ledger, three_usd_out, swaps::VOLUME_SUBACCOUNT).await; }
+                // 3USD stays in default account (no subaccount support)
                 ic_cdk::trap(&format!("Volume swap: Rumi 3USD→ICP failed: {:?}", e));
             }
         };
@@ -1256,14 +1321,27 @@ fn build_cross_j(config: &BotConfig) -> arb::CrossPoolTarget {
 // ─── Volume Bot Admin ───
 
 #[update]
-async fn set_volume_config(pool: state::VolumePool, new_config: state::VolumePoolConfig) {
+async fn set_volume_config(pool: state::VolumePool, new_config: state::VolumePoolConfig) -> Result<(), String> {
     require_admin();
+    if new_config.trade_size_usd == 0 {
+        return Err("trade_size_usd must be >= 1".to_string());
+    }
+    if new_config.trade_variance_pct > 50 {
+        return Err("trade_variance_pct must be <= 50".to_string());
+    }
+    if new_config.trade_size_usd > new_config.daily_cost_cap_usd && new_config.daily_cost_cap_usd > 0 {
+        state::log_activity("volume", &format!(
+            "warning: {:?} trade_size_usd ({}) > daily_cost_cap_usd ({})",
+            pool, new_config.trade_size_usd, new_config.daily_cost_cap_usd
+        ));
+    }
     state::mutate_state(|s| {
         match pool {
             state::VolumePool::IcusdIcp => s.volume.icusd_icp = new_config,
             state::VolumePool::ThreeUsdIcp => s.volume.three_usd_icp = new_config,
         }
     });
+    Ok(())
 }
 
 #[update]
@@ -1290,6 +1368,11 @@ fn resume_volume() {
 #[update]
 async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let three_usd = state::read_state(|s| s.config.three_usd_ledger);
+    if token_ledger == three_usd {
+        // 3USD ledger ignores subaccounts — funds are already in default account
+        return Ok(());
+    }
     swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
         .await
         .map(|_| ())
@@ -1299,6 +1382,11 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
 #[update]
 async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let three_usd = state::read_state(|s| s.config.three_usd_ledger);
+    if token_ledger == three_usd {
+        // 3USD ledger ignores subaccounts — funds are already in default account
+        return Ok(());
+    }
     swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
         .await
         .map(|_| ())
@@ -1306,9 +1394,151 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
 }
 
 #[update]
-async fn trigger_volume_cycle() {
+async fn trigger_volume_cycle() -> String {
     require_admin();
-    volume::run_volume_cycle().await;
+    let outcomes = volume::run_volume_cycle().await;
+    if outcomes.is_empty() {
+        "cycle ran, no outcomes".to_string()
+    } else {
+        outcomes.join("; ")
+    }
+}
+
+#[update]
+fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
+    require_admin();
+    if interval_secs < 30 {
+        return Err("interval_secs must be >= 30".to_string());
+    }
+    if interval_secs > 86_400 {
+        return Err("interval_secs must be <= 86400 (1 day)".to_string());
+    }
+    state::mutate_state(|s| { s.config.arb_interval_secs = interval_secs; });
+    setup_timer();
+    state::log_activity("admin", &format!("arb_interval_secs set to {}", interval_secs));
+    Ok(())
+}
+
+#[update]
+fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
+    require_admin();
+    if slippage_bps > 10_000 {
+        return Err("slippage_bps must be <= 10000 (100%)".to_string());
+    }
+    state::mutate_state(|s| { s.config.slippage_bps = slippage_bps; });
+    state::log_activity("admin", &format!("slippage_bps set to {}", slippage_bps));
+    Ok(())
+}
+
+#[update]
+async fn get_bot_health() -> state::BotHealthReport {
+    require_admin();
+
+    let (bot_config, volume_config, pending_exit, arb_paused, stranded) = state::read_state(|s| (
+        s.config.clone(),
+        s.volume.clone(),
+        s.pending_exit.clone(),
+        s.config.paused,
+        s.volume_stranded_icp,
+    ));
+
+    let arb_in_progress = arb::is_cycle_in_progress();
+    let volume_in_progress = volume::is_volume_cycle_in_progress();
+
+    let pools_to_check = [
+        state::VolumePool::IcusdIcp,
+        state::VolumePool::ThreeUsdIcp,
+    ];
+
+    let mut pool_reports: Vec<state::PoolHealth> = Vec::new();
+
+    for pool in pools_to_check {
+        let (pool_config, pool_state) = match &pool {
+            state::VolumePool::IcusdIcp => (volume_config.icusd_icp.clone(), volume_config.icusd_icp_state.clone()),
+            state::VolumePool::ThreeUsdIcp => (volume_config.three_usd_icp.clone(), volume_config.three_usd_icp_state.clone()),
+        };
+
+        let (icpswap_pool, icp_is_token0) = match &pool {
+            state::VolumePool::IcusdIcp => (bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0),
+            state::VolumePool::ThreeUsdIcp => (bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0),
+        };
+
+        let current_price = prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await.ok();
+
+        let input_token = match &pool_state.next_direction {
+            state::VolumeDirection::BuyIcp => match &pool {
+                state::VolumePool::IcusdIcp => bot_config.icusd_ledger,
+                state::VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
+            },
+            state::VolumeDirection::SellIcp => bot_config.icp_ledger,
+        };
+
+        // 3USD ledger ignores subaccounts — check default account
+        let input_balance = if input_token == bot_config.three_usd_ledger {
+            swaps::icrc1_balance_of_default(input_token).await.ok()
+        } else {
+            swaps::icrc1_balance_of_subaccount(input_token, swaps::VOLUME_SUBACCOUNT).await.ok()
+        };
+
+        let min_required_native: Option<u64> = match (&pool_state.next_direction, &pool, current_price) {
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp, _) => Some(pool_config.trade_size_usd * 100),
+            (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp, _) => Some(pool_config.trade_size_usd * 100), // 3USD is 8 decimals
+            (state::VolumeDirection::SellIcp, _, Some(p)) if p > 0 => {
+                let stable_native = match &pool {
+                    state::VolumePool::IcusdIcp => pool_config.trade_size_usd * 100,
+                    state::VolumePool::ThreeUsdIcp => pool_config.trade_size_usd * 100, // 3USD is 8 decimals
+                };
+                Some((stable_native as u128 * 100_000_000u128 / p as u128) as u64)
+            }
+            _ => None,
+        };
+
+        let skip_reason: Option<String> = if volume_config.volume_paused {
+            Some("volume_paused=true".to_string())
+        } else if !pool_config.enabled {
+            Some("pool disabled".to_string())
+        } else if pool_state.daily_cost_usd >= pool_config.daily_cost_cap_usd as i64 {
+            Some(format!("daily cost cap hit: {} >= {}", pool_state.daily_cost_usd, pool_config.daily_cost_cap_usd))
+        } else if current_price.is_none() {
+            Some("price fetch failed".to_string())
+        } else if input_balance.is_none() {
+            Some("balance fetch failed".to_string())
+        } else if min_required_native.is_none() {
+            Some("zero price (cannot compute min_native for SellIcp)".to_string())
+        } else if input_balance.unwrap() < min_required_native.unwrap() {
+            Some(format!(
+                "insufficient balance: {} < {} (need {:?} of {})",
+                input_balance.unwrap(), min_required_native.unwrap(), pool_state.next_direction, input_token
+            ))
+        } else {
+            None
+        };
+
+        pool_reports.push(state::PoolHealth {
+            pool: pool.clone(),
+            enabled: pool_config.enabled,
+            trade_size_usd: pool_config.trade_size_usd,
+            daily_cost_usd: pool_state.daily_cost_usd,
+            daily_cost_cap_usd: pool_config.daily_cost_cap_usd,
+            last_price: pool_state.last_price,
+            current_price,
+            next_direction: pool_state.next_direction.clone(),
+            input_balance,
+            min_required_native,
+            skip_reason,
+        });
+    }
+
+    state::BotHealthReport {
+        arb_cycle_in_progress: arb_in_progress,
+        volume_cycle_in_progress: volume_in_progress,
+        volume_paused: volume_config.volume_paused,
+        arb_paused,
+        volume_stranded_icp: stranded,
+        pending_exit,
+        slippage_bps: bot_config.slippage_bps,
+        pools: pool_reports,
+    }
 }
 
 #[update]

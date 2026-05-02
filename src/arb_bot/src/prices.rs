@@ -195,14 +195,41 @@ pub async fn fetch_all_prices(
     icpswap_zero_for_one: bool,
     icpswap_stable_decimals: u8,
 ) -> Result<PriceData, String> {
+    fetch_all_prices_with_vp(
+        rumi_amm, pool_id, icp_ledger, rumi_3pool,
+        icpswap_pool, icpswap_zero_for_one, icpswap_stable_decimals,
+        None,
+    ).await
+}
+
+/// Like `fetch_all_prices` but lets the caller pass a pre-fetched virtual
+/// price (e.g. from a per-cycle cache). When `cached_vp` is `Some`, the
+/// 3pool call is skipped entirely.
+pub async fn fetch_all_prices_with_vp(
+    rumi_amm: Principal,
+    pool_id: &str,
+    icp_ledger: Principal,
+    rumi_3pool: Principal,
+    icpswap_pool: Principal,
+    icpswap_zero_for_one: bool,
+    icpswap_stable_decimals: u8,
+    cached_vp: Option<u64>,
+) -> Result<PriceData, String> {
     let rumi_fut = fetch_rumi_price(rumi_amm, pool_id, icp_ledger);
-    let vp_fut = fetch_virtual_price(rumi_3pool);
     let icpswap_fut = fetch_icpswap_price(icpswap_pool, icpswap_zero_for_one);
-    let (rumi_result, vp_result, icpswap_result) =
-        futures::future::join3(rumi_fut, vp_fut, icpswap_fut).await;
+    let (rumi_result, icpswap_result, vp) = match cached_vp {
+        Some(vp) => {
+            let (r, i) = futures::future::join(rumi_fut, icpswap_fut).await;
+            (r, i, vp)
+        }
+        None => {
+            let (r, i, v) = futures::future::join3(rumi_fut, icpswap_fut, fetch_virtual_price(rumi_3pool)).await;
+            (r, i, v?)
+        }
+    };
     Ok(PriceData {
         rumi_icp_price_3usd_native: rumi_result?,
-        virtual_price: vp_result?,
+        virtual_price: vp,
         icpswap_icp_price_ckusdc_native: icpswap_result?,
         icpswap_stable_decimals,
     })

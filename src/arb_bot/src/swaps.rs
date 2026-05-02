@@ -156,6 +156,37 @@ pub async fn pool_calc_redeem(
     }
 }
 
+pub async fn pool_swap(
+    rumi_3pool: Principal,
+    coin_in: u8,
+    coin_out: u8,
+    amount_in: u64,
+    min_out: u64,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "swap", (coin_in, coin_out, Nat::from(amount_in), Nat::from(min_out))).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(amount_out),)) => Ok(nat_to_u64(&amount_out)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool swap error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool swap call failed ({:?}): {}", code, msg)),
+    }
+}
+
+pub async fn pool_calc_swap(
+    rumi_3pool: Principal,
+    coin_in: u8,
+    coin_out: u8,
+    amount_in: u64,
+) -> Result<u64, String> {
+    let result: Result<(prices::ThreePoolResult<Nat>,), _> =
+        ic_cdk::call(rumi_3pool, "calc_swap", (coin_in, coin_out, Nat::from(amount_in))).await;
+    match result {
+        Ok((prices::ThreePoolResult::Ok(amount_out),)) => Ok(nat_to_u64(&amount_out)),
+        Ok((prices::ThreePoolResult::Err(e),)) => Err(format!("3pool calc_swap error: {:?}", e)),
+        Err((code, msg)) => Err(format!("3pool calc_swap call failed ({:?}): {}", code, msg)),
+    }
+}
+
 pub async fn approve_infinite(
     token_ledger: Principal,
     spender: Principal,
@@ -250,6 +281,23 @@ pub async fn transfer_to_subaccount(
         Ok((Ok(block),)) => Ok(nat_to_u64(&block)),
         Ok((Err(e),)) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
         Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
+    }
+}
+
+/// Query ICRC-1 balance for the default (no subaccount) account
+pub async fn icrc1_balance_of_default(
+    token_ledger: Principal,
+) -> Result<u64, String> {
+    let account = Account {
+        owner: ic_cdk::id(),
+        subaccount: None,
+    };
+    let result: Result<(Nat,), _> = ic_cdk::call(
+        token_ledger, "icrc1_balance_of", (account,),
+    ).await;
+    match result {
+        Ok((balance,)) => Ok(nat_to_u64(&balance)),
+        Err((code, msg)) => Err(format!("Balance call ({:?}): {}", code, msg)),
     }
 }
 
