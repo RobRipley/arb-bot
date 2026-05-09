@@ -203,25 +203,6 @@ pub async fn run_arb_cycle() {
         }
     }
 
-    // Resolve ICPSwap token ordering for ICPSwap 3USD/ICP pool
-    let (three_usd_icpswap_resolved, has_3usd_icpswap_pool) = state::read_state(|s| {
-        (s.icpswap_3usd_token_ordering_resolved, s.config.icpswap_3usd_pool != Principal::anonymous())
-    });
-    if has_3usd_icpswap_pool && !three_usd_icpswap_resolved {
-        let (pool_3usd, icp_ledger) = state::read_state(|s| (s.config.icpswap_3usd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(pool_3usd, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_3usd_icp_is_token0 = icp_is_token0;
-                    s.icpswap_3usd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                log_error(&format!("Failed to resolve 3USD ICPSwap pool token ordering: {}. Retrying.", e));
-            }
-        }
-    }
-
     let config = state::read_state(|s| s.config.clone());
     if config.paused { return; }
 
@@ -352,69 +333,11 @@ pub async fn run_arb_cycle() {
         None
     };
 
-    // Strategy G: Rumi 3USD/ICP vs ICPSwap 3USD/ICP
-    let three_usd_icpswap_resolved = state::read_state(|s| s.icpswap_3usd_token_ordering_resolved);
-    let target_g = IcpswapTarget {
-        pool: config.icpswap_3usd_pool,
-        icp_is_token0: config.icpswap_3usd_icp_is_token0,
-        label: "ICPSwap-3USD",
-        strategy_tag: "G",
-        stable_token_name: "3USD",
-        stable_fee: 0, // 3USD has no transfer fee
-        stable_ledger: config.three_usd_ledger,
-        pool_enum: state::Pool::IcpswapThreeUsd,
-        stable_decimals: 8,
-        uses_vp: true,
-    };
-    let dry_run_g = if has_3usd_icpswap_pool && three_usd_icpswap_resolved {
-        match compute_optimal_trade(&config, &target_g).await {
-            Ok(dr) => Some(dr),
-            Err(e) => { log_error(&format!("Strategy G computation failed: {}", e)); None }
-        }
-    } else {
-        None
-    };
-
-    // Strategies H/I/J: ICPSwap 3USD/ICP cross-pool vs other ICPSwap pools
-    let three_usd_side = CrossPoolSide {
-        pool: config.icpswap_3usd_pool,
-        icp_is_token0: config.icpswap_3usd_icp_is_token0,
-        stable_token_name: "3USD",
-        stable_fee: 0,
-        stable_ledger: config.three_usd_ledger,
-        stable_decimals: 8,
-        pool_enum: state::Pool::IcpswapThreeUsd,
-        dex_label: "ICPSwap-3USD",
-        uses_vp: true,
-    };
-    let cross_h = CrossPoolTarget { strategy_tag: "H", buy_side: three_usd_side, sell_side: icusd_side };
-    let cross_i = CrossPoolTarget { strategy_tag: "I", buy_side: three_usd_side, sell_side: ckusdc_side };
-    let cross_j = CrossPoolTarget { strategy_tag: "J", buy_side: three_usd_side, sell_side: ckusdt_side };
-
-    let dry_run_h = if has_3usd_icpswap_pool && three_usd_icpswap_resolved && has_icusd_pool && icusd_resolved {
-        match compute_optimal_cross_pool_trade(&config, &cross_h).await {
-            Ok(dr) => Some(dr),
-            Err(e) => { log_error(&format!("Strategy H computation failed: {}", e)); None }
-        }
-    } else {
-        None
-    };
-    let dry_run_i = if has_3usd_icpswap_pool && three_usd_icpswap_resolved {
-        match compute_optimal_cross_pool_trade(&config, &cross_i).await {
-            Ok(dr) => Some(dr),
-            Err(e) => { log_error(&format!("Strategy I computation failed: {}", e)); None }
-        }
-    } else {
-        None
-    };
-    let dry_run_j = if has_3usd_icpswap_pool && three_usd_icpswap_resolved && has_ckusdt_pool && ckusdt_resolved {
-        match compute_optimal_cross_pool_trade(&config, &cross_j).await {
-            Ok(dr) => Some(dr),
-            Err(e) => { log_error(&format!("Strategy J computation failed: {}", e)); None }
-        }
-    } else {
-        None
-    };
+    // Strategies G/H/I/J (ICPSwap 3USD/ICP pool) are disabled.
+    let dry_run_g: Option<DryRunResult> = None;
+    let dry_run_h: Option<DryRunResult> = None;
+    let dry_run_i: Option<DryRunResult> = None;
+    let dry_run_j: Option<DryRunResult> = None;
 
     // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT) — dry runs already have 3USD/ckUSDC/ckUSDT.
     // Still need ICP and icUSD here; ckUSDT balance falls back to dry_run_c if available.
@@ -470,12 +393,8 @@ pub async fn run_arb_cycle() {
     let profit_c = dry_run_c.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_d = dry_run_d.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_f = dry_run_f.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
-    let profit_g = dry_run_g.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
-    let profit_h = dry_run_h.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
-    let profit_i = dry_run_i.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
-    let profit_j = dry_run_j.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
 
-    let all_profits = [profit_a, profit_b, profit_c, profit_d, profit_f, profit_g, profit_h, profit_i, profit_j];
+    let all_profits = [profit_a, profit_b, profit_c, profit_d, profit_f];
     if all_profits.iter().all(|&p| p <= 0) {
         // Nothing profitable
         let mut parts: Vec<String> = Vec::new();
@@ -484,10 +403,6 @@ pub async fn run_arb_cycle() {
         if let Some(c) = &dry_run_c { parts.push(format!("C: {}", c.message)); }
         if let Some(d) = &dry_run_d { parts.push(format!("D: {}", d.message)); }
         if let Some(f) = &dry_run_f { parts.push(format!("F: {}", f.message)); }
-        if let Some(g) = &dry_run_g { parts.push(format!("G: {}", g.message)); }
-        if let Some(h) = &dry_run_h { parts.push(format!("H: {}", h.message)); }
-        if let Some(i) = &dry_run_i { parts.push(format!("I: {}", i.message)); }
-        if let Some(j) = &dry_run_j { parts.push(format!("J: {}", j.message)); }
         let msg = if parts.is_empty() { "All strategies failed".to_string() } else { parts.join(" | ") };
         state::log_activity("arb_skip", &msg);
         state::append_snapshot(snapshot);
@@ -507,8 +422,7 @@ pub async fn run_arb_cycle() {
     // Dispatch to the strategy with the highest profit
     let profits = [
         ("A", profit_a), ("B", profit_b), ("C", profit_c),
-        ("D", profit_d), ("F", profit_f), ("G", profit_g),
-        ("H", profit_h), ("I", profit_i), ("J", profit_j),
+        ("D", profit_d), ("F", profit_f),
     ];
     let winner = profits.iter()
         .max_by_key(|(_, p)| *p)
@@ -563,44 +477,12 @@ pub async fn run_arb_cycle() {
                 Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_b, &dry_run).await,
             }
         }
-        "F" => {
+        _ => {
             let dry_run = dry_run_f.unwrap();
             log_start("F", &dry_run);
             match dry_run.direction.as_ref().unwrap() {
                 Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_f, &dry_run).await,
                 Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_f, &dry_run).await,
-            }
-        }
-        "G" => {
-            let dry_run = dry_run_g.unwrap();
-            log_start("G", &dry_run);
-            match dry_run.direction.as_ref().unwrap() {
-                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_g, &dry_run).await,
-                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_g, &dry_run).await,
-            }
-        }
-        "H" => {
-            let dry_run = dry_run_h.unwrap();
-            log_start("H", &dry_run);
-            match dry_run.direction.as_ref().unwrap() {
-                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_h, &dry_run).await,
-                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_h, &dry_run).await,
-            }
-        }
-        "I" => {
-            let dry_run = dry_run_i.unwrap();
-            log_start("I", &dry_run);
-            match dry_run.direction.as_ref().unwrap() {
-                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_i, &dry_run).await,
-                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_i, &dry_run).await,
-            }
-        }
-        _ => {
-            let dry_run = dry_run_j.unwrap();
-            log_start("J", &dry_run);
-            match dry_run.direction.as_ref().unwrap() {
-                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_j, &dry_run).await,
-                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_j, &dry_run).await,
             }
         }
     }
