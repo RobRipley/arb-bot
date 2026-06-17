@@ -292,6 +292,11 @@ service : (InitArgs) -> {
   withdraw: (principal, principal, nat64) -> ();
   backfill_trade_legs: (vec TradeLeg) -> ();
   manual_arb_cycle: () -> ();
+  execute_strategy_a: () -> ();
+  execute_strategy_b: () -> ();
+  execute_strategy_c: () -> ();
+  execute_strategy_d: () -> ();
+  execute_strategy_f: () -> ();
   dry_run_arb_cycle: () -> (DryRunResult);
   dry_run_strategy_b: () -> (DryRunResult);
   dry_run_strategy_c: () -> (DryRunResult);

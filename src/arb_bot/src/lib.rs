@@ -727,6 +727,41 @@ async fn manual_arb_cycle() {
 }
 
 #[update]
+async fn execute_strategy_a() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy A by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("A").await;
+}
+
+#[update]
+async fn execute_strategy_b() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy B by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("B").await;
+}
+
+#[update]
+async fn execute_strategy_c() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy C by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("C").await;
+}
+
+#[update]
+async fn execute_strategy_d() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy D by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("D").await;
+}
+
+#[update]
+async fn execute_strategy_f() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy F by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("F").await;
+}
+
+#[update]
 async fn dry_run_arb_cycle() -> arb::DryRunResult {
     require_admin();
 

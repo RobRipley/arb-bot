@@ -1378,6 +1378,14 @@
           <button class="btn btn-block" onclick="doDryRun(this, 'd')" style="flex:1">Strategy D</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'f')" style="flex:1">Strategy F</button>
         </div>
+        <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-1)">
+          <span style="font-size:11px;color:var(--text-tertiary);align-self:center;white-space:nowrap">Force Exec:</span>
+          <button class="btn btn-block" onclick="doForceArb(this, 'a')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">A</button>
+          <button class="btn btn-block" onclick="doForceArb(this, 'b')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">B</button>
+          <button class="btn btn-block" onclick="doForceArb(this, 'c')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">C</button>
+          <button class="btn btn-block" onclick="doForceArb(this, 'd')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">D</button>
+          <button class="btn btn-block" onclick="doForceArb(this, 'f')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">F</button>
+        </div>
         <div style="display:flex;gap:var(--sp-2)">
           <button class="btn btn-block" onclick="doDryRun(this, 'g')" style="flex:1">Strategy G</button>
           <button class="btn btn-block" onclick="doDryRun(this, 'h')" style="flex:1">Strategy H</button>
@@ -1864,6 +1872,11 @@
         resume: I.Func([], [], []),
         setup_approvals: I.Func([], [I.Text], []),
         manual_arb_cycle: I.Func([], [], []),
+        execute_strategy_a: I.Func([], [], []),
+        execute_strategy_b: I.Func([], [], []),
+        execute_strategy_c: I.Func([], [], []),
+        execute_strategy_d: I.Func([], [], []),
+        execute_strategy_f: I.Func([], [], []),
         dry_run_arb_cycle: I.Func([], [DryRunResult], []),
         dry_run_strategy_b: I.Func([], [DryRunResult], []),
         dry_run_strategy_c: I.Func([], [DryRunResult], []),
@@ -3033,6 +3046,20 @@
       html += '</div>';
       return html;
     }
+
+    window.doForceArb = async function(btn, strategy) {
+      if (!requireAuth()) return;
+      const fnMap = {
+        a: () => authenticatedActor.execute_strategy_a(),
+        b: () => authenticatedActor.execute_strategy_b(),
+        c: () => authenticatedActor.execute_strategy_c(),
+        d: () => authenticatedActor.execute_strategy_d(),
+        f: () => authenticatedActor.execute_strategy_f(),
+      };
+      const fn_ = fnMap[strategy];
+      if (!fn_) return;
+      doAction(btn, fn_, `Strategy ${strategy.toUpperCase()} execution complete`);
+    };
 
     window.doDryRun = async function(btn, strategy) {
       if (!requireAuth()) return;
