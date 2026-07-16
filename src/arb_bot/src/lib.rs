@@ -1981,3 +1981,21 @@ fn http_request(_req: HttpRequest) -> HttpResponse {
         body: DASHBOARD_HTML.as_bytes().to_vec(),
     }
 }
+
+// ─── Candid drift guard ───
+//
+// The canister's Candid interface is hand-maintained across three sources
+// (this Rust file, `arb_bot.did`, and the `dashboard.html` IDL block). A
+// mismatch produces a silent decode trap on mainnet that nothing catches at
+// build time. `candid::export_service!` generates a candid service from the
+// actual `#[update]`/`#[query]` signatures above; the integration test in
+// `tests/candid.rs` asserts it is structurally equal to the committed
+// `arb_bot.did`, catching Rust↔.did drift automatically. The dashboard IDL
+// (which export_service! cannot see) is covered by `scripts/check-candid.sh`.
+// Run everything with: `scripts/check-candid.sh`.
+//
+// Not compiled into the wasm canister — it is only referenced by the test.
+pub fn generated_candid_interface() -> String {
+    candid::export_service!();
+    __export_service()
+}
