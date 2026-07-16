@@ -177,31 +177,23 @@ pub async fn fetch_virtual_price_cached(rumi_3pool: Principal) -> Result<u64, St
 
 // ─── Strategy S reference pricing helpers ───
 //
-// Best-USD routing for Strategy S's band-edge legs (top-up and stranded-BOB
-// skim, added in a later task) and for its ICP↔USD reference mark. Candidate
-// set intentionally mirrors design decision #4: every configured non-PartyDEX
-// stable/ICP pool (ICPSwap ckUSDC/icUSD/ckUSDT, Rumi AMM VP-adjusted) — the
-// same venues `drain_residual_icp` considers, MINUS the ICPSwap 3USD/ICP pool
-// (a volume-bot-only venue redundant with Rumi AMM's 3USD/ICP quote). This
+// USD routing for Strategy S's band-edge legs (top-up and stranded-BOB skim)
+// and its ICP↔USD reference mark. Candidate set intentionally mirrors design
+// decision #4: every configured non-PartyDEX stable/ICP pool (ICPSwap
+// ckUSDC/icUSD/ckUSDT, Rumi AMM VP-adjusted) — the same venues
+// `drain_residual_icp` considers, MINUS the ICPSwap 3USD/ICP pool (a
+// volume-bot-only venue redundant with Rumi AMM's 3USD/ICP quote). This
 // deliberately duplicates `drain_residual_icp`'s per-pool decimal/VP math
-// (arb.rs, `drain_residual_icp`) rather than refactoring it, per the
-// behavior-preservation constraint on existing strategies A–R.
-//
-// Unused until the Strategy S evaluator/executor (next tasks) call them.
+// rather than refactoring it, per the behavior-preservation constraint on
+// existing strategies A–R.
 
-/// Best USD-per-ICP quote across every configured stable/ICP pool, selling
-/// `icp_amount_e8s`. Returns `None` if every candidate pool is unconfigured
-/// or every quote call failed.
-/// allow(dead_code): current callers only read `usd_per_icp_6dec`; `pool` and
-/// `usd_out_6dec` are part of the plan-specified shape.
-#[allow(dead_code)]
-pub struct StableQuote {
-    pub pool: state::Pool,
-    pub usd_out_6dec: u64,
-    pub usd_per_icp_6dec: u64,
-}
-
-async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<StableQuote> {
+/// Quote every configured stable/ICP candidate pool for selling
+/// `icp_amount_e8s`, returning (pool, usd_out_6dec) per successful quote.
+/// Shared by the max- and median-based consumers below.
+async fn stable_usd_per_icp_candidates(
+    config: &state::BotConfig,
+    icp_amount_e8s: u64,
+) -> Vec<(state::Pool, u64)> {
     let vp = fetch_virtual_price_cached(config.rumi_3pool).await
         .unwrap_or(1_000_000_000_000_000_000);
 
@@ -243,7 +235,25 @@ async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64)
         // ckUSDT is 6 dec ≈ $1.
         candidates.push((state::Pool::IcpswapCkusdt, stable_to_usd_6dec(out_ckusdt, 6).max(0) as u64));
     }
+    candidates
+}
 
+/// Best USD-per-ICP quote across every configured stable/ICP pool, selling
+/// `icp_amount_e8s`. Returns `None` if every candidate pool is unconfigured
+/// or every quote call failed.
+/// allow(dead_code): Strategy S's reference/marks moved to
+/// `median_stable_usd_per_icp` (manipulation hardening); this max-based
+/// variant remains available for best-execution routing.
+#[allow(dead_code)]
+pub struct StableQuote {
+    pub pool: state::Pool,
+    pub usd_out_6dec: u64,
+    pub usd_per_icp_6dec: u64,
+}
+
+#[allow(dead_code)]
+async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<StableQuote> {
+    let candidates = stable_usd_per_icp_candidates(config, icp_amount_e8s).await;
     candidates.into_iter().max_by_key(|(_, usd_out)| *usd_out).map(|(pool, usd_out_6dec)| {
         let usd_per_icp_6dec = if icp_amount_e8s > 0 {
             (usd_out_6dec as u128 * 100_000_000 / icp_amount_e8s as u128) as u64
@@ -251,6 +261,35 @@ async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64)
             0
         };
         StableQuote { pool, usd_out_6dec, usd_per_icp_6dec }
+    })
+}
+
+/// Median USD-per-ICP rate across the same candidate set (6-dec USD per
+/// 1 ICP). Strategy S uses this — not the max — for its reference price and
+/// USD marks: taking the best quote lets an attacker cheaply push a single
+/// thin pool (e.g. the ~$3.5K-TVL icUSD/ICP pool) to become the outlier max
+/// and skew the S reference; the median requires moving half the candidate
+/// set. Even count → mean of the middle two; single candidate → itself;
+/// degenerate zero-rate quotes are excluded.
+async fn median_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<u64> {
+    if icp_amount_e8s == 0 {
+        return None;
+    }
+    let mut rates: Vec<u64> = stable_usd_per_icp_candidates(config, icp_amount_e8s).await
+        .into_iter()
+        .map(|(_, usd_out_6dec)| (usd_out_6dec as u128 * 100_000_000 / icp_amount_e8s as u128) as u64)
+        .filter(|&r| r > 0)
+        .collect();
+    if rates.is_empty() {
+        return None;
+    }
+    rates.sort_unstable();
+    let n = rates.len();
+    Some(if n % 2 == 1 {
+        rates[n / 2]
+    } else {
+        // Mean of the middle two, without u64 overflow.
+        ((rates[n / 2 - 1] as u128 + rates[n / 2] as u128) / 2) as u64
     })
 }
 
@@ -519,12 +558,14 @@ pub async fn run_arb_cycle() {
         log_error(&format!("Drain residual ICP failed: {}", e));
     }
 
-    // Strategy S stranded-BOB recovery. Gated so an inert deploy (icUSD/BOB
-    // pool unconfigured, nothing pending) adds zero standing balance queries;
-    // once S can trade — or a pending BOB exit exists — it runs every cycle
-    // and is still a no-op while the BOB balance is dust.
+    // Strategy S stranded-BOB recovery. Recovery of the bot's OWN stranded
+    // BOB (pending_bob_exit set) must always run — but sweeping loose BOB
+    // while the strategy is disabled would move funds the bot didn't acquire,
+    // which is surprising in dry-run mode. So beyond a pending exit, the
+    // drain only runs once S is fully live (pool configured AND execution
+    // enabled). An inert deploy therefore adds zero standing balance queries.
     let bob_drain_relevant = state::read_state(|s| s.pending_bob_exit.is_some())
-        || config.icpswap_icusd_bob_pool != Principal::anonymous();
+        || (config.icpswap_icusd_bob_pool != Principal::anonymous() && config.bob_execution_enabled);
     if bob_drain_relevant {
         if let Err(e) = drain_residual_bob(&config).await {
             log_error(&format!("Drain residual BOB failed: {}", e));
@@ -2374,9 +2415,11 @@ fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
 async fn find_optimal_bob(config: &state::BotConfig, target: &BobTarget) -> Result<BobDryRun, String> {
     let mut result = BobDryRun::default();
 
-    // 1. Reference USD/ICP once, at a 1-ICP probe size.
-    let usd_per_icp = match best_stable_usd_per_icp(config, 100_000_000).await {
-        Some(q) if q.usd_per_icp_6dec > 0 => q.usd_per_icp_6dec,
+    // 1. Reference USD/ICP once, at a 1-ICP probe size. Median across the
+    //    candidate pools, not the max — see median_stable_usd_per_icp for
+    //    the manipulation rationale.
+    let usd_per_icp = match median_stable_usd_per_icp(config, 100_000_000).await {
+        Some(rate) if rate > 0 => rate,
         _ => {
             state::log_activity("dry_run", "[S] No stable/ICP reference quote available");
             return Ok(result);
@@ -3008,7 +3051,6 @@ async fn execute_topup_swap(
 /// Strategy S execution. Unlike A–R (which book ICP legs at zero USD), every
 /// ICP and BOB leg here is marked to the reference USD quote fetched at trade
 /// time (spec §3) so each S trade's net_profit_usd is complete on completion.
-/// Dead code until the cycle-wiring task dispatches it.
 async fn execute_bob(config: &state::BotConfig, target: &BobTarget, dry_run: &BobDryRun) {
     let slippage = slippage_bps_clamped(config);
     let usd_per_icp = dry_run.usd_per_icp_6dec;
@@ -3125,11 +3167,24 @@ async fn execute_bob(config: &state::BotConfig, target: &BobTarget, dry_run: &Bo
                 let shortfall_e8s = icp_needed
                     .saturating_add(config.icp_inventory_floor_e8s)
                     .saturating_sub(icp_balance);
+                // Inflate by the slippage tolerance: the swap's min_out is
+                // quote × (1 - slippage), so an exactly-to-the-floor quote
+                // could fill up to slippage_bps short of the floor. Sizing
+                // the quote up by the same factor keeps the worst-case fill
+                // on/above the floor. (slippage is clamped ≤ 10_000; the
+                // .max(1) guards the degenerate 100%-slippage divisor.)
+                let shortfall_e8s =
+                    (shortfall_e8s as u128 * 10_000 / (10_000 - slippage).max(1) as u128) as u64;
                 let shortfall_usd = mark_icp_usd(shortfall_e8s, usd_per_icp).max(0) as u64;
                 state::log_activity("swap", &format!(
                     "[S] TopUp: balance {} - needed {} would breach floor {}; buying ~{} e8s (~{} 6dec USD)",
                     icp_balance, icp_needed, config.icp_inventory_floor_e8s, shortfall_e8s, shortfall_usd
                 ));
+                // Deliberately best_stable_icp_per_usd (max output), NOT the
+                // median: this is a real execution leg, so best-execution is
+                // correct — the fill is bounded by its own fresh quote's
+                // slippage floor, unlike the reference/marks where an
+                // outlier max would skew accounting.
                 let quote = match best_stable_icp_per_usd(config, shortfall_usd).await {
                     Some(q) if q.icp_out_e8s > 0 => q,
                     _ => {
@@ -3542,7 +3597,13 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
 
     let bob_balance = fetch_balance(config.bob_ledger).await?;
     if bob_balance <= config.bob_ledger_fee * 10 {
-        return Ok(()); // dust — not worth a swap
+        // Dust — not worth a swap. If a pending exit is still marked, the BOB
+        // it tracked is gone (nothing left to recover): clear it so it can't
+        // hold the drain-relevance gate open forever.
+        if state::read_state(|s| s.pending_bob_exit.is_some()) {
+            state::mutate_state(|s| s.pending_bob_exit = None);
+        }
+        return Ok(());
     }
 
     let slippage = slippage_bps_clamped(config);
@@ -3557,10 +3618,9 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
         state::read_state(|s| s.pending_bob_exit.as_ref().map(|pe| pe.entry_pool));
 
     // USD/ICP reference for marking the BOB→ICP candidate (0 if unavailable —
-    // the icUSD candidate still carries a real mark in that case).
-    let usd_per_icp = best_stable_usd_per_icp(config, 100_000_000).await
-        .map(|q| q.usd_per_icp_6dec)
-        .unwrap_or(0);
+    // the icUSD candidate still carries a real mark in that case). Median,
+    // not max — same manipulation rationale as find_optimal_bob's reference.
+    let usd_per_icp = median_stable_usd_per_icp(config, 100_000_000).await.unwrap_or(0);
 
     // Quote both pools selling drain_amount BOB; usd_out is the marked value.
     struct BobCandidate {
@@ -3595,7 +3655,8 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
     }
 
     if candidates.is_empty() {
-        state::mutate_state(|s| s.pending_bob_exit = None);
+        // Keep pending_bob_exit — quotes may come back next cycle, and the
+        // entry-pool exclusion must survive for the retry (see below).
         return Err("No pool quotes available during BOB drain".to_string());
     }
 
@@ -3662,13 +3723,16 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
         }
     }
 
-    // Clear pending_bob_exit regardless: either we drained (success) or all
-    // non-entry pools failed (stale state cleared so next cycle can reassess).
-    state::mutate_state(|s| s.pending_bob_exit = None);
-
+    // Clear pending_bob_exit ONLY on success. Deliberate divergence from
+    // drain_residual_icp's clear-regardless pattern: the BOB is still sitting
+    // here after a failed drain, so the marker must survive to keep the
+    // entry-pool exclusion intact for next cycle's retry (and to keep the
+    // drain-relevance gate open while execution is disabled). A truly stale
+    // marker with no BOB behind it is cleared by the dust branch above.
     if !any_success {
         return Err("All BOB drain attempts failed".to_string());
     }
+    state::mutate_state(|s| s.pending_bob_exit = None);
     Ok(())
 }
 

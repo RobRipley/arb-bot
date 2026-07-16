@@ -6,6 +6,7 @@
 //! blob, and assert the defaults come back.
 
 use arb_bot::state::{BotState, CycleSnapshot};
+use candid::Principal;
 
 #[test]
 fn old_state_without_band_fields_decodes_with_defaults() {
@@ -20,6 +21,55 @@ fn old_state_without_band_fields_decodes_with_defaults() {
     let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
     assert_eq!(decoded.config.icp_inventory_floor_e8s, 200_000_000, "floor default = 2 ICP");
     assert_eq!(decoded.config.icp_inventory_ceiling_e8s, 2_000_000_000, "ceiling default = 20 ICP");
+}
+
+/// Same guard for the nine Strategy S BotConfig fields: a pre-S blob must
+/// decode with the documented defaults — mainnet-verified principals for the
+/// BOB ledger and BOB/ICP pool, anonymous for the not-yet-existing icUSD/BOB
+/// pool (the strategy's master gate), and dry-run-first execution disabled.
+#[test]
+fn old_state_without_bob_fields_decodes_with_defaults() {
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let cfg = v
+        .get_mut("config")
+        .and_then(|c| c.as_object_mut())
+        .expect("config object");
+    for field in [
+        "bob_ledger",
+        "bob_ledger_fee",
+        "icpswap_bob_icp_pool",
+        "icpswap_icusd_bob_pool",
+        "icpswap_bob_icp_icp_is_token0",
+        "icpswap_icusd_bob_icusd_is_token0",
+        "bob_max_trade_size_usd",
+        "bob_min_spread_bps",
+        "bob_execution_enabled",
+    ] {
+        assert!(cfg.remove(field).is_some(), "field {field} present before strip");
+    }
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode pre-BOB state");
+    assert_eq!(
+        decoded.config.bob_ledger,
+        Principal::from_text("7pail-xaaaa-aaaas-aabmq-cai").unwrap(),
+        "bob_ledger default = mainnet BOB ledger"
+    );
+    assert_eq!(decoded.config.bob_ledger_fee, 1_000_000, "bob fee default = 0.01 BOB");
+    assert_eq!(
+        decoded.config.icpswap_bob_icp_pool,
+        Principal::from_text("ybilh-nqaaa-aaaag-qkhzq-cai").unwrap(),
+        "bob/icp pool default = mainnet ICPSwap BOB/ICP"
+    );
+    assert_eq!(
+        decoded.config.icpswap_icusd_bob_pool,
+        Principal::anonymous(),
+        "icusd/bob pool default = anonymous (master gate)"
+    );
+    assert!(!decoded.config.icpswap_bob_icp_icp_is_token0);
+    assert!(!decoded.config.icpswap_icusd_bob_icusd_is_token0);
+    assert_eq!(decoded.config.bob_max_trade_size_usd, 50_000_000, "max trade default = $50");
+    assert_eq!(decoded.config.bob_min_spread_bps, 150);
+    assert!(!decoded.config.bob_execution_enabled, "dry-run-first: execution off by default");
 }
 
 /// Same guard for CycleSnapshot, which is stored in its own StableLog

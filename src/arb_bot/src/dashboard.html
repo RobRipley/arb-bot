@@ -1358,6 +1358,10 @@
             <div class="deck-stat-label">Slippage Tolerance</div>
             <div class="deck-stat-value" id="deck-slip">—</div>
           </div>
+          <div class="deck-stat">
+            <div class="deck-stat-label">BOB Balance</div>
+            <div class="deck-stat-value" id="deck-bob">—</div>
+          </div>
         </div>
       </div>
 
@@ -1374,6 +1378,21 @@
             <div><span class="pending-label">Intended Exit</span><span class="pending-val" id="pending-exit">—</span></div>
             <div><span class="pending-label">Stranded</span><span class="pending-val" id="pending-icp">—</span></div>
             <div><span class="pending-label">Age</span><span class="pending-val" id="pending-age">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending BOB exit warning (Strategy S, only when present) -->
+      <div class="card warning-card" id="pending-bob-exit-card" style="display:none">
+        <div class="warning-rail"></div>
+        <div class="warning-body">
+          <div class="warning-header">
+            <span class="warning-icon">!</span>
+            <span>PENDING BOB EXIT — Strategy S leg 2 held open</span>
+          </div>
+          <div class="pending-grid">
+            <div><span class="pending-label">Entry Pool</span><span class="pending-val" id="pending-bob-entry">—</span></div>
+            <div><span class="pending-label">Stranded</span><span class="pending-val" id="pending-bob-amount">—</span></div>
           </div>
         </div>
       </div>
@@ -1486,12 +1505,12 @@
         </div>
         <div>
           <label>BOB Max Trade Size (USD)</label>
-          <input type="number" id="cfg-bob-max-trade" placeholder="50" step="0.01">
+          <input type="number" id="cfg-bob-max-trade" placeholder="50" min="0.000001" max="500" step="0.01">
         </div>
         <div>
           <label>BOB Min Spread (bps)</label>
-          <input type="number" id="cfg-bob-min-spread" placeholder="150" min="1" step="1">
-          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Strategy S sizing and gating. Both must be set together (single set_bob_params call).</div>
+          <input type="number" id="cfg-bob-min-spread" placeholder="150" min="100" max="10000" step="1">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Strategy S sizing and gating. Both must be set together (single set_bob_params call). Max trade ≤ $500; min spread 100–10000 bps (the 2–3 fee legs alone cost ~60–90 bps).</div>
         </div>
         <div>
           <label>BOB/ICP Pool (principal)</label>
@@ -4051,6 +4070,9 @@
       return Object.keys(v)[0] || '—';
     }
     function poolLabel(v) { return POOL_LABELS[variantKey(v)] || variantKey(v); }
+
+    const BOB_POOL_LABELS = { IcusdBob: 'ICPSwap icUSD/BOB', BobIcp: 'ICPSwap BOB/ICP' };
+    function bobPoolLabel(v) { return BOB_POOL_LABELS[variantKey(v)] || variantKey(v); }
     function directionLabel(v) { return DIRECTION_LABELS[variantKey(v)] || variantKey(v); }
 
     function optVal(o) {
@@ -4124,6 +4146,10 @@
           ? (Number(report.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP'
           : '0.0000 ICP';
 
+      // BOB balance (Strategy S)
+      document.getElementById('deck-bob').textContent =
+        (Number(report.balance_bob) / 1e8).toFixed(4) + ' BOB';
+
       // Slippage
       document.getElementById('deck-slip').textContent = report.slippage_bps + ' bps';
       const slipInput = document.getElementById('slip-input');
@@ -4145,6 +4171,19 @@
         document.getElementById('pending-age').textContent = fmtElapsed(nowNs, pending.timestamp);
       } else {
         card.style.display = 'none';
+      }
+
+      // Pending BOB exit (Strategy S) — mirrors the ICP pending-exit card.
+      // PendingBobExit carries no timestamp, so there is no Age fact.
+      const pendingBob = optVal(report.pending_bob_exit);
+      const bobCard = document.getElementById('pending-bob-exit-card');
+      if (pendingBob) {
+        bobCard.style.display = '';
+        document.getElementById('pending-bob-entry').textContent = bobPoolLabel(pendingBob.entry_pool);
+        document.getElementById('pending-bob-amount').textContent =
+          (Number(pendingBob.bob_amount) / 1e8).toFixed(4) + ' BOB';
+      } else {
+        bobCard.style.display = 'none';
       }
 
       // Gate cards

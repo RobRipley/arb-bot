@@ -1883,11 +1883,16 @@ fn set_bob_pools(bob_icp_pool: Principal, icusd_bob_pool: Principal) -> Result<(
 #[update]
 fn set_bob_params(max_trade_size_usd: u64, min_spread_bps: u64) -> Result<(), String> {
     require_admin();
-    if max_trade_size_usd == 0 {
-        return Err("max_trade_size_usd must be > 0".to_string());
+    // $500 cap: BOB/ICP (~$53K depth) moves ~1% per ~$265 of volume — larger
+    // clips would eat their own edge and lean on a thin reference.
+    if max_trade_size_usd == 0 || max_trade_size_usd > 500_000_000 {
+        return Err("max_trade_size_usd must be 1..=500000000 ($500 cap, 6-dec USD)".to_string());
     }
-    if min_spread_bps == 0 || min_spread_bps > 10_000 {
-        return Err("min_spread_bps must be > 0 and <= 10000 (100%)".to_string());
+    // 100 bps floor: the 2-3 leg 0.3%-fee route costs ~60-90 bps before
+    // slippage, so any spread gate below 100 bps trades at a loss to fees
+    // (fat-finger guard).
+    if min_spread_bps < 100 || min_spread_bps > 10_000 {
+        return Err("min_spread_bps must be 100..=10000".to_string());
     }
     state::mutate_state(|s| {
         s.config.bob_max_trade_size_usd = max_trade_size_usd;
