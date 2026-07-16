@@ -5,7 +5,7 @@
 //! serialize a current BotState, strip the new fields to simulate an old
 //! blob, and assert the defaults come back.
 
-use arb_bot::state::BotState;
+use arb_bot::state::{BotState, CycleSnapshot};
 
 #[test]
 fn old_state_without_band_fields_decodes_with_defaults() {
@@ -20,4 +20,63 @@ fn old_state_without_band_fields_decodes_with_defaults() {
     let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
     assert_eq!(decoded.config.icp_inventory_floor_e8s, 200_000_000, "floor default = 2 ICP");
     assert_eq!(decoded.config.icp_inventory_ceiling_e8s, 2_000_000_000, "ceiling default = 20 ICP");
+}
+
+/// Same guard for CycleSnapshot, which is stored in its own StableLog
+/// (serde_json via the `json_storable!` Storable impl) rather than inside
+/// the BotState blob. Old snapshots — appended before Strategy S added its
+/// four fields — must still decode, with those fields defaulting to 0.
+#[test]
+fn old_snapshot_without_strategy_s_fields_decodes_with_defaults() {
+    let snapshot = CycleSnapshot {
+        timestamp: 1,
+        rumi_icp_price_3usd: 2,
+        rumi_icp_price_usd: 3,
+        icpswap_icp_price_ckusdc: 4,
+        virtual_price: 5,
+        spread_a_bps: 6,
+        icpswap_icp_price_icusd: 7,
+        spread_b_bps: 8,
+        balance_icp: 9,
+        balance_3usd: 10,
+        balance_ckusdc: 11,
+        balance_ckusdt: 12,
+        balance_icusd: 13,
+        icpswap_icp_price_ckusdt: 14,
+        spread_c_bps: 15,
+        spread_d_bps: 16,
+        spread_f_bps: 17,
+        spread_k_bps: 18,
+        spread_l_bps: 19,
+        spread_m_bps: 20,
+        spread_n_bps: 21,
+        spread_o_bps: 22,
+        spread_p_bps: 23,
+        spread_q_bps: 24,
+        spread_r_bps: 25,
+        partydex_icp_price_ckusdc: 26,
+        partydex_icp_price_ckusdt: 27,
+        bob_pool_price_icusd_per_bob: 999,
+        bob_ref_price_icusd_per_bob: 999,
+        spread_s_bps: 999,
+        balance_bob: 999,
+        traded: true,
+        strategy_used: "A".to_string(),
+    };
+
+    let mut v = serde_json::to_value(&snapshot).expect("serialize");
+    let obj = v.as_object_mut().expect("snapshot object");
+    assert!(obj.remove("bob_pool_price_icusd_per_bob").is_some());
+    assert!(obj.remove("bob_ref_price_icusd_per_bob").is_some());
+    assert!(obj.remove("spread_s_bps").is_some());
+    assert!(obj.remove("balance_bob").is_some());
+
+    let decoded: CycleSnapshot = serde_json::from_value(v).expect("decode old-shape snapshot");
+    assert_eq!(decoded.bob_pool_price_icusd_per_bob, 0);
+    assert_eq!(decoded.bob_ref_price_icusd_per_bob, 0);
+    assert_eq!(decoded.spread_s_bps, 0);
+    assert_eq!(decoded.balance_bob, 0);
+    // Sanity: an untouched pre-existing field still round-trips.
+    assert_eq!(decoded.timestamp, 1);
+    assert_eq!(decoded.strategy_used, "A");
 }
