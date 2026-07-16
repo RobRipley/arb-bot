@@ -2435,6 +2435,15 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     let reserved = band_reserve.saturating_add(volume_stranded);
     let drainable = icp_balance.saturating_sub(reserved);
     if drainable <= ICP_FEE * 2 {
+        // Normally just "nothing to skim" — but with a pending_exit it means
+        // stranded leg-2 ICP can't be recovered (e.g. inventory floor set
+        // above the live balance). Surface that instead of stalling silently.
+        if has_pending {
+            state::log_activity("drain", &format!(
+                "pending_exit set but only {} ICP above reserve {} (balance {}); recovery deferred",
+                drainable, reserved, icp_balance
+            ));
+        }
         return Ok(());
     }
 
@@ -2603,12 +2612,14 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     let mut any_success = false;
     let mut remaining_amount = drain_amount;
     for (i, cand) in order.iter().enumerate() {
-        // Refresh balance if this is a retry after failure.
+        // Refresh balance if this is a retry after failure. Respect the full
+        // reserve (band + volume-stranded ICP) and never exceed the original
+        // leg1-capped drain amount.
         if i > 0 {
             let bal = fetch_balance(config.icp_ledger).await.unwrap_or(0);
-            let d = bal.saturating_sub(band_reserve);
+            let d = bal.saturating_sub(reserved);
             if d <= ICP_FEE * 2 { break; }
-            remaining_amount = d - ICP_FEE;
+            remaining_amount = (d - ICP_FEE).min(remaining_amount);
         }
         // Use 0 slippage on fallback attempts — we already failed once, just get out.
         let min_out = if i == 0 { cand.min_out } else { 0 };

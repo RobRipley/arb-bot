@@ -3,7 +3,7 @@ use ic_cdk_macros::{init, post_upgrade, pre_upgrade, query, update};
 use ic_cdk_timers::TimerId;
 use std::cell::RefCell;
 
-mod state;
+pub mod state; // pub so integration tests can verify serde upgrade defaults
 mod prices;
 mod swaps;
 mod partydex;
@@ -284,6 +284,15 @@ async fn get_prices() -> PriceInfo {
 #[update]
 fn set_config(config: BotConfig) {
     require_admin();
+    // Reject a wholesale config write that would break the ICP inventory band
+    // invariant (floor >= 1 ICP, ceiling > floor) — the drain depends on it.
+    // A stale cached dashboard omitting the band fields decodes to the valid
+    // serde defaults, so this only trips on genuinely bad values.
+    if config.icp_inventory_floor_e8s < 100_000_000
+        || config.icp_inventory_ceiling_e8s <= config.icp_inventory_floor_e8s
+    {
+        ic_cdk::trap("set_config rejected: invalid ICP inventory band (need floor >= 1 ICP and ceiling > floor)");
+    }
     state::mutate_state(|s| {
         let original_owner = s.config.owner;
         s.config = config;
