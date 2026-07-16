@@ -195,6 +195,11 @@ fn get_summary() -> TradeSummary {
                     summary.unpaired_drain_sold_usd += leg.sold_usd_value;
                 }
             }
+            state::LegType::TopUp => {
+                // Strategy S ICP inventory top-up ahead of a reverse trade.
+                // Flows into the shared usd_in/usd_out/fees sums above; no
+                // dedicated counter (TradeSummary is candid-frozen).
+            }
         }
         if leg.dex == "Rumi" { summary.rumi_count += 1; }
         else { summary.icpswap_count += 1; }

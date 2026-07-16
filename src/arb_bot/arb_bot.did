@@ -125,6 +125,7 @@ type LegType = variant {
   Leg1;
   Leg2;
   Drain;
+  TopUp;
 };
 
 type TradeLeg = record {

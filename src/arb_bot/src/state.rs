@@ -497,6 +497,29 @@ pub enum LegType {
     Leg1,
     Leg2,
     Drain,
+    /// Strategy S: ICP inventory top-up bought from the best stable pool
+    /// ahead of a reverse-direction (ICP→BOB→icUSD) trade. Appended after
+    /// Drain — candid-append-safe, old logs decode unchanged.
+    TopUp,
+}
+
+/// Which of the two Strategy S pools a stranded BOB balance entered through.
+/// Internal to BotState (not part of any candid method signature yet).
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BobPool {
+    /// ICPSwap icUSD/BOB pool.
+    IcusdBob,
+    /// ICPSwap BOB/ICP pool.
+    BobIcp,
+}
+
+/// Records the pool Strategy S acquired BOB through after a successful
+/// leg 1, so `drain_residual_bob` never sells back into the entry pool.
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub struct PendingBobExit {
+    pub entry_pool: BobPool,
+    /// BOB received by leg 1 (8 dec).
+    pub bob_amount: u64,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -536,6 +559,10 @@ pub struct BotState {
     pub icusd_bob_ordering_resolved: bool,
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
+    /// Strategy S: BOB acquired by leg 1 whose leg 2 has not completed.
+    /// `drain_residual_bob` recovers it next cycle.
+    #[serde(default)]
+    pub pending_bob_exit: Option<PendingBobExit>,
     #[serde(default)]
     pub volume: VolumeConfig,
     /// ICP amount stranded in the default account after a volume bot
@@ -595,6 +622,7 @@ impl Default for BotState {
             bob_icp_ordering_resolved: false,
             icusd_bob_ordering_resolved: false,
             pending_exit: None,
+            pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
         }
@@ -1015,6 +1043,7 @@ pub fn load_from_stable_memory() {
             bob_icp_ordering_resolved: false,
             icusd_bob_ordering_resolved: false,
             pending_exit: legacy.pending_exit,
+            pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
         };
