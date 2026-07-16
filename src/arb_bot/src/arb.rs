@@ -1456,7 +1456,14 @@ pub async fn compute_optimal_trade(
         result.optimal_input_token = Some(Token::ThreeUSD);
         result.expected_output_token = Some(Token::CkUSDC);
 
-        if result.balance_3usd < 1_000_000 {
+        // Min balance: per-venue floor (decision #3), converted to 3USD native
+        // units — the same venue-aware floor the IcpswapToRumi sibling applies.
+        // 3USD is 8-dec, so usd_6dec_to_stable(.., 8) reproduces the pre-PR2a
+        // 1_000_000 (=$0.01) floor for ICPSwap and raises it to ~$0.10 for
+        // PartyDEX (matters for Q/R when the profitable direction sells ICP
+        // into PartyDEX). Mirrors the sibling's unit conversion exactly.
+        let min_3usd = usd_6dec_to_stable(min_trade_floor_usd(target.venue), 8);
+        if result.balance_3usd < min_3usd {
             result.message = format!("[{}] Insufficient 3USD balance", target.strategy_tag);
             return Ok(result);
         }
@@ -2039,9 +2046,13 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
     };
 
     let target_vp = if target.uses_vp { dry_run.virtual_price } else { 0 };
+    // Mirror find_optimal_rumi_to_icpswap's fee model: the PartyDEX leg here is
+    // the ICP→stable sell (target.venue), so the extra deposit/withdraw ledger
+    // fees only bite when target.venue == PartyDex (0 for Icpswap).
     let net_profit = stable_to_usd_6dec_vp(stable_out, target.stable_decimals, target_vp)
         - cost_usd_6dec
-        - stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, target_vp);
+        - stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, target_vp)
+        - partydex_extra_fee_usd(target.venue, target.stable_fee, target.stable_decimals, target_vp, icp_out, stable_out);
     state::log_activity("trade", &format!(
         "[{}] COMPLETE RumiToIcpswap: {} 3USD → {} ICP → {} {} | profit: {} (6dec USD)",
         target.strategy_tag, trade_amount_3usd, icp_out, stable_out, target.stable_token_name, net_profit
@@ -2138,7 +2149,11 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
     let target_vp = if target.uses_vp { dry_run.virtual_price } else { 0 };
     let input_usd_6dec = stable_to_usd_6dec_vp(trade_amount_stable, target.stable_decimals, target_vp);
     let output_usd_6dec = (three_usd_out as u128 * vp as u128 / VP_PRECISION / 100) as i64;
-    let net_profit = output_usd_6dec - input_usd_6dec - stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, target_vp);
+    // Mirror find_optimal_icpswap_to_rumi's fee model: the PartyDEX leg here is
+    // the stable→ICP buy (target.venue), extra ledger fees only for PartyDex.
+    let net_profit = output_usd_6dec - input_usd_6dec
+        - stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, target_vp)
+        - partydex_extra_fee_usd(target.venue, target.stable_fee, target.stable_decimals, target_vp, icp_out, trade_amount_stable);
 
     state::log_activity("trade", &format!(
         "[{}] COMPLETE IcpswapToRumi: {} {} → {} ICP → {} 3USD | profit: {} (6dec USD)",
@@ -2239,10 +2254,16 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
         }
     };
 
+    // Mirror find_optimal_cross_pool_forward's fee model: extra PartyDEX
+    // deposit/withdraw ledger fees per leg, keyed on each side's venue (0 for
+    // the Icpswap side). buy_side is the stable→ICP leg (input = trade_amount),
+    // sell_side is the ICP→stable leg (output = output).
     let net_profit = stable_to_usd_6dec_vp(output, target.sell_side.stable_decimals, sell_vp)
         - cost_usd_6dec
         - stable_to_usd_6dec_vp(target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp)
-        - stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp);
+        - stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp)
+        - partydex_extra_fee_usd(target.buy_side.venue, target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp, icp_out, trade_amount)
+        - partydex_extra_fee_usd(target.sell_side.venue, target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp, icp_out, output);
     state::log_activity("trade", &format!(
         "[{}] COMPLETE {}→{}: {} {} → {} ICP → {} {} | profit: {} (6dec USD)",
         target.strategy_tag, target.buy_side.stable_token_name, target.sell_side.stable_token_name,
@@ -2343,9 +2364,14 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
 
     let input_usd = stable_to_usd_6dec_vp(trade_amount, target.sell_side.stable_decimals, sell_vp);
     let output_usd = stable_to_usd_6dec_vp(output, target.buy_side.stable_decimals, buy_vp);
+    // Mirror find_optimal_cross_pool_reverse's fee model: sell_side is the
+    // stable→ICP leg (input = trade_amount), buy_side is the ICP→stable leg
+    // (output = output); extra ledger fees only for the PartyDex side.
     let net_profit = output_usd - input_usd
         - stable_to_usd_6dec_vp(target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp)
-        - stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp);
+        - stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp)
+        - partydex_extra_fee_usd(target.sell_side.venue, target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp, icp_out, trade_amount)
+        - partydex_extra_fee_usd(target.buy_side.venue, target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp, icp_out, output);
 
     state::log_activity("trade", &format!(
         "[{}] COMPLETE {}→{}: {} {} → {} ICP → {} {} | profit: {} (6dec USD)",

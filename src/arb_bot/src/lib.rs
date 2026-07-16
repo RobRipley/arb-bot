@@ -448,6 +448,28 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     }
 }
 
+/// Manual recovery lever for funds stranded INSIDE a PartyDEX pool's internal
+/// balance (e.g. a trade settled but the post-trade withdraw failed). Sweeps
+/// the full available base and quote balances back to the bot's main account.
+/// Returns `(base_withdrawn, quote_withdrawn)` in native units. The normal
+/// sweep-entire-available-balance on the next successful trade auto-recovers
+/// otherwise; this is the escape hatch for the "pool never trades again" case.
+#[update]
+async fn recover_partydex_balance(pool: Principal) -> Result<(u64, u64), String> {
+    require_admin();
+    let result = partydex::withdraw_all(pool).await;
+    match &result {
+        Ok((base_out, quote_out)) => state::log_activity("recover", &format!(
+            "recover_partydex_balance({}) swept base={} quote={} by {}",
+            pool, base_out, quote_out, ic_cdk::api::caller()
+        )),
+        Err(e) => state::log_activity("recover", &format!(
+            "recover_partydex_balance({}) failed: {} (by {})", pool, e, ic_cdk::api::caller()
+        )),
+    }
+    result
+}
+
 // ─── 3pool Deposit/Redeem ───
 
 #[derive(CandidType)]

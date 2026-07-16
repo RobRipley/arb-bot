@@ -300,6 +300,7 @@ service : (InitArgs) -> {
   resume: () -> ();
   setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
+  recover_partydex_balance: (principal) -> (variant { Ok: record { nat64; nat64 }; Err: text });
   backfill_trade_legs: (vec TradeLeg) -> ();
   manual_arb_cycle: () -> ();
   execute_strategy_a: () -> ();
