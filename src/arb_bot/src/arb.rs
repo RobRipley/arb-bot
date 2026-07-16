@@ -326,6 +326,48 @@ pub async fn run_arb_cycle() {
         }
     }
 
+    // Resolve ICPSwap token ordering for Strategy S: BOB/ICP pool (probed
+    // with icp_ledger — this pool's other leg is ICP).
+    let (bob_icp_resolved, has_bob_icp_pool) = state::read_state(|s| {
+        (s.bob_icp_ordering_resolved, s.config.icpswap_bob_icp_pool != Principal::anonymous())
+    });
+    if has_bob_icp_pool && !bob_icp_resolved {
+        let (bob_icp_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_bob_icp_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(bob_icp_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_bob_icp_icp_is_token0 = icp_is_token0;
+                    s.bob_icp_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                log_error(&format!("Failed to resolve BOB/ICP pool token ordering: {}. Retrying.", e));
+                // Don't return — other strategies can still run
+            }
+        }
+    }
+
+    // Resolve ICPSwap token ordering for Strategy S: icUSD/BOB pool (probed
+    // with icusd_ledger — this pool's other leg is icUSD, not ICP).
+    let (icusd_bob_resolved, has_icusd_bob_pool) = state::read_state(|s| {
+        (s.icusd_bob_ordering_resolved, s.config.icpswap_icusd_bob_pool != Principal::anonymous())
+    });
+    if has_icusd_bob_pool && !icusd_bob_resolved {
+        let (icusd_bob_pool, icusd_ledger) = state::read_state(|s| (s.config.icpswap_icusd_bob_pool, s.config.icusd_ledger));
+        match prices::fetch_icpswap_token_ordering(icusd_bob_pool, icusd_ledger).await {
+            Ok(icusd_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_icusd_bob_icusd_is_token0 = icusd_is_token0;
+                    s.icusd_bob_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                log_error(&format!("Failed to resolve icUSD/BOB pool token ordering: {}. Retrying.", e));
+                // Don't return — other strategies can still run
+            }
+        }
+    }
+
     let config = state::read_state(|s| s.config.clone());
     if config.paused { return; }
 
