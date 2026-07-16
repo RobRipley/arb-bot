@@ -402,6 +402,16 @@ async fn setup_approvals() -> String {
         approvals.push(("ckUSDT→PartyDEX-ckUSDT", config.ckusdt_ledger, config.partydex_ckusdt_pool));
     }
 
+    // Strategy S approvals (if BOB pools are configured)
+    if config.icpswap_bob_icp_pool != Principal::anonymous() {
+        approvals.push(("BOB→ICPSwap-BOB-ICP", config.bob_ledger, config.icpswap_bob_icp_pool));
+        approvals.push(("ICP→ICPSwap-BOB-ICP", config.icp_ledger, config.icpswap_bob_icp_pool));
+    }
+    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
+        approvals.push(("icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
+        approvals.push(("BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
+    }
+
     for (label, ledger, spender) in approvals {
         match swaps::approve_infinite(ledger, spender).await {
             Ok(_) => {
