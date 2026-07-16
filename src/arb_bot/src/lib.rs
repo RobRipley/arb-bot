@@ -6,6 +6,7 @@ use std::cell::RefCell;
 mod state;
 mod prices;
 mod swaps;
+mod partydex;
 mod arb;
 mod volume;
 
@@ -360,6 +361,18 @@ async fn setup_approvals() -> String {
     if config.icpswap_3usd_pool != Principal::anonymous() {
         approvals.push(("3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool));
         approvals.push(("ICP→ICPSwap-3USD", config.icp_ledger, config.icpswap_3usd_pool));
+    }
+
+    // PartyDEX approvals (Strategies K/L/M/Q in PR2b, if the ckUSDC pool is configured)
+    if config.partydex_ckusdc_pool != Principal::anonymous() {
+        approvals.push(("ICP→PartyDEX-ckUSDC", config.icp_ledger, config.partydex_ckusdc_pool));
+        approvals.push(("ckUSDC→PartyDEX-ckUSDC", config.ckusdc_ledger, config.partydex_ckusdc_pool));
+    }
+
+    // PartyDEX approvals (Strategies N/O/P/R in PR2b, if the ckUSDT pool is configured)
+    if config.partydex_ckusdt_pool != Principal::anonymous() {
+        approvals.push(("ICP→PartyDEX-ckUSDT", config.icp_ledger, config.partydex_ckusdt_pool));
+        approvals.push(("ckUSDT→PartyDEX-ckUSDT", config.ckusdt_ledger, config.partydex_ckusdt_pool));
     }
 
     for (label, ledger, spender) in approvals {
@@ -810,6 +823,8 @@ async fn dry_run_arb_cycle() -> arb::DryRunResult {
         pool_enum: state::Pool::IcpswapCkusdc,
         stable_decimals: 6,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     match arb::compute_optimal_trade(&config, &target_a).await {
         Ok(dr) => dr,
@@ -861,6 +876,8 @@ async fn dry_run_strategy_c() -> arb::DryRunResult {
         pool_enum: state::Pool::IcpswapCkusdt,
         stable_decimals: 6,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     match arb::compute_optimal_trade(&config, &target_c).await {
         Ok(dr) => dr,
@@ -912,6 +929,8 @@ async fn dry_run_strategy_d() -> arb::DryRunResult {
         pool_enum: state::Pool::IcpswapIcusd,
         stable_decimals: 8,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     match arb::compute_optimal_trade(&config, &target_d).await {
         Ok(dr) => dr,
@@ -1072,6 +1091,8 @@ fn build_cross_b(config: &BotConfig) -> arb::CrossPoolTarget {
             pool_enum: state::Pool::IcpswapIcusd,
             dex_label: "ICPSwap-icUSD",
             uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
         },
         sell_side: arb::CrossPoolSide {
             pool: config.icpswap_pool,
@@ -1083,6 +1104,8 @@ fn build_cross_b(config: &BotConfig) -> arb::CrossPoolTarget {
             pool_enum: state::Pool::IcpswapCkusdc,
             dex_label: "ICPSwap",
             uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
         },
     }
 }
@@ -1100,6 +1123,8 @@ fn build_cross_f(config: &BotConfig) -> arb::CrossPoolTarget {
             pool_enum: state::Pool::IcpswapIcusd,
             dex_label: "ICPSwap-icUSD",
             uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
         },
         sell_side: arb::CrossPoolSide {
             pool: config.icpswap_ckusdt_pool,
@@ -1111,6 +1136,8 @@ fn build_cross_f(config: &BotConfig) -> arb::CrossPoolTarget {
             pool_enum: state::Pool::IcpswapCkusdt,
             dex_label: "ICPSwap-ckUSDT",
             uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
         },
     }
 }
