@@ -151,18 +151,6 @@ pub struct CycleSnapshot {
     /// Strategy F spread (ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
     #[serde(default)]
     pub spread_f_bps: i32,
-    /// Strategy G spread (Rumi 3USD/ICP vs ICPSwap 3USD/ICP), 0 if N/A
-    #[serde(default)]
-    pub spread_g_bps: i32,
-    /// Strategy H spread (ICPSwap 3USD/ICP vs ICPSwap icUSD/ICP), 0 if N/A
-    #[serde(default)]
-    pub spread_h_bps: i32,
-    /// Strategy I spread (ICPSwap 3USD/ICP vs ICPSwap ckUSDC/ICP), 0 if N/A
-    #[serde(default)]
-    pub spread_i_bps: i32,
-    /// Strategy J spread (ICPSwap 3USD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
-    #[serde(default)]
-    pub spread_j_bps: i32,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"

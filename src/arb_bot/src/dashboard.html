@@ -985,62 +985,6 @@
           </div>
           <div class="spread-action" id="spread-f-action"></div>
         </div>
-        <div class="spread-row" style="margin-top:var(--sp-3)">
-          <div class="spread-pair">
-            <span class="spread-pool spread-pool-left">Rumi 3USD / ICP</span>
-            <span class="spread-value" id="spread-g-value">--</span>
-            <span class="spread-pool spread-pool-right">ICPSwap 3USD / ICP</span>
-          </div>
-          <div class="spread-gauge-track">
-            <div class="spread-gauge-fill" id="spread-g-fill"></div>
-            <div class="spread-gauge-center"></div>
-            <div class="spread-gauge-threshold" id="spread-g-thresh-l"></div>
-            <div class="spread-gauge-threshold" id="spread-g-thresh-r"></div>
-          </div>
-          <div class="spread-action" id="spread-g-action"></div>
-        </div>
-        <div class="spread-row" style="margin-top:var(--sp-3)">
-          <div class="spread-pair">
-            <span class="spread-pool spread-pool-left">ICPSwap 3USD / ICP</span>
-            <span class="spread-value" id="spread-h-value">--</span>
-            <span class="spread-pool spread-pool-right">ICPSwap icUSD / ICP</span>
-          </div>
-          <div class="spread-gauge-track">
-            <div class="spread-gauge-fill" id="spread-h-fill"></div>
-            <div class="spread-gauge-center"></div>
-            <div class="spread-gauge-threshold" id="spread-h-thresh-l"></div>
-            <div class="spread-gauge-threshold" id="spread-h-thresh-r"></div>
-          </div>
-          <div class="spread-action" id="spread-h-action"></div>
-        </div>
-        <div class="spread-row" style="margin-top:var(--sp-3)">
-          <div class="spread-pair">
-            <span class="spread-pool spread-pool-left">ICPSwap 3USD / ICP</span>
-            <span class="spread-value" id="spread-i-value">--</span>
-            <span class="spread-pool spread-pool-right">ICPSwap ckUSDC / ICP</span>
-          </div>
-          <div class="spread-gauge-track">
-            <div class="spread-gauge-fill" id="spread-i-fill"></div>
-            <div class="spread-gauge-center"></div>
-            <div class="spread-gauge-threshold" id="spread-i-thresh-l"></div>
-            <div class="spread-gauge-threshold" id="spread-i-thresh-r"></div>
-          </div>
-          <div class="spread-action" id="spread-i-action"></div>
-        </div>
-        <div class="spread-row" style="margin-top:var(--sp-3)">
-          <div class="spread-pair">
-            <span class="spread-pool spread-pool-left">ICPSwap 3USD / ICP</span>
-            <span class="spread-value" id="spread-j-value">--</span>
-            <span class="spread-pool spread-pool-right">ICPSwap ckUSDT / ICP</span>
-          </div>
-          <div class="spread-gauge-track">
-            <div class="spread-gauge-fill" id="spread-j-fill"></div>
-            <div class="spread-gauge-center"></div>
-            <div class="spread-gauge-threshold" id="spread-j-thresh-l"></div>
-            <div class="spread-gauge-threshold" id="spread-j-thresh-r"></div>
-          </div>
-          <div class="spread-action" id="spread-j-action"></div>
-        </div>
       </div>
 
       <!-- Live Prices + Balances -->
@@ -1064,10 +1008,6 @@
               <div class="price-source-label">icUSD</div>
               <div class="price-source-value" id="src-icusd">--</div>
             </div>
-            <div class="price-source" style="--source-color:#66bb6a">
-              <div class="price-source-label">3USD</div>
-              <div class="price-source-value" id="src-3usd">--</div>
-            </div>
           </div>
           <div class="price-meta"><span>3pool VP</span><span class="price-meta-value" id="src-vp">--</span></div>
           <div class="strategy-legend">
@@ -1076,10 +1016,6 @@
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(167,139,250,0.15);color:#a78bfa">C</span>Rumi <span class="strat-vs">↔</span> ckUSDT</div>
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,160,91,0.15);color:#f0a05b">D</span>Rumi <span class="strat-vs">↔</span> icUSD</div>
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(240,98,146,0.15);color:#f06292">F</span>icUSD <span class="strat-vs">↔</span> ckUSDT</div>
-            <div class="strat-chip"><span class="strat-letter" style="background:rgba(102,187,106,0.15);color:#66bb6a">G</span>Rumi <span class="strat-vs">↔</span> 3USD</div>
-            <div class="strat-chip"><span class="strat-letter" style="background:rgba(41,182,246,0.15);color:#29b6f6">H</span>3USD <span class="strat-vs">↔</span> icUSD</div>
-            <div class="strat-chip"><span class="strat-letter" style="background:rgba(255,167,38,0.15);color:#ffa726">I</span>3USD <span class="strat-vs">↔</span> ckUSDC</div>
-            <div class="strat-chip"><span class="strat-letter" style="background:rgba(239,83,80,0.15);color:#ef5350">J</span>3USD <span class="strat-vs">↔</span> ckUSDT</div>
           </div>
         </div>
 
@@ -1386,23 +1322,13 @@
           <button class="btn btn-block" onclick="doForceArb(this, 'd')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">D</button>
           <button class="btn btn-block" onclick="doForceArb(this, 'f')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">F</button>
         </div>
-        <div style="display:flex;gap:var(--sp-2)">
-          <button class="btn btn-block" onclick="doDryRun(this, 'g')" style="flex:1">Strategy G</button>
-          <button class="btn btn-block" onclick="doDryRun(this, 'h')" style="flex:1">Strategy H</button>
-          <button class="btn btn-block" onclick="doDryRun(this, 'i')" style="flex:1">Strategy I</button>
-          <button class="btn btn-block" onclick="doDryRun(this, 'j')" style="flex:1">Strategy J</button>
-        </div>
         <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run All</button>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
           A = Rumi 3USD/ICP vs ICPSwap ckUSDC/ICP<br>
           B = ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP<br>
           C = Rumi 3USD/ICP vs ICPSwap ckUSDT/ICP<br>
           D = Rumi 3USD/ICP vs ICPSwap icUSD/ICP<br>
-          F = ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP<br>
-          G = Rumi 3USD/ICP vs ICPSwap 3USD/ICP<br>
-          H = ICPSwap 3USD/ICP vs ICPSwap icUSD/ICP<br>
-          I = ICPSwap 3USD/ICP vs ICPSwap ckUSDC/ICP<br>
-          J = ICPSwap 3USD/ICP vs ICPSwap ckUSDT/ICP
+          F = ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP
         </div>
       </div>
       <div id="dry-run-result" style="display:none;margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)"></div>
@@ -1769,7 +1695,6 @@
       icpswap_icp_price_ckusdt: IDL.Nat64, spread_c_bps: IDL.Int32,
       spread_d_bps: IDL.Int32,
       spread_f_bps: IDL.Int32,
-      spread_g_bps: IDL.Int32, spread_h_bps: IDL.Int32, spread_i_bps: IDL.Int32, spread_j_bps: IDL.Int32,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -1882,10 +1807,6 @@
         dry_run_strategy_c: I.Func([], [DryRunResult], []),
         dry_run_strategy_d: I.Func([], [DryRunResult], []),
         dry_run_strategy_f: I.Func([], [DryRunResult], []),
-        dry_run_strategy_g: I.Func([], [DryRunResult], []),
-        dry_run_strategy_h: I.Func([], [DryRunResult], []),
-        dry_run_strategy_i: I.Func([], [DryRunResult], []),
-        dry_run_strategy_j: I.Func([], [DryRunResult], []),
         withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
         pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
         pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
@@ -2533,47 +2454,6 @@
         } else {
           document.getElementById('spread-f-value').textContent = 'N/A';
         }
-        // Strategy G: Rumi 3USD/ICP vs ICPSwap 3USD/ICP
-        updateSpreadGauge(
-          document.getElementById('spread-g-fill'),
-          document.getElementById('spread-g-value'),
-          document.getElementById('spread-g-thresh-l'),
-          document.getElementById('spread-g-thresh-r'),
-          bi(s.spread_g_bps !== undefined ? s.spread_g_bps : 0), minSpread,
-          document.getElementById('spread-g-action')
-        );
-        // Strategy H: ICPSwap 3USD/ICP vs ICPSwap icUSD/ICP
-        updateSpreadGauge(
-          document.getElementById('spread-h-fill'),
-          document.getElementById('spread-h-value'),
-          document.getElementById('spread-h-thresh-l'),
-          document.getElementById('spread-h-thresh-r'),
-          bi(s.spread_h_bps !== undefined ? s.spread_h_bps : 0), minSpread,
-          document.getElementById('spread-h-action')
-        );
-        // Strategy I: ICPSwap 3USD/ICP vs ICPSwap ckUSDC/ICP
-        updateSpreadGauge(
-          document.getElementById('spread-i-fill'),
-          document.getElementById('spread-i-value'),
-          document.getElementById('spread-i-thresh-l'),
-          document.getElementById('spread-i-thresh-r'),
-          bi(s.spread_i_bps !== undefined ? s.spread_i_bps : 0), minSpread,
-          document.getElementById('spread-i-action')
-        );
-        // Strategy J: ICPSwap 3USD/ICP vs ICPSwap ckUSDT/ICP
-        updateSpreadGauge(
-          document.getElementById('spread-j-fill'),
-          document.getElementById('spread-j-value'),
-          document.getElementById('spread-j-thresh-l'),
-          document.getElementById('spread-j-thresh-r'),
-          bi(s.spread_j_bps !== undefined ? s.spread_j_bps : 0), minSpread,
-          document.getElementById('spread-j-action')
-        );
-        // Derive ICPSwap 3USD price from Rumi price + spread G for subcards
-        const spreadG = bi(s.spread_g_bps !== undefined ? s.spread_g_bps : 0);
-        const icpswap3usdPrice = rumiUsd * (10000 + spreadG) / 10000;
-        const icpswap3usdStr = icpswap3usdPrice > 0 ? '$' + icpswap3usdPrice.toFixed(4) : 'N/A';
-        document.getElementById('src-3usd').textContent = icpswap3usdStr;
 
         const hint = document.getElementById('prices-login-hint');
         if (hint) hint.style.display = 'none';
@@ -2816,26 +2696,14 @@
       const seriesA = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
       const seriesB = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'Strategy B' });
       const seriesF = chartInstance.addLineSeries({ color: '#f06292', lineWidth: 2, title: 'Strategy F' });
-      const seriesG = chartInstance.addLineSeries({ color: '#66bb6a', lineWidth: 2, title: 'Strategy G' });
-      const seriesH = chartInstance.addLineSeries({ color: '#29b6f6', lineWidth: 2, title: 'Strategy H' });
-      const seriesI = chartInstance.addLineSeries({ color: '#ffa726', lineWidth: 2, title: 'Strategy I' });
-      const seriesJ = chartInstance.addLineSeries({ color: '#ef5350', lineWidth: 2, title: 'Strategy J' });
 
       const dataA = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) }));
       const dataB = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_b_bps) }));
       const dataF = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_f_bps !== undefined ? s.spread_f_bps : 0) }));
-      const dataG = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_g_bps !== undefined ? s.spread_g_bps : 0) }));
-      const dataH = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_h_bps !== undefined ? s.spread_h_bps : 0) }));
-      const dataI = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_i_bps !== undefined ? s.spread_i_bps : 0) }));
-      const dataJ = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_j_bps !== undefined ? s.spread_j_bps : 0) }));
 
       seriesA.setData(dataA);
       seriesB.setData(dataB);
       seriesF.setData(dataF);
-      seriesG.setData(dataG);
-      seriesH.setData(dataH);
-      seriesI.setData(dataI);
-      seriesJ.setData(dataJ);
 
       const markersA = snapshots.filter(s => s.traded && s.strategy_used === 'A')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#00d4aa', shape: 'circle', size: 1 }));
@@ -2843,21 +2711,9 @@
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#5b8af0', shape: 'circle', size: 1 }));
       const markersF = snapshots.filter(s => s.traded && s.strategy_used === 'F')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#f06292', shape: 'circle', size: 1 }));
-      const markersG = snapshots.filter(s => s.traded && s.strategy_used === 'G')
-        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#66bb6a', shape: 'circle', size: 1 }));
-      const markersH = snapshots.filter(s => s.traded && s.strategy_used === 'H')
-        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#29b6f6', shape: 'circle', size: 1 }));
-      const markersI = snapshots.filter(s => s.traded && s.strategy_used === 'I')
-        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#ffa726', shape: 'circle', size: 1 }));
-      const markersJ = snapshots.filter(s => s.traded && s.strategy_used === 'J')
-        .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#ef5350', shape: 'circle', size: 1 }));
       if (markersA.length) seriesA.setMarkers(markersA);
       if (markersB.length) seriesB.setMarkers(markersB);
       if (markersF.length) seriesF.setMarkers(markersF);
-      if (markersG.length) seriesG.setMarkers(markersG);
-      if (markersH.length) seriesH.setMarkers(markersH);
-      if (markersI.length) seriesI.setMarkers(markersI);
-      if (markersJ.length) seriesJ.setMarkers(markersJ);
 
       const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
       seriesA.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
@@ -3095,31 +2951,7 @@
         }
         if (strategy === 'f' || strategy === 'both') {
           const r = await authenticatedActor.dry_run_strategy_f();
-          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#f06292">Strategy F</strong>';
-          html += formatDryRunResult(r);
-          html += '</div>';
-        }
-        if (strategy === 'g' || strategy === 'both') {
-          const r = await authenticatedActor.dry_run_strategy_g();
-          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#66bb6a">Strategy G</strong>';
-          html += formatDryRunResult(r);
-          html += '</div>';
-        }
-        if (strategy === 'h' || strategy === 'both') {
-          const r = await authenticatedActor.dry_run_strategy_h();
-          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#29b6f6">Strategy H</strong>';
-          html += formatDryRunResult(r);
-          html += '</div>';
-        }
-        if (strategy === 'i' || strategy === 'both') {
-          const r = await authenticatedActor.dry_run_strategy_i();
-          html += '<div style="margin-bottom:var(--sp-3)"><strong style="color:#ffa726">Strategy I</strong>';
-          html += formatDryRunResult(r);
-          html += '</div>';
-        }
-        if (strategy === 'j' || strategy === 'both') {
-          const r = await authenticatedActor.dry_run_strategy_j();
-          html += '<div><strong style="color:#ef5350">Strategy J</strong>';
+          html += '<div><strong style="color:#f06292">Strategy F</strong>';
           html += formatDryRunResult(r);
           html += '</div>';
         }
