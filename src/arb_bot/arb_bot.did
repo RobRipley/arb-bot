@@ -27,6 +27,8 @@ type BotConfig = record {
   partydex_ckusdt_pool: principal;
   partydex_ckusdc_fee_pips: nat32;
   partydex_ckusdt_fee_pips: nat32;
+  icp_inventory_floor_e8s: nat64;
+  icp_inventory_ceiling_e8s: nat64;
 };
 
 type Pool = variant {
@@ -358,6 +360,7 @@ service : (InitArgs) -> {
   trigger_volume_cycle: () -> (text);
   set_slippage_bps: (nat64) -> (variant { Ok; Err: text });
   set_arb_interval_secs: (nat64) -> (variant { Ok; Err: text });
+  set_icp_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
   get_bot_health: () -> (BotHealthReport);
   trigger_volume_rebalance: () -> ();
   volume_swap: (bool, nat64, nat64) -> ();

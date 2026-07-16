@@ -1801,6 +1801,27 @@ fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
     Ok(())
 }
 
+/// Sets the ICP inventory band (e8s) the drain uses in place of the old fixed
+/// `ICP_RESERVE`. Floor: minimum working balance always left behind. Ceiling:
+/// steady-state skim threshold. Single method so the pair can't pass through
+/// an invalid intermediate state (e.g. floor temporarily above ceiling).
+#[update]
+fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+    require_admin();
+    if floor_e8s < 100_000_000 {
+        return Err("floor must be >= 1 ICP".into());
+    }
+    if ceiling_e8s <= floor_e8s {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.icp_inventory_floor_e8s = floor_e8s;
+        s.config.icp_inventory_ceiling_e8s = ceiling_e8s;
+    });
+    state::log_activity("admin", &format!("icp inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
+    Ok(())
+}
+
 #[update]
 fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
     require_admin();
