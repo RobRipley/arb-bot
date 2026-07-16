@@ -352,10 +352,19 @@ pub async fn run_arb_cycle() {
         fee_pips: 0,
     };
 
+    // Rumi AMM (3USD/ICP) kill switch — Strategies A/C/D/Q/R all trade
+    // against `config.rumi_amm`; skip them with zero network calls while
+    // this is set (e.g. Rumi pool liquidity constraints).
+    let rumi_amm_paused = config.rumi_amm_paused;
+
     // Evaluate Strategy A (Rumi vs ICPSwap ckUSDC/ICP)
-    let dry_run_a = match compute_optimal_trade(&config, &target_a).await {
-        Ok(dr) => Some(dr),
-        Err(e) => { log_error(&format!("Strategy A computation failed: {}", e)); None }
+    let dry_run_a = if !rumi_amm_paused {
+        match compute_optimal_trade(&config, &target_a).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy A computation failed: {}", e)); None }
+        }
+    } else {
+        None
     };
 
     // Build cross-pool targets for B and F
@@ -495,7 +504,7 @@ pub async fn run_arb_cycle() {
         venue: state::Venue::Icpswap,
         fee_pips: 0,
     };
-    let dry_run_c = if has_ckusdt_pool && ckusdt_resolved {
+    let dry_run_c = if has_ckusdt_pool && ckusdt_resolved && !rumi_amm_paused {
         match compute_optimal_trade(&config, &target_c).await {
             Ok(dr) => Some(dr),
             Err(e) => { log_error(&format!("Strategy C computation failed: {}", e)); None }
@@ -519,7 +528,7 @@ pub async fn run_arb_cycle() {
         venue: state::Venue::Icpswap,
         fee_pips: 0,
     };
-    let dry_run_d = if has_icusd_pool && icusd_resolved {
+    let dry_run_d = if has_icusd_pool && icusd_resolved && !rumi_amm_paused {
         match compute_optimal_trade(&config, &target_d).await {
             Ok(dr) => Some(dr),
             Err(e) => { log_error(&format!("Strategy D computation failed: {}", e)); None }
@@ -601,7 +610,7 @@ pub async fn run_arb_cycle() {
     };
 
     // Evaluate Strategy Q (Rumi vs PartyDEX ckUSDC) — same shape as A/C/D
-    let dry_run_q = if has_partydex_ckusdc {
+    let dry_run_q = if has_partydex_ckusdc && !rumi_amm_paused {
         match compute_optimal_trade(&config, &target_q).await {
             Ok(dr) => Some(dr),
             Err(e) => { log_error(&format!("Strategy Q computation failed: {}", e)); None }
@@ -611,7 +620,7 @@ pub async fn run_arb_cycle() {
     };
 
     // Evaluate Strategy R (Rumi vs PartyDEX ckUSDT) — same shape as A/C/D
-    let dry_run_r = if has_partydex_ckusdt {
+    let dry_run_r = if has_partydex_ckusdt && !rumi_amm_paused {
         match compute_optimal_trade(&config, &target_r).await {
             Ok(dr) => Some(dr),
             Err(e) => { log_error(&format!("Strategy R computation failed: {}", e)); None }
@@ -645,7 +654,11 @@ pub async fn run_arb_cycle() {
             } else { 0 }
         }).unwrap_or(0),
         rumi_icp_price_usd: dry_run_a.as_ref().map(|d| d.rumi_price_usd).unwrap_or(0),
-        icpswap_icp_price_ckusdc: dry_run_a.as_ref().map(|d| d.icpswap_price_usd).unwrap_or(0),
+        icpswap_icp_price_ckusdc: dry_run_a.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0)
+            .or_else(|| dry_run_k.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_n.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_b.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .unwrap_or(0),
         virtual_price: dry_run_a.as_ref().map(|d| d.virtual_price).unwrap_or(0),
         spread_a_bps: dry_run_a.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         // icUSD/ICP native (8 dec): dry_run_b stores 6-dec USD, multiply by 100
@@ -656,8 +669,22 @@ pub async fn run_arb_cycle() {
         balance_ckusdc: dry_run_a.as_ref().map(|d| d.balance_ckusdc).unwrap_or(0),
         balance_ckusdt: bal_ckusdt.unwrap_or(0),
         balance_icusd: bal_icusd.unwrap_or(0),
-        icpswap_icp_price_ckusdt: dry_run_c.as_ref().map(|d| d.icpswap_price_usd).unwrap_or(0),
+        icpswap_icp_price_ckusdt: dry_run_c.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0)
+            .or_else(|| dry_run_l.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_o.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_f.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .unwrap_or(0),
         spread_c_bps: dry_run_c.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        partydex_icp_price_ckusdc: dry_run_k.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0)
+            .or_else(|| dry_run_l.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_m.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_q.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .unwrap_or(0),
+        partydex_icp_price_ckusdt: dry_run_n.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0)
+            .or_else(|| dry_run_o.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_p.as_ref().map(|d| d.rumi_price_usd).filter(|&v| v > 0))
+            .or_else(|| dry_run_r.as_ref().map(|d| d.icpswap_price_usd).filter(|&v| v > 0))
+            .unwrap_or(0),
         spread_d_bps: dry_run_d.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_f_bps: dry_run_f.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_k_bps: dry_run_k.as_ref().map(|d| d.spread_bps).unwrap_or(0),
@@ -887,6 +914,10 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
     let config = state::read_state(|s| s.config.clone());
     if config.paused {
         state::log_activity("arb_skip", &format!("[{}] Bot is paused", strategy_tag));
+        return;
+    }
+    if config.rumi_amm_paused && matches!(strategy_tag, "A" | "C" | "D" | "Q" | "R") {
+        state::log_activity("arb_skip", &format!("[{}] Rumi AMM paused (liquidity constraints)", strategy_tag));
         return;
     }
 

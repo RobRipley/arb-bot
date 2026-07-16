@@ -2,6 +2,7 @@ type BotConfig = record {
   owner: principal;
   rumi_amm: principal;
   rumi_3pool: principal;
+  rumi_amm_paused: bool;
   icpswap_pool: principal;
   icp_ledger: principal;
   ckusdc_ledger: principal;
@@ -154,6 +155,8 @@ type CycleSnapshot = record {
   spread_p_bps: int32;
   spread_q_bps: int32;
   spread_r_bps: int32;
+  partydex_icp_price_ckusdc: nat64;
+  partydex_icp_price_ckusdt: nat64;
   traded: bool;
   strategy_used: text;
 };
@@ -298,6 +301,7 @@ service : (InitArgs) -> {
   set_config: (BotConfig) -> ();
   pause: () -> ();
   resume: () -> ();
+  set_rumi_amm_paused: (bool) -> (variant { Ok; Err: text });
   setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
   recover_partydex_balance: (principal) -> (variant { Ok: record { nat64; nat64 }; Err: text });

@@ -42,6 +42,14 @@ pub struct BotConfig {
     pub owner: Principal,
     pub rumi_amm: Principal,
     pub rumi_3pool: Principal,
+    /// Kill switch for the Rumi AMM (3USD/ICP) venue. When true, Strategies
+    /// A/C/D/Q/R (every strategy that trades against `rumi_amm`) are skipped
+    /// entirely in both the auto cycle and force-execute — no network calls
+    /// are made, so no cycles are burned checking a venue known to be
+    /// illiquid. Toggle via `set_rumi_amm_paused`. Strategies B/F/K/L/M/N/O/P
+    /// never touch `rumi_amm` and are unaffected.
+    #[serde(default)]
+    pub rumi_amm_paused: bool,
     pub icpswap_pool: Principal,
     pub icp_ledger: Principal,
     pub ckusdc_ledger: Principal,
@@ -209,6 +217,12 @@ pub struct CycleSnapshot {
     /// Strategy R spread (Rumi 3pool vs PartyDEX ckUSDT), 0 if N/A. Populated in PR2b.
     #[serde(default)]
     pub spread_r_bps: i32,
+    /// PartyDEX ckUSDC per 1 ICP (6 dec USD), 0 if N/A.
+    #[serde(default)]
+    pub partydex_icp_price_ckusdc: u64,
+    /// PartyDEX ckUSDT per 1 ICP (6 dec USD), 0 if N/A.
+    #[serde(default)]
+    pub partydex_icp_price_ckusdt: u64,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"
@@ -456,6 +470,7 @@ impl Default for BotState {
                 owner: Principal::anonymous(),
                 rumi_amm: Principal::anonymous(),
                 rumi_3pool: Principal::anonymous(),
+                rumi_amm_paused: false,
                 icpswap_pool: Principal::anonymous(),
                 icp_ledger: Principal::anonymous(),
                 ckusdc_ledger: Principal::anonymous(),

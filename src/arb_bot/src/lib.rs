@@ -306,6 +306,19 @@ fn resume() {
     state::log_activity("admin", &format!("Bot resumed by {}", ic_cdk::api::caller()));
 }
 
+/// Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
+/// (every strategy that trades against `rumi_amm`) without touching the
+/// other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
+#[update]
+fn set_rumi_amm_paused(paused: bool) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| { s.config.rumi_amm_paused = paused; });
+    state::log_activity("admin", &format!(
+        "rumi_amm_paused set to {} by {}", paused, ic_cdk::api::caller()
+    ));
+    Ok(())
+}
+
 // 3pool underlying token ledgers (icUSD=0, ckUSDT=1, ckUSDC=2)
 const ICUSD_LEDGER: &str = "t6bor-paaaa-aaaap-qrd5q-cai";
 const CKUSDT_LEDGER: &str = "cngnf-vqaaa-aaaar-qag4q-cai";
