@@ -149,6 +149,18 @@ pub fn is_cycle_in_progress() -> bool {
     CYCLE_IN_PROGRESS.with(|c| c.get())
 }
 
+/// Admin escape hatch for a wedged cycle lock. `CYCLE_IN_PROGRESS` is normally
+/// released by a `Guard` Drop at the end of `run_arb_cycle` /
+/// `run_specific_strategy`, but a wasm trap unwinds without running Drop — so a
+/// trap after the flag commits would leave it stuck `true`, silently rejecting
+/// every future cycle and manual strategy run until the next upgrade. Clears the
+/// flag (and the per-cycle caches it guards) and reports the prior state.
+pub fn force_clear_cycle_lock() -> bool {
+    let was_locked = CYCLE_IN_PROGRESS.with(|c| c.replace(false));
+    clear_cycle_cache();
+    was_locked
+}
+
 fn clear_cycle_cache() {
     CYCLE_BALANCE_CACHE.with(|c| c.borrow_mut().clear());
     CYCLE_VP_CACHE.with(|c| c.set(None));
@@ -3363,15 +3375,18 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     // (works even after a canister restart that cleared pending_exit).
     let pending_exit: Option<state::PendingExit> =
         state::read_state(|s| s.pending_exit.clone());
-    // Scan backward through trade_legs for the most recent Leg1 with a
-    // recognized dex string. Skip any Leg1 whose dex doesn't map (e.g.
-    // historical backfilled entries from deprecated strategies).
+    // Look only at the SINGLE most recent Leg1 and use its pool if the dex maps.
+    // The closure returns Some for ANY Leg1, so the scan stops at the newest one
+    // instead of skipping past unmapped legs into stale history: a strategy S
+    // Leg1 ("ICPSwap-icUSD-BOB" / "ICPSwap-BOB-ICP") doesn't map to an ICP pool,
+    // so it yields Some(None) here — `.flatten()` turns that into "no fallback
+    // exclusion" rather than reaching back to an already-resolved A–R Leg1.
     let fallback_entry_pool: Option<state::Pool> = state::find_map_last_trade_leg(|l| {
         match l.leg_type {
-            state::LegType::Leg1 => dex_string_to_pool(&l.dex),
+            state::LegType::Leg1 => Some(dex_string_to_pool(&l.dex)),
             _ => None,
         }
-    });
+    }).flatten();
     let entry_pool: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.entry_pool).or(fallback_entry_pool);
     let intended_exit: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.intended_exit_pool);
 
@@ -3569,13 +3584,15 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
         }
     }
 
-    // Clear pending_exit regardless: either we drained (success) or all non-entry
-    // pools failed (stale state cleared so next cycle can reassess).
-    state::mutate_state(|s| s.pending_exit = None);
-
+    // Clear pending_exit ONLY on success — mirror of drain_residual_bob. On a
+    // total drain failure the leg-2 ICP is still stranded here, so the marker
+    // must survive to keep the entry-pool exclusion intact for next cycle's
+    // retry; clearing it regardless would let a retry sell that ICP back into
+    // the very pool it was bought from.
     if !any_success && !order.is_empty() {
         return Err("All drain attempts failed".to_string());
     }
+    state::mutate_state(|s| s.pending_exit = None);
     Ok(())
 }
 

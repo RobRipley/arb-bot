@@ -1268,6 +1268,7 @@
           <button class="chip" data-legfilter="Leg1" onclick="filterLegs('Leg1')">Leg 1</button>
           <button class="chip" data-legfilter="Leg2" onclick="filterLegs('Leg2')">Leg 2</button>
           <button class="chip" data-legfilter="Drain" onclick="filterLegs('Drain')">Drain</button>
+          <button class="chip" data-legfilter="TopUp" onclick="filterLegs('TopUp')">Top-up</button>
         </div>
         <span style="font-size:12px;color:var(--text-tertiary)" id="trades-count"></span>
       </div>
@@ -2063,6 +2064,7 @@
         remove_admin: I.Func([I.Principal], [], []),
         pause: I.Func([], [], []),
         resume: I.Func([], [], []),
+        clear_cycle_lock: I.Func([], [], []),
         setup_approvals: I.Func([], [I.Text], []),
         manual_arb_cycle: I.Func([], [], []),
         execute_strategy_a: I.Func([], [], []),

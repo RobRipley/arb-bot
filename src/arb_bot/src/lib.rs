@@ -172,25 +172,33 @@ fn get_summary() -> TradeSummary {
         unpaired_drain_usd: 0,
         unpaired_drain_sold_usd: 0,
     };
-    let mut has_pending_leg1 = false;
+    // Track the Leg1→Drain pairing separately per transit denomination. Strategies
+    // A–R trade through ICP; strategy S trades through BOB. A single shared flag
+    // mispairs when the two interleave chronologically (an S Leg1 followed by an
+    // A–R Drain, or vice versa), corrupting unpaired_drain_usd. A leg is BOB-family
+    // iff either of its tokens is BOB (only strategy S touches BOB).
+    let mut has_pending_icp_leg1 = false;
+    let mut has_pending_bob_leg1 = false;
     state::fold_trade_legs((), |_, leg| {
         summary.total_usd_in += leg.sold_usd_value;
         summary.total_usd_out += leg.bought_usd_value;
         summary.total_fees_usd += leg.fees_usd;
+        let is_bob = leg.sold_token == "BOB" || leg.bought_token == "BOB";
         match leg.leg_type {
             state::LegType::Leg1 => {
                 summary.leg1_count += 1;
-                has_pending_leg1 = true;
+                if is_bob { has_pending_bob_leg1 = true; } else { has_pending_icp_leg1 = true; }
             }
             state::LegType::Leg2 => {
                 summary.leg2_count += 1;
-                has_pending_leg1 = false;
+                if is_bob { has_pending_bob_leg1 = false; } else { has_pending_icp_leg1 = false; }
             }
             state::LegType::Drain => {
                 summary.drain_count += 1;
+                let has_pending_leg1 = if is_bob { has_pending_bob_leg1 } else { has_pending_icp_leg1 };
                 if !has_pending_leg1 {
-                    // This drain has no matching Leg1 — it's recovering
-                    // pre-existing ICP, not arb profit
+                    // This drain has no matching Leg1 in its own denomination —
+                    // it's recovering pre-existing inventory, not arb profit.
                     summary.unpaired_drain_usd += leg.bought_usd_value;
                     summary.unpaired_drain_sold_usd += leg.sold_usd_value;
                 }
@@ -318,6 +326,20 @@ fn resume() {
     require_admin();
     state::mutate_state(|s| s.config.paused = false);
     state::log_activity("admin", &format!("Bot resumed by {}", ic_cdk::api::caller()));
+}
+
+/// Admin escape hatch for a stuck arb-cycle lock. Cycles gate on an in-progress
+/// flag released by a Drop guard; a wasm trap after the flag commits unwinds
+/// without running Drop, wedging every future cycle and manual strategy run
+/// until an upgrade. This force-clears the flag (and per-cycle caches) so cycles
+/// can resume without redeploying.
+#[update]
+fn clear_cycle_lock() {
+    require_admin();
+    let was_locked = arb::force_clear_cycle_lock();
+    state::log_activity("admin", &format!(
+        "Cycle lock cleared by {} (was_locked={})", ic_cdk::api::caller(), was_locked
+    ));
 }
 
 /// Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R

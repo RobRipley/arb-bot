@@ -329,6 +329,7 @@ service : (InitArgs) -> {
   set_config: (BotConfig) -> ();
   pause: () -> ();
   resume: () -> ();
+  clear_cycle_lock: () -> ();
   set_rumi_amm_paused: (bool) -> (variant { Ok; Err: text });
   setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
