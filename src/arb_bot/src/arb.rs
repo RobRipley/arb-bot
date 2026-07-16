@@ -175,6 +175,152 @@ pub async fn fetch_virtual_price_cached(rumi_3pool: Principal) -> Result<u64, St
     Ok(v)
 }
 
+// ─── Strategy S reference pricing helpers ───
+//
+// Best-USD routing for Strategy S's band-edge legs (top-up and stranded-BOB
+// skim, added in a later task) and for its ICP↔USD reference mark. Candidate
+// set intentionally mirrors design decision #4: every configured non-PartyDEX
+// stable/ICP pool (ICPSwap ckUSDC/icUSD/ckUSDT, Rumi AMM VP-adjusted) — the
+// same venues `drain_residual_icp` considers, MINUS the ICPSwap 3USD/ICP pool
+// (a volume-bot-only venue redundant with Rumi AMM's 3USD/ICP quote). This
+// deliberately duplicates `drain_residual_icp`'s per-pool decimal/VP math
+// (arb.rs, `drain_residual_icp`) rather than refactoring it, per the
+// behavior-preservation constraint on existing strategies A–R.
+//
+// Unused until the Strategy S evaluator/executor (next tasks) call them.
+
+/// Best USD-per-ICP quote across every configured stable/ICP pool, selling
+/// `icp_amount_e8s`. Returns `None` if every candidate pool is unconfigured
+/// or every quote call failed.
+#[allow(dead_code)]
+pub struct StableQuote {
+    pub pool: state::Pool,
+    pub usd_out_6dec: u64,
+    pub usd_per_icp_6dec: u64,
+}
+
+#[allow(dead_code)]
+async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<StableQuote> {
+    let vp = fetch_virtual_price_cached(config.rumi_3pool).await
+        .unwrap_or(1_000_000_000_000_000_000);
+
+    let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
+    let icusd_resolved = state::read_state(|s| s.icusd_token_ordering_resolved);
+    let has_ckusdt_pool = config.icpswap_ckusdt_pool != Principal::anonymous();
+    let ckusdt_resolved = state::read_state(|s| s.ckusdt_token_ordering_resolved);
+
+    let rumi_fut = prices::fetch_rumi_quote_for_amount(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger, icp_amount_e8s);
+    let ckusdc_fut = prices::fetch_icpswap_quote_for_amount(config.icpswap_pool, icp_amount_e8s, config.icpswap_icp_is_token0);
+    let (rumi_res, ckusdc_res) = futures::future::join(rumi_fut, ckusdc_fut).await;
+
+    let icusd_res: Result<u64, String> = if has_icusd_pool && icusd_resolved {
+        prices::fetch_icpswap_quote_for_amount(config.icpswap_icusd_pool, icp_amount_e8s, config.icpswap_icusd_icp_is_token0).await
+    } else {
+        Err("icUSD pool unavailable".to_string())
+    };
+    let ckusdt_res: Result<u64, String> = if has_ckusdt_pool && ckusdt_resolved {
+        prices::fetch_icpswap_quote_for_amount(config.icpswap_ckusdt_pool, icp_amount_e8s, config.icpswap_ckusdt_icp_is_token0).await
+    } else {
+        Err("ckUSDT pool unavailable".to_string())
+    };
+
+    // (pool, usd_out_6dec) — same per-pool decimal/VP math as drain_residual_icp's candidate block.
+    let mut candidates: Vec<(state::Pool, u64)> = Vec::new();
+    if let Ok(out_3usd) = rumi_res {
+        // 3USD is 8 dec, worth VP/1e18 USD each.
+        candidates.push((state::Pool::RumiThreeUsd, stable_to_usd_6dec_vp(out_3usd, 8, vp).max(0) as u64));
+    }
+    if let Ok(out_ck) = ckusdc_res {
+        // ckUSDC is 6 dec ≈ $1.
+        candidates.push((state::Pool::IcpswapCkusdc, stable_to_usd_6dec(out_ck, 6).max(0) as u64));
+    }
+    if let Ok(out_icusd) = icusd_res {
+        // icUSD is 8 dec ≈ $1.
+        candidates.push((state::Pool::IcpswapIcusd, stable_to_usd_6dec(out_icusd, 8).max(0) as u64));
+    }
+    if let Ok(out_ckusdt) = ckusdt_res {
+        // ckUSDT is 6 dec ≈ $1.
+        candidates.push((state::Pool::IcpswapCkusdt, stable_to_usd_6dec(out_ckusdt, 6).max(0) as u64));
+    }
+
+    candidates.into_iter().max_by_key(|(_, usd_out)| *usd_out).map(|(pool, usd_out_6dec)| {
+        let usd_per_icp_6dec = if icp_amount_e8s > 0 {
+            (usd_out_6dec as u128 * 100_000_000 / icp_amount_e8s as u128) as u64
+        } else {
+            0
+        };
+        StableQuote { pool, usd_out_6dec, usd_per_icp_6dec }
+    })
+}
+
+/// Mirror of `best_stable_usd_per_icp` for the reverse direction: spend
+/// `usd_6dec` worth of whichever configured stable gives the most ICP back.
+/// Used by Strategy S's ICP inventory top-up leg (a later task).
+#[allow(dead_code)]
+pub struct TopUpQuote {
+    pub pool: state::Pool,
+    pub stable_in_amount: u64,
+    pub icp_out_e8s: u64,
+}
+
+#[allow(dead_code)]
+async fn best_stable_icp_per_usd(config: &state::BotConfig, usd_6dec: u64) -> Option<TopUpQuote> {
+    let vp = fetch_virtual_price_cached(config.rumi_3pool).await
+        .unwrap_or(1_000_000_000_000_000_000);
+
+    let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
+    let icusd_resolved = state::read_state(|s| s.icusd_token_ordering_resolved);
+    let has_ckusdt_pool = config.icpswap_ckusdt_pool != Principal::anonymous();
+    let ckusdt_resolved = state::read_state(|s| s.ckusdt_token_ordering_resolved);
+
+    let rumi_in = usd_6dec_to_stable_vp(usd_6dec, 8, vp);
+    let ckusdc_in = usd_6dec_to_stable(usd_6dec, 6);
+    let icusd_in = usd_6dec_to_stable(usd_6dec, 8);
+    let ckusdt_in = usd_6dec_to_stable(usd_6dec, 6);
+
+    let rumi_fut = prices::fetch_rumi_quote_for_amount(config.rumi_amm, RUMI_POOL_ID, config.three_usd_ledger, rumi_in);
+    let ckusdc_fut = prices::fetch_icpswap_quote_for_amount(config.icpswap_pool, ckusdc_in, !config.icpswap_icp_is_token0);
+    let (rumi_res, ckusdc_res) = futures::future::join(rumi_fut, ckusdc_fut).await;
+
+    let icusd_res: Result<u64, String> = if has_icusd_pool && icusd_resolved {
+        prices::fetch_icpswap_quote_for_amount(config.icpswap_icusd_pool, icusd_in, !config.icpswap_icusd_icp_is_token0).await
+    } else {
+        Err("icUSD pool unavailable".to_string())
+    };
+    let ckusdt_res: Result<u64, String> = if has_ckusdt_pool && ckusdt_resolved {
+        prices::fetch_icpswap_quote_for_amount(config.icpswap_ckusdt_pool, ckusdt_in, !config.icpswap_ckusdt_icp_is_token0).await
+    } else {
+        Err("ckUSDT pool unavailable".to_string())
+    };
+
+    // (pool, stable_in_amount, icp_out_e8s)
+    let mut candidates: Vec<(state::Pool, u64, u64)> = Vec::new();
+    if let Ok(icp_out) = rumi_res {
+        candidates.push((state::Pool::RumiThreeUsd, rumi_in, icp_out));
+    }
+    if let Ok(icp_out) = ckusdc_res {
+        candidates.push((state::Pool::IcpswapCkusdc, ckusdc_in, icp_out));
+    }
+    if let Ok(icp_out) = icusd_res {
+        candidates.push((state::Pool::IcpswapIcusd, icusd_in, icp_out));
+    }
+    if let Ok(icp_out) = ckusdt_res {
+        candidates.push((state::Pool::IcpswapCkusdt, ckusdt_in, icp_out));
+    }
+
+    candidates.into_iter().max_by_key(|(_, _, icp_out)| *icp_out)
+        .map(|(pool, stable_in_amount, icp_out_e8s)| TopUpQuote { pool, stable_in_amount, icp_out_e8s })
+}
+
+/// USD mark (6-dec) for an ICP-denominated leg, given a USD-per-ICP rate
+/// (6-dec USD per 1 ICP, i.e. per 100_000_000 e8s). Used to book Strategy S's
+/// ICP legs at the reference USD quote fetched at trade time (design decision
+/// #3) — unlike strategies A–R, which keep `sold_usd_value = 0` for ICP legs.
+#[allow(dead_code)]
+fn mark_icp_usd(icp_e8s: u64, usd_per_icp_6dec: u64) -> i64 {
+    (icp_e8s as u128 * usd_per_icp_6dec as u128 / 100_000_000) as i64
+}
+
 // ─── Dry Run Result ───
 
 #[derive(CandidType, Clone, Debug)]
