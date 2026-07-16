@@ -192,6 +192,8 @@ pub async fn fetch_virtual_price_cached(rumi_3pool: Principal) -> Result<u64, St
 /// Best USD-per-ICP quote across every configured stable/ICP pool, selling
 /// `icp_amount_e8s`. Returns `None` if every candidate pool is unconfigured
 /// or every quote call failed.
+/// allow(dead_code): current callers only read `usd_per_icp_6dec`; `pool` and
+/// `usd_out_6dec` are part of the plan-specified shape.
 #[allow(dead_code)]
 pub struct StableQuote {
     pub pool: state::Pool,
@@ -199,7 +201,6 @@ pub struct StableQuote {
     pub usd_per_icp_6dec: u64,
 }
 
-#[allow(dead_code)]
 async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<StableQuote> {
     let vp = fetch_virtual_price_cached(config.rumi_3pool).await
         .unwrap_or(1_000_000_000_000_000_000);
@@ -256,14 +257,12 @@ async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64)
 /// Mirror of `best_stable_usd_per_icp` for the reverse direction: spend
 /// `usd_6dec` worth of whichever configured stable gives the most ICP back.
 /// Used by Strategy S's ICP inventory top-up leg (a later task).
-#[allow(dead_code)]
 pub struct TopUpQuote {
     pub pool: state::Pool,
     pub stable_in_amount: u64,
     pub icp_out_e8s: u64,
 }
 
-#[allow(dead_code)]
 async fn best_stable_icp_per_usd(config: &state::BotConfig, usd_6dec: u64) -> Option<TopUpQuote> {
     let vp = fetch_virtual_price_cached(config.rumi_3pool).await
         .unwrap_or(1_000_000_000_000_000_000);
@@ -316,7 +315,6 @@ async fn best_stable_icp_per_usd(config: &state::BotConfig, usd_6dec: u64) -> Op
 /// (6-dec USD per 1 ICP, i.e. per 100_000_000 e8s). Used to book Strategy S's
 /// ICP legs at the reference USD quote fetched at trade time (design decision
 /// #3) — unlike strategies A–R, which keep `sold_usd_value = 0` for ICP legs.
-#[allow(dead_code)]
 fn mark_icp_usd(icp_e8s: u64, usd_per_icp_6dec: u64) -> i64 {
     (icp_e8s as u128 * usd_per_icp_6dec as u128 / 100_000_000) as i64
 }
@@ -521,10 +519,16 @@ pub async fn run_arb_cycle() {
         log_error(&format!("Drain residual ICP failed: {}", e));
     }
 
-    // Strategy S stranded-BOB recovery — no-op while the BOB pools are
-    // unconfigured/unresolved or the BOB balance is dust.
-    if let Err(e) = drain_residual_bob(&config).await {
-        log_error(&format!("Drain residual BOB failed: {}", e));
+    // Strategy S stranded-BOB recovery. Gated so an inert deploy (icUSD/BOB
+    // pool unconfigured, nothing pending) adds zero standing balance queries;
+    // once S can trade — or a pending BOB exit exists — it runs every cycle
+    // and is still a no-op while the BOB balance is dust.
+    let bob_drain_relevant = state::read_state(|s| s.pending_bob_exit.is_some())
+        || config.icpswap_icusd_bob_pool != Principal::anonymous();
+    if bob_drain_relevant {
+        if let Err(e) = drain_residual_bob(&config).await {
+            log_error(&format!("Drain residual BOB failed: {}", e));
+        }
     }
 
     // Build IcpswapTarget for strategy A (ckUSDC/ICP) — always present
@@ -820,19 +824,54 @@ pub async fn run_arb_cycle() {
         None
     };
 
-    // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT) — dry runs already have 3USD/ckUSDC/ckUSDT.
+    // Evaluate Strategy S (icUSD/BOB triangular). Dry-run + snapshot whenever
+    // both BOB pools are configured and their orderings resolved; joining the
+    // best-strategy selection additionally requires bob_execution_enabled
+    // (checked at the profit collection below) — dry-run-first, spec §5.
+    let (bob_icp_resolved, icusd_bob_resolved) = state::read_state(|s| {
+        (s.bob_icp_ordering_resolved, s.icusd_bob_ordering_resolved)
+    });
+    let has_bob = config.icpswap_icusd_bob_pool != Principal::anonymous()
+        && config.icpswap_bob_icp_pool != Principal::anonymous()
+        && bob_icp_resolved
+        && icusd_bob_resolved;
+    let target_s = BobTarget {
+        icusd_bob_pool: config.icpswap_icusd_bob_pool,
+        icusd_is_token0: config.icpswap_icusd_bob_icusd_is_token0,
+        bob_icp_pool: config.icpswap_bob_icp_pool,
+        bob_icp_icp_is_token0: config.icpswap_bob_icp_icp_is_token0,
+        bob_ledger: config.bob_ledger,
+        bob_fee: config.bob_ledger_fee,
+        icusd_ledger: config.icusd_ledger,
+        icusd_fee: ICUSD_FEE,
+        icp_ledger: config.icp_ledger,
+    };
+    let dry_run_s = if has_bob {
+        match find_optimal_bob(&config, &target_s).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy S computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT, BOB) — dry runs already have 3USD/ckUSDC/ckUSDT.
     // Still need ICP and icUSD here; ckUSDT balance falls back to dry_run_c if available.
+    // BOB is only queried once Strategy S is live (zero standing cost while inert).
     let ckusdt_fallback_ledger = if config.ckusdt_ledger != Principal::anonymous() {
         config.ckusdt_ledger
     } else {
         candid::Principal::from_text("cngnf-vqaaa-aaaar-qag4q-cai").unwrap()
     };
-    let (bal_icp, bal_icusd, bal_ckusdt) = futures::future::join3(
+    let (bal_icp, bal_icusd, bal_ckusdt, bal_bob) = futures::future::join4(
         fetch_balance_cached(config.icp_ledger),
         async {
             if has_icusd_pool { fetch_balance_cached(config.icusd_ledger).await } else { Ok(0) }
         },
         fetch_balance_cached(ckusdt_fallback_ledger),
+        async {
+            if has_bob { fetch_balance_cached(config.bob_ledger).await } else { Ok(0) }
+        },
     ).await;
 
     // Build snapshot from dry run data
@@ -886,6 +925,10 @@ pub async fn run_arb_cycle() {
         spread_p_bps: dry_run_p.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_q_bps: dry_run_q.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_r_bps: dry_run_r.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        bob_pool_price_icusd_per_bob: dry_run_s.as_ref().map(|d| d.pool_price_icusd_per_bob_8dec).unwrap_or(0),
+        bob_ref_price_icusd_per_bob: dry_run_s.as_ref().map(|d| d.ref_price_icusd_per_bob_8dec).unwrap_or(0),
+        spread_s_bps: dry_run_s.as_ref().map(|d| d.spread_bps as i64).unwrap_or(0),
+        balance_bob: bal_bob.unwrap_or(0),
         traded: false,
         strategy_used: String::new(),
     };
@@ -904,10 +947,18 @@ pub async fn run_arb_cycle() {
     let profit_p = dry_run_p.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_q = dry_run_q.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_r = dry_run_r.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    // Strategy S joins the selection ONLY when execution is enabled; while
+    // bob_execution_enabled is false it stays dry-run log + snapshot only.
+    let profit_s = if config.bob_execution_enabled {
+        dry_run_s.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0)
+    } else {
+        0
+    };
 
     let all_profits = [
         profit_a, profit_b, profit_c, profit_d, profit_f,
         profit_k, profit_l, profit_m, profit_n, profit_o, profit_p, profit_q, profit_r,
+        profit_s,
     ];
     if all_profits.iter().all(|&p| p <= 0) {
         // Nothing profitable
@@ -947,7 +998,7 @@ pub async fn run_arb_cycle() {
         ("D", profit_d), ("F", profit_f),
         ("K", profit_k), ("L", profit_l), ("M", profit_m),
         ("N", profit_n), ("O", profit_o), ("P", profit_p),
-        ("Q", profit_q), ("R", profit_r),
+        ("Q", profit_q), ("R", profit_r), ("S", profit_s),
     ];
     let winner = profits.iter()
         .max_by_key(|(_, p)| *p)
@@ -1065,6 +1116,23 @@ pub async fn run_arb_cycle() {
                 Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_q, &dry_run).await,
                 Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_q, &dry_run).await,
             }
+        }
+        "S" => {
+            // Winner "S" implies bob_execution_enabled, should_trade, and a
+            // set direction (profit_s stays 0 otherwise). BobDryRun has its
+            // own shape, so it doesn't go through log_start.
+            let dry_run = dry_run_s.unwrap();
+            let (in_tok, out_tok) = match dry_run.direction.unwrap() {
+                BobDirection::Forward => ("icUSD", "ICP"),
+                BobDirection::Reverse => ("ICP", "icUSD"),
+            };
+            state::log_activity("arb_start", &format!(
+                "[S] Starting {:?} trade: {} {} → est {} BOB → est {} {} (spread: {} bps, est profit: {})",
+                dry_run.direction.unwrap(), dry_run.input_amount, in_tok,
+                dry_run.bob_amount, dry_run.output_amount, out_tok,
+                dry_run.spread_bps, dry_run.expected_profit_usd,
+            ));
+            execute_bob(&config, &target_s, &dry_run).await;
         }
         _ => {
             let dry_run = dry_run_r.unwrap();
@@ -1509,6 +1577,59 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
                     }
                 }
                 Err(e) => log_error(&format!("[R] Computation failed: {}", e)),
+            }
+        }
+        "S" => {
+            let config = state::read_state(|s| s.config.clone());
+            if config.icpswap_icusd_bob_pool == Principal::anonymous()
+                || config.icpswap_bob_icp_pool == Principal::anonymous()
+            {
+                state::log_activity("arb_skip", "[S] BOB pools not configured"); return;
+            }
+            // Resolve both BOB pool orderings on demand (per-letter pattern).
+            let (bob_icp_resolved, icusd_bob_resolved) = state::read_state(|s| {
+                (s.bob_icp_ordering_resolved, s.icusd_bob_ordering_resolved)
+            });
+            if !bob_icp_resolved {
+                match prices::fetch_icpswap_token_ordering(config.icpswap_bob_icp_pool, config.icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_bob_icp_icp_is_token0 = icp_is_token0; s.bob_icp_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[S] BOB/ICP pool ordering resolution failed: {}", e)); return; }
+                }
+            }
+            if !icusd_bob_resolved {
+                match prices::fetch_icpswap_token_ordering(config.icpswap_icusd_bob_pool, config.icusd_ledger).await {
+                    Ok(icusd_is_token0) => state::mutate_state(|s| { s.config.icpswap_icusd_bob_icusd_is_token0 = icusd_is_token0; s.icusd_bob_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[S] icUSD/BOB pool ordering resolution failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone()); // re-read post-resolution
+            let target = BobTarget {
+                icusd_bob_pool: config.icpswap_icusd_bob_pool,
+                icusd_is_token0: config.icpswap_icusd_bob_icusd_is_token0,
+                bob_icp_pool: config.icpswap_bob_icp_pool,
+                bob_icp_icp_is_token0: config.icpswap_bob_icp_icp_is_token0,
+                bob_ledger: config.bob_ledger,
+                bob_fee: config.bob_ledger_fee,
+                icusd_ledger: config.icusd_ledger,
+                icusd_fee: ICUSD_FEE,
+                icp_ledger: config.icp_ledger,
+            };
+            match find_optimal_bob(&config, &target).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() {
+                        state::log_activity("arb_skip", "[S] No direction (spread below threshold or quotes failed)");
+                        return;
+                    }
+                    // Admin override, matching A–R force-execute semantics:
+                    // runs regardless of bob_execution_enabled — logged so a
+                    // dry-run-mode execution is unambiguous in the activity log.
+                    state::log_activity("arb_start", &format!(
+                        "[S] Force-execute {:?} spread {} bps est profit {} (admin override; bob_execution_enabled={})",
+                        dr.direction.unwrap(), dr.spread_bps, dr.expected_profit_usd, config.bob_execution_enabled
+                    ));
+                    execute_bob(&config, &target, &dr).await;
+                }
+                Err(e) => log_error(&format!("[S] Computation failed: {}", e)),
             }
         }
         _ => state::log_activity("arb_skip", &format!("Unknown strategy tag: {}", strategy_tag)),
@@ -2187,7 +2308,9 @@ async fn find_optimal_cross_pool_reverse(
 // quote), with icUSD treated as $1 (matching stable_to_usd_6dec). Unused
 // until the cycle wiring task; allow(dead_code) keeps cargo check clean.
 
-/// Strategy S venue bundle, built inline in `run_arb_cycle` like the other targets.
+/// Strategy S venue bundle, built inline in `run_arb_cycle` like the other
+/// targets. allow(dead_code): `bob_ledger`/`icp_ledger` are part of the
+/// plan-specified shape but current call sites read those off BotConfig.
 #[allow(dead_code)]
 pub struct BobTarget {
     pub icusd_bob_pool: Principal,
@@ -2201,7 +2324,6 @@ pub struct BobTarget {
     pub icp_ledger: Principal,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BobDirection {
     /// icUSD → BOB (our pool) → ICP (BOB/ICP). BOB cheap in our pool.
@@ -2210,7 +2332,6 @@ pub enum BobDirection {
     Reverse,
 }
 
-#[allow(dead_code)]
 pub struct BobDryRun {
     pub should_trade: bool,
     pub direction: Option<BobDirection>,
@@ -2246,12 +2367,10 @@ impl Default for BobDryRun {
 
 /// USD mark (6-dec) for a BOB amount at the icUSD-per-BOB reference price
 /// (8-dec icUSD per 1 BOB; icUSD ≈ $1, so /100 lifts 8-dec icUSD to 6-dec USD).
-#[allow(dead_code)]
 fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
     (bob_e8s as u128 * ref_price_icusd_per_bob_8dec as u128 / 100_000_000 / 100) as i64
 }
 
-#[allow(dead_code)]
 async fn find_optimal_bob(config: &state::BotConfig, target: &BobTarget) -> Result<BobDryRun, String> {
     let mut result = BobDryRun::default();
 
@@ -2854,7 +2973,6 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
 /// Executes a Strategy S top-up: buy ICP on the winning stable pool from a
 /// `best_stable_icp_per_usd` quote. Returns (icp_received, dex_label,
 /// stable_token_name, sold_usd_6dec, fee_usd_6dec).
-#[allow(dead_code)]
 async fn execute_topup_swap(
     config: &state::BotConfig,
     quote: &TopUpQuote,
@@ -2891,7 +3009,6 @@ async fn execute_topup_swap(
 /// ICP and BOB leg here is marked to the reference USD quote fetched at trade
 /// time (spec §3) so each S trade's net_profit_usd is complete on completion.
 /// Dead code until the cycle-wiring task dispatches it.
-#[allow(dead_code)]
 async fn execute_bob(config: &state::BotConfig, target: &BobTarget, dry_run: &BobDryRun) {
     let slippage = slippage_bps_clamped(config);
     let usd_per_icp = dry_run.usd_per_icp_6dec;

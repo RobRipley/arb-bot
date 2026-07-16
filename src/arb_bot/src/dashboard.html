@@ -1883,6 +1883,8 @@
       spread_f_bps: IDL.Int32,
       spread_k_bps: IDL.Int32, spread_l_bps: IDL.Int32, spread_m_bps: IDL.Int32, spread_n_bps: IDL.Int32,
       spread_o_bps: IDL.Int32, spread_p_bps: IDL.Int32, spread_q_bps: IDL.Int32, spread_r_bps: IDL.Int32,
+      bob_pool_price_icusd_per_bob: IDL.Nat64, bob_ref_price_icusd_per_bob: IDL.Nat64,
+      spread_s_bps: IDL.Int64, balance_bob: IDL.Nat64,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -1905,6 +1907,11 @@
         timestamp: I.Nat64,
         icp_amount: I.Nat64,
       });
+      const BobPool = I.Variant({ IcusdBob: I.Null, BobIcp: I.Null });
+      const PendingBobExit = I.Record({
+        entry_pool: BobPool,
+        bob_amount: I.Nat64,
+      });
       const PoolHealth = I.Record({
         pool: VolumePool,
         enabled: I.Bool,
@@ -1925,6 +1932,8 @@
         arb_paused: I.Bool,
         volume_stranded_icp: I.Nat64,
         pending_exit: I.Opt(PendingExit),
+        pending_bob_exit: I.Opt(PendingBobExit),
+        balance_bob: I.Nat64,
         slippage_bps: I.Nat64,
         pools: I.Vec(PoolHealth),
       });
@@ -2000,6 +2009,7 @@
         execute_strategy_p: I.Func([], [], []),
         execute_strategy_q: I.Func([], [], []),
         execute_strategy_r: I.Func([], [], []),
+        execute_strategy_s: I.Func([], [], []),
         dry_run_arb_cycle: I.Func([], [DryRunResult], []),
         dry_run_strategy_b: I.Func([], [DryRunResult], []),
         dry_run_strategy_c: I.Func([], [DryRunResult], []),

@@ -57,6 +57,16 @@ type PendingExit = record {
   icp_amount: nat64;
 };
 
+type BobPool = variant {
+  IcusdBob;
+  BobIcp;
+};
+
+type PendingBobExit = record {
+  entry_pool: BobPool;
+  bob_amount: nat64;
+};
+
 type PoolHealth = record {
   pool: VolumePool;
   enabled: bool;
@@ -78,6 +88,8 @@ type BotHealthReport = record {
   arb_paused: bool;
   volume_stranded_icp: nat64;
   pending_exit: opt PendingExit;
+  pending_bob_exit: opt PendingBobExit;
+  balance_bob: nat64;
   slippage_bps: nat64;
   pools: vec PoolHealth;
 };
@@ -169,6 +181,10 @@ type CycleSnapshot = record {
   spread_r_bps: int32;
   partydex_icp_price_ckusdc: nat64;
   partydex_icp_price_ckusdt: nat64;
+  bob_pool_price_icusd_per_bob: nat64;
+  bob_ref_price_icusd_per_bob: nat64;
+  spread_s_bps: int64;
+  balance_bob: nat64;
   traded: bool;
   strategy_used: text;
 };
@@ -332,6 +348,7 @@ service : (InitArgs) -> {
   execute_strategy_p: () -> ();
   execute_strategy_q: () -> ();
   execute_strategy_r: () -> ();
+  execute_strategy_s: () -> ();
   dry_run_arb_cycle: () -> (DryRunResult);
   dry_run_strategy_b: () -> (DryRunResult);
   dry_run_strategy_c: () -> (DryRunResult);

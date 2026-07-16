@@ -879,6 +879,15 @@ async fn execute_strategy_r() {
     arb::run_specific_strategy("R").await;
 }
 
+/// Admin override for Strategy S — executes regardless of
+/// bob_execution_enabled, matching A–R force-execute semantics.
+#[update]
+async fn execute_strategy_s() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy S by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("S").await;
+}
+
 #[update]
 async fn dry_run_arb_cycle() -> arb::DryRunResult {
     require_admin();
@@ -1908,16 +1917,21 @@ fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
 async fn get_bot_health() -> state::BotHealthReport {
     require_admin();
 
-    let (bot_config, volume_config, pending_exit, arb_paused, stranded) = state::read_state(|s| (
+    let (bot_config, volume_config, pending_exit, pending_bob_exit, arb_paused, stranded) = state::read_state(|s| (
         s.config.clone(),
         s.volume.clone(),
         s.pending_exit.clone(),
+        s.pending_bob_exit.clone(),
         s.config.paused,
         s.volume_stranded_icp,
     ));
 
     let arb_in_progress = arb::is_cycle_in_progress();
     let volume_in_progress = volume::is_volume_cycle_in_progress();
+
+    // Strategy S visibility: BOB balance (0 if the query fails — health must
+    // never trap on a flaky ledger).
+    let balance_bob = arb::fetch_balance(bot_config.bob_ledger).await.unwrap_or(0);
 
     let pools_to_check = [
         state::VolumePool::IcusdIcp,
@@ -2010,6 +2024,8 @@ async fn get_bot_health() -> state::BotHealthReport {
         arb_paused,
         volume_stranded_icp: stranded,
         pending_exit,
+        pending_bob_exit,
+        balance_bob,
         slippage_bps: bot_config.slippage_bps,
         pools: pool_reports,
     }

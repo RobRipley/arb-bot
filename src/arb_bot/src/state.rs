@@ -297,6 +297,18 @@ pub struct CycleSnapshot {
     /// PartyDEX ckUSDT per 1 ICP (6 dec USD), 0 if N/A.
     #[serde(default)]
     pub partydex_icp_price_ckusdt: u64,
+    /// Strategy S: icUSD out per 1 BOB on the icUSD/BOB pool (8 dec), 0 if N/A.
+    #[serde(default)]
+    pub bob_pool_price_icusd_per_bob: u64,
+    /// Strategy S: reference icUSD per 1 BOB — (ICP/BOB) × (USD/ICP) (8 dec), 0 if N/A.
+    #[serde(default)]
+    pub bob_ref_price_icusd_per_bob: u64,
+    /// Strategy S spread (pool vs reference), 0 if N/A.
+    #[serde(default)]
+    pub spread_s_bps: i64,
+    /// BOB balance (8 dec), 0 while Strategy S is inert.
+    #[serde(default)]
+    pub balance_bob: u64,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"
@@ -476,6 +488,12 @@ pub struct BotHealthReport {
     pub arb_paused: bool,
     pub volume_stranded_icp: u64,
     pub pending_exit: Option<PendingExit>,
+    /// Strategy S: BOB acquired by a leg 1 whose leg 2 hasn't completed.
+    #[serde(default)]
+    pub pending_bob_exit: Option<PendingBobExit>,
+    /// BOB balance (8 dec). 0 if the ledger query failed.
+    #[serde(default)]
+    pub balance_bob: u64,
     pub slippage_bps: u64,
     pub pools: Vec<PoolHealth>,
 }
