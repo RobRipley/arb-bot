@@ -403,6 +403,9 @@ pub async fn quote_icp_to_stable(pool: Principal, fee_pips: u32, amount: u64) ->
 /// `swaps::approve_infinite` in `setup_approvals`, not per-call here.
 pub async fn swap(
     pool: Principal,
+    // `fee_pips` is currently unused: execution follows quote_trade's returned
+    // plan (book_orders + pool_swaps verbatim), which already selects tiers.
+    // Kept on the signature / in config for possible future use / display.
     fee_pips: u32,
     side: Side,
     amount_in: u64,
@@ -411,6 +414,7 @@ pub async fn swap(
     token_out_ledger: Principal,
     token_in_is_base: bool,
 ) -> Result<u64, SwapError> {
+    let _ = fee_pips;
     let token_in_side = if token_in_is_base { TokenSide::Base } else { TokenSide::Quote };
     let token_out_side = if token_in_is_base { TokenSide::Quote } else { TokenSide::Base };
 
@@ -435,20 +439,17 @@ pub async fn swap(
         )));
     }
 
-    // 3. Execute atomically, pinned to the configured fee tier. limit_tick is
-    // set to the tick we just re-quoted at (effective_tick) so the atomic
-    // trade's own price bound is consistent with the quote we validated
-    // against — min_output is the primary slippage guard.
+    // 3. Execute atomically using the router's OWN returned execution plan.
+    // We pass the quote's `book_orders` and `pool_swaps` through verbatim —
+    // they already carry the correct limit_tick, time_in_force, and per-tier
+    // fee_pips the router chose for this taker fill. We do NOT hand-build
+    // pool_swaps, pin a fee tier, or set limit_tick ourselves (orchestrator
+    // decision #4, revised). `min_output` remains the primary slippage guard.
     let args = AtomicTradeArgs {
         allow_partial: false,
-        book_orders: vec![],
+        book_orders: quote.book_orders,
         min_output: Some(Nat::from(min_out)),
-        pool_swaps: vec![PoolSwapSpec {
-            fee_pips,
-            input_amount: Nat::from(amount_in),
-            limit_tick: quote.effective_tick,
-            side,
-        }],
+        pool_swaps: quote.pool_swaps,
     };
     if let Err(e) = call_atomic_trade(pool, args).await {
         refund_side(pool, token_in_side).await;
