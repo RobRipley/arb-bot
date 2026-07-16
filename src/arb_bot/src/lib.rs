@@ -1831,6 +1831,63 @@ fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
     Ok(())
 }
 
+/// Sets both Strategy S pool principals in one call. Resets the resolved-
+/// ordering flag for any pool whose principal actually changes, so a
+/// re-pointed pool gets its token ordering re-probed on the next cycle
+/// instead of running with stale `icp_is_token0`/`icusd_is_token0` bits.
+#[update]
+fn set_bob_pools(bob_icp_pool: Principal, icusd_bob_pool: Principal) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| {
+        if s.config.icpswap_bob_icp_pool != bob_icp_pool {
+            s.config.icpswap_bob_icp_pool = bob_icp_pool;
+            s.bob_icp_ordering_resolved = false;
+        }
+        if s.config.icpswap_icusd_bob_pool != icusd_bob_pool {
+            s.config.icpswap_icusd_bob_pool = icusd_bob_pool;
+            s.icusd_bob_ordering_resolved = false;
+        }
+    });
+    state::log_activity("admin", &format!(
+        "bob pools set: bob/icp={}, icusd/bob={}", bob_icp_pool, icusd_bob_pool
+    ));
+    Ok(())
+}
+
+/// Sets Strategy S's sizing/gating knobs. Single method so the pair can't
+/// pass through an invalid intermediate state.
+#[update]
+fn set_bob_params(max_trade_size_usd: u64, min_spread_bps: u64) -> Result<(), String> {
+    require_admin();
+    if max_trade_size_usd == 0 {
+        return Err("max_trade_size_usd must be > 0".to_string());
+    }
+    if min_spread_bps == 0 || min_spread_bps > 10_000 {
+        return Err("min_spread_bps must be > 0 and <= 10000 (100%)".to_string());
+    }
+    state::mutate_state(|s| {
+        s.config.bob_max_trade_size_usd = max_trade_size_usd;
+        s.config.bob_min_spread_bps = min_spread_bps;
+    });
+    state::log_activity("admin", &format!(
+        "bob params set: max_trade_size_usd={}, min_spread_bps={}", max_trade_size_usd, min_spread_bps
+    ));
+    Ok(())
+}
+
+/// Execution kill switch for Strategy S. Dry-run evaluation + dashboard
+/// surfacing run regardless of this flag once both BOB pools are configured;
+/// this only gates whether Strategy S can actually execute trades.
+#[update]
+fn set_bob_execution_enabled(enabled: bool) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| { s.config.bob_execution_enabled = enabled; });
+    state::log_activity("admin", &format!(
+        "bob_execution_enabled set to {} by {}", enabled, ic_cdk::api::caller()
+    ));
+    Ok(())
+}
+
 #[update]
 fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
     require_admin();

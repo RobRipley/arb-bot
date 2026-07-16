@@ -47,6 +47,29 @@ fn default_icp_inventory_ceiling() -> u64 {
     2_000_000_000
 }
 
+/// BOB ledger — mainnet-verified principal (fee 1_000_000 e8s, 8 decimals).
+fn default_bob_ledger() -> Principal {
+    Principal::from_text("7pail-xaaaa-aaaas-aabmq-cai").expect("valid principal")
+}
+
+fn default_bob_ledger_fee() -> u64 {
+    1_000_000
+}
+
+/// ICPSwap BOB/ICP pool — the sole BOB reference market (fee 3000 pips =
+/// 0.3%, token0 = BOB — verified live 2026-07-16).
+fn default_icpswap_bob_icp_pool() -> Principal {
+    Principal::from_text("ybilh-nqaaa-aaaag-qkhzq-cai").expect("valid principal")
+}
+
+fn default_bob_max_trade_size_usd() -> u64 {
+    50_000_000
+}
+
+fn default_bob_min_spread_bps() -> u64 {
+    150
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -128,6 +151,40 @@ pub struct BotConfig {
     pub icp_inventory_floor_e8s: u64,
     #[serde(default = "default_icp_inventory_ceiling")]
     pub icp_inventory_ceiling_e8s: u64,
+    /// Strategy S: BOB ledger canister (mainnet-verified).
+    #[serde(default = "default_bob_ledger")]
+    pub bob_ledger: Principal,
+    /// BOB ledger transfer fee (native units, 8 decimals).
+    #[serde(default = "default_bob_ledger_fee")]
+    pub bob_ledger_fee: u64,
+    /// Strategy S: ICPSwap BOB/ICP pool canister — BOB's sole reference market.
+    #[serde(default = "default_icpswap_bob_icp_pool")]
+    pub icpswap_bob_icp_pool: Principal,
+    /// Strategy S: ICPSwap icUSD/BOB pool canister. Anonymous until the pool
+    /// is created — this is Strategy S's master gate (inert while anonymous).
+    #[serde(default = "default_principal")]
+    pub icpswap_icusd_bob_pool: Principal,
+    /// Whether ICP is token0 in the ICPSwap BOB/ICP pool (resolved once).
+    #[serde(default)]
+    pub icpswap_bob_icp_icp_is_token0: bool,
+    /// Whether icUSD is token0 in the ICPSwap icUSD/BOB pool (resolved once).
+    #[serde(default)]
+    pub icpswap_icusd_bob_icusd_is_token0: bool,
+    /// Strategy S: max trade size per leg (6-dec USD). Default $50 — BOB/ICP
+    /// moves ~1% per $265 of volume, so this keeps clips small relative to depth.
+    #[serde(default = "default_bob_max_trade_size_usd")]
+    pub bob_max_trade_size_usd: u64,
+    /// Strategy S: minimum pool-vs-reference deviation (bps) required to trade.
+    /// Default 150 — covers two-to-three 0.3% fee legs plus thin-pool slippage
+    /// and reference uncertainty.
+    #[serde(default = "default_bob_min_spread_bps")]
+    pub bob_min_spread_bps: u64,
+    /// Strategy S execution kill switch. Dry-run evaluation + dashboard
+    /// surfacing always run once both BOB pools are configured; live
+    /// execution additionally requires this to be true. Defaults false
+    /// (dry-run-first, per design decision #5).
+    #[serde(default)]
+    pub bob_execution_enabled: bool,
 }
 
 /// Which DEX venue an arb leg trades against. Internal to arb targets — not
@@ -470,6 +527,13 @@ pub struct BotState {
     pub ckusdt_token_ordering_resolved: bool,
     #[serde(default)]
     pub icpswap_3usd_token_ordering_resolved: bool,
+    /// Strategy S: BOB/ICP pool token-ordering resolved once (mirrors the
+    /// `*_token_ordering_resolved` pattern above).
+    #[serde(default)]
+    pub bob_icp_ordering_resolved: bool,
+    /// Strategy S: icUSD/BOB pool token-ordering resolved once.
+    #[serde(default)]
+    pub icusd_bob_ordering_resolved: bool,
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
     #[serde(default)]
@@ -514,11 +578,22 @@ impl Default for BotState {
                 partydex_ckusdt_fee_pips: default_partydex_fee_pips(),
                 icp_inventory_floor_e8s: default_icp_inventory_floor(),
                 icp_inventory_ceiling_e8s: default_icp_inventory_ceiling(),
+                bob_ledger: default_bob_ledger(),
+                bob_ledger_fee: default_bob_ledger_fee(),
+                icpswap_bob_icp_pool: default_icpswap_bob_icp_pool(),
+                icpswap_icusd_bob_pool: Principal::anonymous(),
+                icpswap_bob_icp_icp_is_token0: false,
+                icpswap_icusd_bob_icusd_is_token0: false,
+                bob_max_trade_size_usd: default_bob_max_trade_size_usd(),
+                bob_min_spread_bps: default_bob_min_spread_bps(),
+                bob_execution_enabled: false,
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
             icpswap_3usd_token_ordering_resolved: false,
+            bob_icp_ordering_resolved: false,
+            icusd_bob_ordering_resolved: false,
             pending_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
@@ -937,6 +1012,8 @@ pub fn load_from_stable_memory() {
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
             icpswap_3usd_token_ordering_resolved: legacy.icpswap_3usd_token_ordering_resolved,
+            bob_icp_ordering_resolved: false,
+            icusd_bob_ordering_resolved: false,
             pending_exit: legacy.pending_exit,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,

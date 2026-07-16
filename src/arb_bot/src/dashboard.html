@@ -1859,7 +1859,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64 });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
@@ -2036,6 +2036,9 @@
         set_slippage_bps: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_arb_interval_secs: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_icp_inventory_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_pools: I.Func([I.Principal, I.Principal], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_params: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
       });
@@ -3551,6 +3554,11 @@
         <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">PartyDEX ckUSDC Pool</span><span class="stat-value">${c.partydex_ckusdc_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdc_pool)} (${bi(c.partydex_ckusdc_fee_pips)} pips)</span></div>
         <div class="stat-row"><span class="stat-label">PartyDEX ckUSDT Pool</span><span class="stat-value">${c.partydex_ckusdt_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdt_pool)} (${bi(c.partydex_ckusdt_fee_pips)} pips)</span></div>
+        <div class="stat-row"><span class="stat-label">BOB/ICP Pool</span><span class="stat-value">${short(c.icpswap_bob_icp_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Pool</span><span class="stat-value">${c.icpswap_icusd_bob_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_bob_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">BOB Max Trade Size</span><span class="stat-value">${fmt$(c.bob_max_trade_size_usd)}</span></div>
+        <div class="stat-row"><span class="stat-label">BOB Min Spread</span><span class="stat-value">${bi(c.bob_min_spread_bps)} bps</span></div>
+        <div class="stat-row"><span class="stat-label">Strategy S Execution</span><span class="stat-value">${c.bob_execution_enabled ? '<span style="color:#34d399;font-weight:600">Enabled</span>' : '<span style="color:var(--warning);font-weight:600">Dry-run only</span>'}</span></div>
         <div class="stat-row"><span class="stat-label">Admins</span><span class="stat-value">${c.admins.length}</span></div>
       `;
       // Update admin status indicator
