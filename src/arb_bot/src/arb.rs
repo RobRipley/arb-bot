@@ -402,6 +402,73 @@ pub async fn run_arb_cycle() {
     let cross_b = CrossPoolTarget { strategy_tag: "B", buy_side: icusd_side, sell_side: ckusdc_side };
     let cross_f = CrossPoolTarget { strategy_tag: "F", buy_side: icusd_side, sell_side: ckusdt_side };
 
+    // PartyDEX sides for strategies K–R (PR2b). icp_is_token0 is irrelevant for
+    // PartyDex (ICP is always `base`), set true per plan.
+    let partydex_ckusdc_side = CrossPoolSide {
+        pool: config.partydex_ckusdc_pool,
+        icp_is_token0: true,
+        stable_token_name: "ckUSDC",
+        stable_fee: CKUSDC_FEE,
+        stable_ledger: config.ckusdc_ledger,
+        stable_decimals: 6,
+        pool_enum: state::Pool::PartyDexIcpCkusdc,
+        dex_label: "PartyDEX-ckUSDC",
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdc_fee_pips,
+    };
+    let partydex_ckusdt_side = CrossPoolSide {
+        pool: config.partydex_ckusdt_pool,
+        icp_is_token0: true,
+        stable_token_name: "ckUSDT",
+        stable_fee: CKUSDT_FEE,
+        stable_ledger: config.ckusdt_ledger,
+        stable_decimals: 6,
+        pool_enum: state::Pool::PartyDexIcpCkusdt,
+        dex_label: "PartyDEX-ckUSDT",
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdt_fee_pips,
+    };
+    let cross_k = CrossPoolTarget { strategy_tag: "K", buy_side: partydex_ckusdc_side, sell_side: ckusdc_side };
+    let cross_l = CrossPoolTarget { strategy_tag: "L", buy_side: partydex_ckusdc_side, sell_side: ckusdt_side };
+    let cross_m = CrossPoolTarget { strategy_tag: "M", buy_side: partydex_ckusdc_side, sell_side: icusd_side };
+    let cross_n = CrossPoolTarget { strategy_tag: "N", buy_side: partydex_ckusdt_side, sell_side: ckusdc_side };
+    let cross_o = CrossPoolTarget { strategy_tag: "O", buy_side: partydex_ckusdt_side, sell_side: ckusdt_side };
+    let cross_p = CrossPoolTarget { strategy_tag: "P", buy_side: partydex_ckusdt_side, sell_side: icusd_side };
+
+    // IcpswapTarget-shaped Rumi-vs-PartyDEX targets for strategies Q/R.
+    let target_q = IcpswapTarget {
+        pool: config.partydex_ckusdc_pool,
+        icp_is_token0: true,
+        label: "PartyDEX-ckUSDC",
+        strategy_tag: "Q",
+        stable_token_name: "ckUSDC",
+        stable_fee: CKUSDC_FEE,
+        stable_ledger: config.ckusdc_ledger,
+        pool_enum: state::Pool::PartyDexIcpCkusdc,
+        stable_decimals: 6,
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdc_fee_pips,
+    };
+    let target_r = IcpswapTarget {
+        pool: config.partydex_ckusdt_pool,
+        icp_is_token0: true,
+        label: "PartyDEX-ckUSDT",
+        strategy_tag: "R",
+        stable_token_name: "ckUSDT",
+        stable_fee: CKUSDT_FEE,
+        stable_ledger: config.ckusdt_ledger,
+        pool_enum: state::Pool::PartyDexIcpCkusdt,
+        stable_decimals: 6,
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdt_fee_pips,
+    };
+    let has_partydex_ckusdc = config.partydex_ckusdc_pool != Principal::anonymous();
+    let has_partydex_ckusdt = config.partydex_ckusdt_pool != Principal::anonymous();
+
     // Evaluate Strategy B (ICPSwap icUSD/ICP vs ICPSwap ckUSDC/ICP)
     let dry_run_b = if has_icusd_pool && icusd_resolved {
         match compute_optimal_cross_pool_trade(&config, &cross_b).await {
@@ -471,6 +538,88 @@ pub async fn run_arb_cycle() {
         None
     };
 
+    // Evaluate Strategy K (PartyDEX ckUSDC vs ICPSwap ckUSDC/ICP). icpswap_pool's
+    // ordering is guaranteed resolved by this point (the cycle returned above if
+    // resolution failed), so only the PartyDEX pool needs a presence guard.
+    let dry_run_k = if has_partydex_ckusdc {
+        match compute_optimal_cross_pool_trade(&config, &cross_k).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy K computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy L (PartyDEX ckUSDC vs ICPSwap ckUSDT/ICP)
+    let dry_run_l = if has_partydex_ckusdc && has_ckusdt_pool && ckusdt_resolved {
+        match compute_optimal_cross_pool_trade(&config, &cross_l).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy L computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy M (PartyDEX ckUSDC vs ICPSwap icUSD/ICP)
+    let dry_run_m = if has_partydex_ckusdc && has_icusd_pool && icusd_resolved {
+        match compute_optimal_cross_pool_trade(&config, &cross_m).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy M computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy N (PartyDEX ckUSDT vs ICPSwap ckUSDC/ICP)
+    let dry_run_n = if has_partydex_ckusdt {
+        match compute_optimal_cross_pool_trade(&config, &cross_n).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy N computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy O (PartyDEX ckUSDT vs ICPSwap ckUSDT/ICP)
+    let dry_run_o = if has_partydex_ckusdt && has_ckusdt_pool && ckusdt_resolved {
+        match compute_optimal_cross_pool_trade(&config, &cross_o).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy O computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy P (PartyDEX ckUSDT vs ICPSwap icUSD/ICP)
+    let dry_run_p = if has_partydex_ckusdt && has_icusd_pool && icusd_resolved {
+        match compute_optimal_cross_pool_trade(&config, &cross_p).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy P computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy Q (Rumi vs PartyDEX ckUSDC) — same shape as A/C/D
+    let dry_run_q = if has_partydex_ckusdc {
+        match compute_optimal_trade(&config, &target_q).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy Q computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
+    // Evaluate Strategy R (Rumi vs PartyDEX ckUSDT) — same shape as A/C/D
+    let dry_run_r = if has_partydex_ckusdt {
+        match compute_optimal_trade(&config, &target_r).await {
+            Ok(dr) => Some(dr),
+            Err(e) => { log_error(&format!("Strategy R computation failed: {}", e)); None }
+        }
+    } else {
+        None
+    };
+
     // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT) — dry runs already have 3USD/ckUSDC/ckUSDT.
     // Still need ICP and icUSD here; ckUSDT balance falls back to dry_run_c if available.
     let ckusdt_fallback_ledger = if config.ckusdt_ledger != Principal::anonymous() {
@@ -511,15 +660,14 @@ pub async fn run_arb_cycle() {
         spread_c_bps: dry_run_c.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_d_bps: dry_run_d.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_f_bps: dry_run_f.as_ref().map(|d| d.spread_bps).unwrap_or(0),
-        // Strategies K–R are built and evaluated in PR2b; left at 0 here.
-        spread_k_bps: 0,
-        spread_l_bps: 0,
-        spread_m_bps: 0,
-        spread_n_bps: 0,
-        spread_o_bps: 0,
-        spread_p_bps: 0,
-        spread_q_bps: 0,
-        spread_r_bps: 0,
+        spread_k_bps: dry_run_k.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_l_bps: dry_run_l.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_m_bps: dry_run_m.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_n_bps: dry_run_n.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_o_bps: dry_run_o.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_p_bps: dry_run_p.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_q_bps: dry_run_q.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        spread_r_bps: dry_run_r.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         traded: false,
         strategy_used: String::new(),
     };
@@ -530,8 +678,19 @@ pub async fn run_arb_cycle() {
     let profit_c = dry_run_c.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_d = dry_run_d.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
     let profit_f = dry_run_f.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_k = dry_run_k.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_l = dry_run_l.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_m = dry_run_m.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_n = dry_run_n.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_o = dry_run_o.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_p = dry_run_p.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_q = dry_run_q.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
+    let profit_r = dry_run_r.as_ref().filter(|d| d.should_trade).map(|d| d.expected_profit_usd).unwrap_or(0);
 
-    let all_profits = [profit_a, profit_b, profit_c, profit_d, profit_f];
+    let all_profits = [
+        profit_a, profit_b, profit_c, profit_d, profit_f,
+        profit_k, profit_l, profit_m, profit_n, profit_o, profit_p, profit_q, profit_r,
+    ];
     if all_profits.iter().all(|&p| p <= 0) {
         // Nothing profitable
         let mut parts: Vec<String> = Vec::new();
@@ -540,6 +699,14 @@ pub async fn run_arb_cycle() {
         if let Some(c) = &dry_run_c { parts.push(format!("C: {}", c.message)); }
         if let Some(d) = &dry_run_d { parts.push(format!("D: {}", d.message)); }
         if let Some(f) = &dry_run_f { parts.push(format!("F: {}", f.message)); }
+        if let Some(k) = &dry_run_k { parts.push(format!("K: {}", k.message)); }
+        if let Some(l) = &dry_run_l { parts.push(format!("L: {}", l.message)); }
+        if let Some(m) = &dry_run_m { parts.push(format!("M: {}", m.message)); }
+        if let Some(n) = &dry_run_n { parts.push(format!("N: {}", n.message)); }
+        if let Some(o) = &dry_run_o { parts.push(format!("O: {}", o.message)); }
+        if let Some(p) = &dry_run_p { parts.push(format!("P: {}", p.message)); }
+        if let Some(q) = &dry_run_q { parts.push(format!("Q: {}", q.message)); }
+        if let Some(r) = &dry_run_r { parts.push(format!("R: {}", r.message)); }
         let msg = if parts.is_empty() { "All strategies failed".to_string() } else { parts.join(" | ") };
         state::log_activity("arb_skip", &msg);
         state::append_snapshot(snapshot);
@@ -560,6 +727,9 @@ pub async fn run_arb_cycle() {
     let profits = [
         ("A", profit_a), ("B", profit_b), ("C", profit_c),
         ("D", profit_d), ("F", profit_f),
+        ("K", profit_k), ("L", profit_l), ("M", profit_m),
+        ("N", profit_n), ("O", profit_o), ("P", profit_p),
+        ("Q", profit_q), ("R", profit_r),
     ];
     let winner = profits.iter()
         .max_by_key(|(_, p)| *p)
@@ -614,12 +784,76 @@ pub async fn run_arb_cycle() {
                 Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_b, &dry_run).await,
             }
         }
-        _ => {
+        "F" => {
             let dry_run = dry_run_f.unwrap();
             log_start("F", &dry_run);
             match dry_run.direction.as_ref().unwrap() {
                 Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_f, &dry_run).await,
                 Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_f, &dry_run).await,
+            }
+        }
+        "K" => {
+            let dry_run = dry_run_k.unwrap();
+            log_start("K", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_k, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_k, &dry_run).await,
+            }
+        }
+        "L" => {
+            let dry_run = dry_run_l.unwrap();
+            log_start("L", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_l, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_l, &dry_run).await,
+            }
+        }
+        "M" => {
+            let dry_run = dry_run_m.unwrap();
+            log_start("M", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_m, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_m, &dry_run).await,
+            }
+        }
+        "N" => {
+            let dry_run = dry_run_n.unwrap();
+            log_start("N", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_n, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_n, &dry_run).await,
+            }
+        }
+        "O" => {
+            let dry_run = dry_run_o.unwrap();
+            log_start("O", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_o, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_o, &dry_run).await,
+            }
+        }
+        "P" => {
+            let dry_run = dry_run_p.unwrap();
+            log_start("P", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_cross_pool_forward(&cross_p, &dry_run).await,
+                Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross_p, &dry_run).await,
+            }
+        }
+        "Q" => {
+            let dry_run = dry_run_q.unwrap();
+            log_start("Q", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_q, &dry_run).await,
+                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_q, &dry_run).await,
+            }
+        }
+        _ => {
+            let dry_run = dry_run_r.unwrap();
+            log_start("R", &dry_run);
+            match dry_run.direction.as_ref().unwrap() {
+                Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target_r, &dry_run).await,
+                Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target_r, &dry_run).await,
             }
         }
     }
@@ -819,6 +1053,240 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
                     }
                 }
                 Err(e) => log_error(&format!("[F] Computation failed: {}", e)),
+            }
+        }
+        "K" => {
+            let resolved = state::read_state(|s| s.token_ordering_resolved);
+            if !resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_icp_is_token0 = icp_is_token0; s.token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[K] Token ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdc_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[K] No PartyDEX ckUSDC pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "K",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdc_pool, icp_is_token0: true, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdc, dex_label: "PartyDEX-ckUSDC", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdc_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_pool, icp_is_token0: config.icpswap_icp_is_token0, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdc, dex_label: "ICPSwap", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[K] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[K] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[K] Computation failed: {}", e)),
+            }
+        }
+        "L" => {
+            let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous()));
+            if !has_ckusdt_pool { state::log_activity("arb_skip", "[L] No ckUSDT pool configured"); return; }
+            if !ckusdt_resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0; s.ckusdt_token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[L] ckUSDT ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdc_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[L] No PartyDEX ckUSDC pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "L",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdc_pool, icp_is_token0: true, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdc, dex_label: "PartyDEX-ckUSDC", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdc_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_ckusdt_pool, icp_is_token0: config.icpswap_ckusdt_icp_is_token0, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdt, dex_label: "ICPSwap-ckUSDT", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[L] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[L] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[L] Computation failed: {}", e)),
+            }
+        }
+        "M" => {
+            let (icusd_resolved, has_icusd_pool) = state::read_state(|s| (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous()));
+            if !has_icusd_pool { state::log_activity("arb_skip", "[M] No icUSD pool configured"); return; }
+            if !icusd_resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_icusd_icp_is_token0 = icp_is_token0; s.icusd_token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[M] icUSD ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdc_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[M] No PartyDEX ckUSDC pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "M",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdc_pool, icp_is_token0: true, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdc, dex_label: "PartyDEX-ckUSDC", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdc_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[M] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[M] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[M] Computation failed: {}", e)),
+            }
+        }
+        "N" => {
+            let resolved = state::read_state(|s| s.token_ordering_resolved);
+            if !resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_icp_is_token0 = icp_is_token0; s.token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[N] Token ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdt_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[N] No PartyDEX ckUSDT pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "N",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdt_pool, icp_is_token0: true, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdt, dex_label: "PartyDEX-ckUSDT", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdt_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_pool, icp_is_token0: config.icpswap_icp_is_token0, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdc, dex_label: "ICPSwap", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[N] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[N] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[N] Computation failed: {}", e)),
+            }
+        }
+        "O" => {
+            let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous()));
+            if !has_ckusdt_pool { state::log_activity("arb_skip", "[O] No ckUSDT pool configured"); return; }
+            if !ckusdt_resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0; s.ckusdt_token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[O] ckUSDT ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdt_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[O] No PartyDEX ckUSDT pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "O",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdt_pool, icp_is_token0: true, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdt, dex_label: "PartyDEX-ckUSDT", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdt_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_ckusdt_pool, icp_is_token0: config.icpswap_ckusdt_icp_is_token0, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdt, dex_label: "ICPSwap-ckUSDT", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[O] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[O] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[O] Computation failed: {}", e)),
+            }
+        }
+        "P" => {
+            let (icusd_resolved, has_icusd_pool) = state::read_state(|s| (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous()));
+            if !has_icusd_pool { state::log_activity("arb_skip", "[P] No icUSD pool configured"); return; }
+            if !icusd_resolved {
+                let (pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+                match prices::fetch_icpswap_token_ordering(pool, icp_ledger).await {
+                    Ok(icp_is_token0) => state::mutate_state(|s| { s.config.icpswap_icusd_icp_is_token0 = icp_is_token0; s.icusd_token_ordering_resolved = true; }),
+                    Err(e) => { log_error(&format!("[P] icUSD ordering failed: {}", e)); return; }
+                }
+            }
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdt_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[P] No PartyDEX ckUSDT pool configured"); return;
+            }
+            let cross = CrossPoolTarget {
+                strategy_tag: "P",
+                buy_side: CrossPoolSide { pool: config.partydex_ckusdt_pool, icp_is_token0: true, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::PartyDexIcpCkusdt, dex_label: "PartyDEX-ckUSDT", uses_vp: false, venue: state::Venue::PartyDex, fee_pips: config.partydex_ckusdt_fee_pips },
+                sell_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+            };
+            match compute_optimal_cross_pool_trade(&config, &cross).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[P] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[P] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_cross_pool_forward(&cross, &dr).await,
+                        Direction::IcpswapToRumi => execute_cross_pool_reverse(&cross, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[P] Computation failed: {}", e)),
+            }
+        }
+        "Q" => {
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdc_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[Q] No PartyDEX ckUSDC pool configured"); return;
+            }
+            let target = IcpswapTarget {
+                pool: config.partydex_ckusdc_pool, icp_is_token0: true,
+                label: "PartyDEX-ckUSDC", strategy_tag: "Q", stable_token_name: "ckUSDC",
+                stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger,
+                pool_enum: state::Pool::PartyDexIcpCkusdc, stable_decimals: 6, uses_vp: false,
+                venue: state::Venue::PartyDex,
+                fee_pips: config.partydex_ckusdc_fee_pips,
+            };
+            match compute_optimal_trade(&config, &target).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[Q] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[Q] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target, &dr).await,
+                        Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[Q] Computation failed: {}", e)),
+            }
+        }
+        "R" => {
+            let config = state::read_state(|s| s.config.clone());
+            if config.partydex_ckusdt_pool == Principal::anonymous() {
+                state::log_activity("arb_skip", "[R] No PartyDEX ckUSDT pool configured"); return;
+            }
+            let target = IcpswapTarget {
+                pool: config.partydex_ckusdt_pool, icp_is_token0: true,
+                label: "PartyDEX-ckUSDT", strategy_tag: "R", stable_token_name: "ckUSDT",
+                stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger,
+                pool_enum: state::Pool::PartyDexIcpCkusdt, stable_decimals: 6, uses_vp: false,
+                venue: state::Venue::PartyDex,
+                fee_pips: config.partydex_ckusdt_fee_pips,
+            };
+            match compute_optimal_trade(&config, &target).await {
+                Ok(dr) => {
+                    if dr.direction.is_none() { state::log_activity("arb_skip", &format!("[R] No direction: {}", dr.message)); return; }
+                    state::log_activity("arb_start", &format!("[R] Force-execute {:?} spread {} bps est profit {}", dr.direction.as_ref().unwrap(), dr.spread_bps, dr.expected_profit_usd));
+                    match dr.direction.as_ref().unwrap() {
+                        Direction::RumiToIcpswap => execute_rumi_to_icpswap(&config, &target, &dr).await,
+                        Direction::IcpswapToRumi => execute_icpswap_to_rumi(&config, &target, &dr).await,
+                    }
+                }
+                Err(e) => log_error(&format!("[R] Computation failed: {}", e)),
             }
         }
         _ => state::log_activity("arb_skip", &format!("Unknown strategy tag: {}", strategy_tag)),

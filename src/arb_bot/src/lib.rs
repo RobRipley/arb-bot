@@ -775,6 +775,62 @@ async fn execute_strategy_f() {
 }
 
 #[update]
+async fn execute_strategy_k() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy K by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("K").await;
+}
+
+#[update]
+async fn execute_strategy_l() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy L by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("L").await;
+}
+
+#[update]
+async fn execute_strategy_m() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy M by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("M").await;
+}
+
+#[update]
+async fn execute_strategy_n() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy N by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("N").await;
+}
+
+#[update]
+async fn execute_strategy_o() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy O by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("O").await;
+}
+
+#[update]
+async fn execute_strategy_p() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy P by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("P").await;
+}
+
+#[update]
+async fn execute_strategy_q() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy Q by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("Q").await;
+}
+
+#[update]
+async fn execute_strategy_r() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy R by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("R").await;
+}
+
+#[update]
 async fn dry_run_arb_cycle() -> arb::DryRunResult {
     require_admin();
 
@@ -1072,6 +1128,318 @@ async fn dry_run_strategy_f() -> arb::DryRunResult {
     }
 }
 
+#[update]
+async fn dry_run_strategy_k() -> arb::DryRunResult {
+    require_admin();
+
+    // K's ICPSwap side reuses the main ckUSDC/ICP pool ordering.
+    let resolved = state::read_state(|s| s.token_ordering_resolved);
+    if !resolved {
+        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
+        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
+            state::mutate_state(|s| {
+                s.config.icpswap_icp_is_token0 = icp_is_token0;
+                s.token_ordering_resolved = true;
+            });
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdc_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy K not configured (no PartyDEX ckUSDC pool)".to_string();
+        return result;
+    }
+    let target = build_cross_k(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[K] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_l() -> arb::DryRunResult {
+    require_admin();
+
+    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
+        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
+    });
+    if !has_ckusdt_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy L not configured (no ckUSDT pool)".to_string();
+        return result;
+    }
+    if !ckusdt_resolved {
+        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
+                    s.ckusdt_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdc_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy L not configured (no PartyDEX ckUSDC pool)".to_string();
+        return result;
+    }
+    let target = build_cross_l(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[L] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_m() -> arb::DryRunResult {
+    require_admin();
+
+    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
+        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
+    });
+    if !has_icusd_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy M not configured (no icUSD pool)".to_string();
+        return result;
+    }
+    if !icusd_resolved {
+        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
+                    s.icusd_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdc_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy M not configured (no PartyDEX ckUSDC pool)".to_string();
+        return result;
+    }
+    let target = build_cross_m(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[M] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_n() -> arb::DryRunResult {
+    require_admin();
+
+    // N's ICPSwap side reuses the main ckUSDC/ICP pool ordering.
+    let resolved = state::read_state(|s| s.token_ordering_resolved);
+    if !resolved {
+        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
+        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
+            state::mutate_state(|s| {
+                s.config.icpswap_icp_is_token0 = icp_is_token0;
+                s.token_ordering_resolved = true;
+            });
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdt_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy N not configured (no PartyDEX ckUSDT pool)".to_string();
+        return result;
+    }
+    let target = build_cross_n(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[N] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_o() -> arb::DryRunResult {
+    require_admin();
+
+    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
+        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
+    });
+    if !has_ckusdt_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy O not configured (no ckUSDT pool)".to_string();
+        return result;
+    }
+    if !ckusdt_resolved {
+        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
+                    s.ckusdt_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdt_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy O not configured (no PartyDEX ckUSDT pool)".to_string();
+        return result;
+    }
+    let target = build_cross_o(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[O] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_p() -> arb::DryRunResult {
+    require_admin();
+
+    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
+        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
+    });
+    if !has_icusd_pool {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy P not configured (no icUSD pool)".to_string();
+        return result;
+    }
+    if !icusd_resolved {
+        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
+                    s.icusd_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                let mut result = arb::DryRunResult::default();
+                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
+                return result;
+            }
+        }
+    }
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdt_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy P not configured (no PartyDEX ckUSDT pool)".to_string();
+        return result;
+    }
+    let target = build_cross_p(&config);
+    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[P] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_q() -> arb::DryRunResult {
+    require_admin();
+
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdc_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy Q not configured (no PartyDEX ckUSDC pool)".to_string();
+        return result;
+    }
+    let target = arb::IcpswapTarget {
+        pool: config.partydex_ckusdc_pool,
+        icp_is_token0: true,
+        label: "PartyDEX-ckUSDC",
+        strategy_tag: "Q",
+        stable_token_name: "ckUSDC",
+        stable_fee: CKUSDC_FEE,
+        stable_ledger: config.ckusdc_ledger,
+        pool_enum: state::Pool::PartyDexIcpCkusdc,
+        stable_decimals: 6,
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdc_fee_pips,
+    };
+    match arb::compute_optimal_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[Q] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
+#[update]
+async fn dry_run_strategy_r() -> arb::DryRunResult {
+    require_admin();
+
+    let config = state::read_state(|s| s.config.clone());
+    if config.partydex_ckusdt_pool == Principal::anonymous() {
+        let mut result = arb::DryRunResult::default();
+        result.message = "Strategy R not configured (no PartyDEX ckUSDT pool)".to_string();
+        return result;
+    }
+    let target = arb::IcpswapTarget {
+        pool: config.partydex_ckusdt_pool,
+        icp_is_token0: true,
+        label: "PartyDEX-ckUSDT",
+        strategy_tag: "R",
+        stable_token_name: "ckUSDT",
+        stable_fee: CKUSDT_FEE,
+        stable_ledger: config.ckusdt_ledger,
+        pool_enum: state::Pool::PartyDexIcpCkusdt,
+        stable_decimals: 6,
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdt_fee_pips,
+    };
+    match arb::compute_optimal_trade(&config, &target).await {
+        Ok(dr) => dr,
+        Err(e) => {
+            let mut result = arb::DryRunResult::default();
+            result.message = format!("[R] Computation failed: {}", e);
+            result
+        }
+    }
+}
+
 // ─── Cross-pool target builders ───
 
 const ICUSD_FEE: u64 = 100_000;
@@ -1135,6 +1503,161 @@ fn build_cross_f(config: &BotConfig) -> arb::CrossPoolTarget {
             stable_decimals: 6,
             pool_enum: state::Pool::IcpswapCkusdt,
             dex_label: "ICPSwap-ckUSDT",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+/// PartyDEX ckUSDC pool side, shared by builders K/L/M. icp_is_token0 is
+/// irrelevant for PartyDex (ICP is always `base`), set true per plan.
+fn partydex_ckusdc_side(config: &BotConfig) -> arb::CrossPoolSide {
+    arb::CrossPoolSide {
+        pool: config.partydex_ckusdc_pool,
+        icp_is_token0: true,
+        stable_token_name: "ckUSDC",
+        stable_fee: CKUSDC_FEE,
+        stable_ledger: config.ckusdc_ledger,
+        stable_decimals: 6,
+        pool_enum: state::Pool::PartyDexIcpCkusdc,
+        dex_label: "PartyDEX-ckUSDC",
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdc_fee_pips,
+    }
+}
+
+/// PartyDEX ckUSDT pool side, shared by builders N/O/P.
+fn partydex_ckusdt_side(config: &BotConfig) -> arb::CrossPoolSide {
+    arb::CrossPoolSide {
+        pool: config.partydex_ckusdt_pool,
+        icp_is_token0: true,
+        stable_token_name: "ckUSDT",
+        stable_fee: CKUSDT_FEE,
+        stable_ledger: config.ckusdt_ledger,
+        stable_decimals: 6,
+        pool_enum: state::Pool::PartyDexIcpCkusdt,
+        dex_label: "PartyDEX-ckUSDT",
+        uses_vp: false,
+        venue: state::Venue::PartyDex,
+        fee_pips: config.partydex_ckusdt_fee_pips,
+    }
+}
+
+fn build_cross_k(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "K",
+        buy_side: partydex_ckusdc_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_pool,
+            icp_is_token0: config.icpswap_icp_is_token0,
+            stable_token_name: "ckUSDC",
+            stable_fee: CKUSDC_FEE,
+            stable_ledger: config.ckusdc_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdc,
+            dex_label: "ICPSwap",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+fn build_cross_l(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "L",
+        buy_side: partydex_ckusdc_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_ckusdt_pool,
+            icp_is_token0: config.icpswap_ckusdt_icp_is_token0,
+            stable_token_name: "ckUSDT",
+            stable_fee: CKUSDT_FEE,
+            stable_ledger: config.ckusdt_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdt,
+            dex_label: "ICPSwap-ckUSDT",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+fn build_cross_m(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "M",
+        buy_side: partydex_ckusdc_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_icusd_pool,
+            icp_is_token0: config.icpswap_icusd_icp_is_token0,
+            stable_token_name: "icUSD",
+            stable_fee: ICUSD_FEE,
+            stable_ledger: config.icusd_ledger,
+            stable_decimals: 8,
+            pool_enum: state::Pool::IcpswapIcusd,
+            dex_label: "ICPSwap-icUSD",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+fn build_cross_n(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "N",
+        buy_side: partydex_ckusdt_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_pool,
+            icp_is_token0: config.icpswap_icp_is_token0,
+            stable_token_name: "ckUSDC",
+            stable_fee: CKUSDC_FEE,
+            stable_ledger: config.ckusdc_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdc,
+            dex_label: "ICPSwap",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+fn build_cross_o(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "O",
+        buy_side: partydex_ckusdt_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_ckusdt_pool,
+            icp_is_token0: config.icpswap_ckusdt_icp_is_token0,
+            stable_token_name: "ckUSDT",
+            stable_fee: CKUSDT_FEE,
+            stable_ledger: config.ckusdt_ledger,
+            stable_decimals: 6,
+            pool_enum: state::Pool::IcpswapCkusdt,
+            dex_label: "ICPSwap-ckUSDT",
+            uses_vp: false,
+            venue: state::Venue::Icpswap,
+            fee_pips: 0,
+        },
+    }
+}
+
+fn build_cross_p(config: &BotConfig) -> arb::CrossPoolTarget {
+    arb::CrossPoolTarget {
+        strategy_tag: "P",
+        buy_side: partydex_ckusdt_side(config),
+        sell_side: arb::CrossPoolSide {
+            pool: config.icpswap_icusd_pool,
+            icp_is_token0: config.icpswap_icusd_icp_is_token0,
+            stable_token_name: "icUSD",
+            stable_fee: ICUSD_FEE,
+            stable_ledger: config.icusd_ledger,
+            stable_decimals: 8,
+            pool_enum: state::Pool::IcpswapIcusd,
+            dex_label: "ICPSwap-icUSD",
             uses_vp: false,
             venue: state::Venue::Icpswap,
             fee_pips: 0,
