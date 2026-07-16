@@ -203,6 +203,28 @@ pub async fn run_arb_cycle() {
         }
     }
 
+    // Resolve ICPSwap token ordering for the 3USD/ICP pool (shared by the
+    // volume bot and the residual-ICP drain). No arb strategy uses it, but
+    // the drain's 3USD candidate needs the ordering resolved to quote it.
+    let (three_usd_resolved, has_3usd_pool) = state::read_state(|s| {
+        (s.icpswap_3usd_token_ordering_resolved, s.config.icpswap_3usd_pool != Principal::anonymous())
+    });
+    if has_3usd_pool && !three_usd_resolved {
+        let (three_usd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_3usd_pool, s.config.icp_ledger));
+        match prices::fetch_icpswap_token_ordering(three_usd_pool, icp_ledger).await {
+            Ok(icp_is_token0) => {
+                state::mutate_state(|s| {
+                    s.config.icpswap_3usd_icp_is_token0 = icp_is_token0;
+                    s.icpswap_3usd_token_ordering_resolved = true;
+                });
+            }
+            Err(e) => {
+                log_error(&format!("Failed to resolve 3USD ICPSwap pool token ordering: {}. Retrying.", e));
+                // Don't return — other strategies can still run
+            }
+        }
+    }
+
     let config = state::read_state(|s| s.config.clone());
     if config.paused { return; }
 
@@ -333,12 +355,6 @@ pub async fn run_arb_cycle() {
         None
     };
 
-    // Strategies G/H/I/J (ICPSwap 3USD/ICP pool) are disabled.
-    let dry_run_g: Option<DryRunResult> = None;
-    let dry_run_h: Option<DryRunResult> = None;
-    let dry_run_i: Option<DryRunResult> = None;
-    let dry_run_j: Option<DryRunResult> = None;
-
     // Fetch extra balances for snapshot (ICP, icUSD, ckUSDT) — dry runs already have 3USD/ckUSDC/ckUSDT.
     // Still need ICP and icUSD here; ckUSDT balance falls back to dry_run_c if available.
     let ckusdt_fallback_ledger = if config.ckusdt_ledger != Principal::anonymous() {
@@ -379,10 +395,6 @@ pub async fn run_arb_cycle() {
         spread_c_bps: dry_run_c.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_d_bps: dry_run_d.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_f_bps: dry_run_f.as_ref().map(|d| d.spread_bps).unwrap_or(0),
-        spread_g_bps: dry_run_g.as_ref().map(|d| d.spread_bps).unwrap_or(0),
-        spread_h_bps: dry_run_h.as_ref().map(|d| d.spread_bps).unwrap_or(0),
-        spread_i_bps: dry_run_i.as_ref().map(|d| d.spread_bps).unwrap_or(0),
-        spread_j_bps: dry_run_j.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         traded: false,
         strategy_used: String::new(),
     };
