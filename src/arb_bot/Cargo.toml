@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+# rlib (alongside cdylib) lets the candid-drift integration test in
+# tests/candid.rs link against the crate on the host target.
+crate-type = ["cdylib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
@@ -18,3 +20,8 @@ serde_json = "1"
 ic-stable-structures = "0.6"
 futures = "0.3"
 num-traits = "0.2"
+
+[dev-dependencies]
+# Used by tests/candid.rs to compare the export_candid!()-generated service
+# against the committed arb_bot.did. Pairs with candid 0.10.
+candid_parser = "0.1"
