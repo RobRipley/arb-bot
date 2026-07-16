@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use crate::prices::{self, PriceData, nat_to_u64};
 use crate::state::{self, Direction, Token};
 use crate::swaps;
+use crate::partydex;
 use crate::volume;
 
 const ICP_FEE: u64 = 10_000;        // 0.0001 ICP
@@ -32,6 +33,109 @@ const VP_PRECISION: u128 = 1_000_000_000_000_000_000;
 
 /// ICP reserve: keep at least 1 ICP in the bot for approval fees etc.
 const ICP_RESERVE: u64 = 100_000_000; // 1 ICP (8 decimals)
+
+// ─── Venue dispatch (PR2a) ───
+//
+// Thin per-venue dispatch. No target sets `venue: state::Venue::PartyDex` in
+// PR2a (that's PR2b's job) — the `Icpswap` arm below is byte-identical to
+// what each rerouted call site did before this dispatch existed, so existing
+// strategies A/B/C/D/F are behavior-preserving.
+
+/// Price of 1 ICP in the pool's stable native units.
+async fn venue_price_icp(pool: Principal, icp_is_token0: bool, venue: state::Venue, fee_pips: u32) -> Result<u64, String> {
+    match venue {
+        state::Venue::Icpswap => prices::fetch_icpswap_price(pool, icp_is_token0).await,
+        state::Venue::PartyDex => partydex::price_icp(pool, fee_pips).await,
+    }
+}
+
+/// Quote buying ICP by spending `amount` of the stable token.
+async fn venue_quote_stable_to_icp(pool: Principal, icp_is_token0: bool, venue: state::Venue, fee_pips: u32, amount: u64) -> Result<u64, String> {
+    match venue {
+        state::Venue::Icpswap => prices::fetch_icpswap_quote_for_amount(pool, amount, !icp_is_token0).await,
+        state::Venue::PartyDex => partydex::quote_stable_to_icp(pool, fee_pips, amount).await,
+    }
+}
+
+/// Quote selling `amount` ICP for the stable token.
+async fn venue_quote_icp_to_stable(pool: Principal, icp_is_token0: bool, venue: state::Venue, fee_pips: u32, amount: u64) -> Result<u64, String> {
+    match venue {
+        state::Venue::Icpswap => prices::fetch_icpswap_quote_for_amount(pool, amount, icp_is_token0).await,
+        state::Venue::PartyDex => partydex::quote_icp_to_stable(pool, fee_pips, amount).await,
+    }
+}
+
+/// Execute a stable→ICP swap on the given venue.
+#[allow(clippy::too_many_arguments)]
+async fn venue_swap_stable_to_icp(
+    pool: Principal, icp_is_token0: bool, venue: state::Venue, fee_pips: u32,
+    amount: u64, min_out: u64, stable_ledger: Principal, stable_fee: u64, icp_ledger: Principal,
+) -> Result<u64, swaps::SwapError> {
+    match venue {
+        state::Venue::Icpswap => swaps::icpswap_swap(pool, amount, !icp_is_token0, min_out, stable_fee, ICP_FEE).await,
+        state::Venue::PartyDex => partydex::swap(pool, fee_pips, partydex::Side::Buy, amount, min_out, stable_ledger, icp_ledger, false).await,
+    }
+}
+
+/// Execute an ICP→stable swap on the given venue.
+#[allow(clippy::too_many_arguments)]
+async fn venue_swap_icp_to_stable(
+    pool: Principal, icp_is_token0: bool, venue: state::Venue, fee_pips: u32,
+    amount: u64, min_out: u64, icp_ledger: Principal, stable_ledger: Principal, stable_fee: u64,
+) -> Result<u64, swaps::SwapError> {
+    match venue {
+        state::Venue::Icpswap => swaps::icpswap_swap(pool, amount, icp_is_token0, min_out, ICP_FEE, stable_fee).await,
+        state::Venue::PartyDex => partydex::swap(pool, fee_pips, partydex::Side::Sell, amount, min_out, icp_ledger, stable_ledger, true).await,
+    }
+}
+
+/// Per-venue minimum trade floor, in 6-dec USD. ICPSwap keeps the existing
+/// ~$0.01 floor (byte-identical to pre-PR2a behavior); PartyDEX rejects
+/// trades below ~$0.10, so its leg needs a higher floor (decision #3).
+fn min_trade_floor_usd(venue: state::Venue) -> u64 {
+    match venue {
+        state::Venue::Icpswap => 10_000,   // $0.01 — unchanged from pre-PR2a
+        state::Venue::PartyDex => 100_000, // $0.10
+    }
+}
+
+/// Extra ledger-fee cost (6-dec USD) of routing one leg through PartyDEX
+/// instead of ICPSwap: PartyDEX's deposit/withdraw custody flow charges one
+/// extra ledger transfer fee on the way in (deposit of the input token) and
+/// one on the way out (withdraw of the output token) versus ICPSwap's single
+/// depositFromAndSwap call (decision #2). Zero for the Icpswap venue, so
+/// existing strategies' profit math is unaffected.
+///
+/// `icp_leg_effective_rate` prices the ICP-side extra ledger fee (`ICP_FEE`,
+/// which is denominated in ICP, not USD) using the candidate's own realized
+/// exchange rate (stable-out / icp-in, in native stable units per native ICP
+/// unit) rather than a separate live ICP/USD price lookup — self-consistent
+/// with the rest of each profit computation, which already works entirely in
+/// each candidate's own quoted amounts.
+fn partydex_extra_fee_usd(
+    venue: state::Venue,
+    stable_fee: u64,
+    stable_decimals: u8,
+    stable_vp: u64,
+    icp_amount: u64,
+    icp_leg_stable_amount: u64,
+) -> i64 {
+    if !matches!(venue, state::Venue::PartyDex) {
+        return 0;
+    }
+    // Extra ledger fee on the stable-token leg of the deposit/withdraw pair.
+    let stable_leg_fee_usd = stable_to_usd_6dec_vp(stable_fee, stable_decimals, stable_vp);
+    // Extra ledger fee on the ICP leg: reprice ICP_FEE (denominated in ICP) into
+    // native stable units using this candidate's own realized rate (stable/ICP),
+    // then convert that stable-native amount to USD like any other stable amount.
+    let icp_fee_in_stable_native = if icp_amount > 0 {
+        (ICP_FEE as u128 * icp_leg_stable_amount as u128 / icp_amount as u128) as u64
+    } else {
+        0
+    };
+    let icp_leg_fee_usd = stable_to_usd_6dec_vp(icp_fee_in_stable_native, stable_decimals, stable_vp);
+    stable_leg_fee_usd + icp_leg_fee_usd
+}
 
 thread_local! {
     static CYCLE_IN_PROGRESS: Cell<bool> = Cell::new(false);
@@ -244,6 +348,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapCkusdc,
         stable_decimals: 6,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
 
     // Evaluate Strategy A (Rumi vs ICPSwap ckUSDC/ICP)
@@ -264,6 +370,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapIcusd,
         dex_label: "ICPSwap-icUSD",
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     let ckusdc_side = CrossPoolSide {
         pool: config.icpswap_pool,
@@ -275,6 +383,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapCkusdc,
         dex_label: "ICPSwap",
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     let ckusdt_side = CrossPoolSide {
         pool: config.icpswap_ckusdt_pool,
@@ -286,6 +396,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapCkusdt,
         dex_label: "ICPSwap-ckUSDT",
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     let cross_b = CrossPoolTarget { strategy_tag: "B", buy_side: icusd_side, sell_side: ckusdc_side };
     let cross_f = CrossPoolTarget { strategy_tag: "F", buy_side: icusd_side, sell_side: ckusdt_side };
@@ -313,6 +425,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapCkusdt,
         stable_decimals: 6,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     let dry_run_c = if has_ckusdt_pool && ckusdt_resolved {
         match compute_optimal_trade(&config, &target_c).await {
@@ -335,6 +449,8 @@ pub async fn run_arb_cycle() {
         pool_enum: state::Pool::IcpswapIcusd,
         stable_decimals: 8,
         uses_vp: false,
+        venue: state::Venue::Icpswap,
+        fee_pips: 0,
     };
     let dry_run_d = if has_icusd_pool && icusd_resolved {
         match compute_optimal_trade(&config, &target_d).await {
@@ -395,6 +511,15 @@ pub async fn run_arb_cycle() {
         spread_c_bps: dry_run_c.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_d_bps: dry_run_d.as_ref().map(|d| d.spread_bps).unwrap_or(0),
         spread_f_bps: dry_run_f.as_ref().map(|d| d.spread_bps).unwrap_or(0),
+        // Strategies K–R are built and evaluated in PR2b; left at 0 here.
+        spread_k_bps: 0,
+        spread_l_bps: 0,
+        spread_m_bps: 0,
+        spread_n_bps: 0,
+        spread_o_bps: 0,
+        spread_p_bps: 0,
+        spread_q_bps: 0,
+        spread_r_bps: 0,
         traded: false,
         strategy_used: String::new(),
     };
@@ -547,6 +672,8 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
                 label: "ICPSwap", strategy_tag: "A", stable_token_name: "ckUSDC",
                 stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger,
                 pool_enum: state::Pool::IcpswapCkusdc, stable_decimals: 6, uses_vp: false,
+                venue: state::Venue::Icpswap,
+                fee_pips: 0,
             };
             match compute_optimal_trade(&config, &target).await {
                 Ok(dr) => {
@@ -580,8 +707,8 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
             let config = state::read_state(|s| s.config.clone());
             let cross = CrossPoolTarget {
                 strategy_tag: "B",
-                buy_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false },
-                sell_side: CrossPoolSide { pool: config.icpswap_pool, icp_is_token0: config.icpswap_icp_is_token0, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdc, dex_label: "ICPSwap", uses_vp: false },
+                buy_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+                sell_side: CrossPoolSide { pool: config.icpswap_pool, icp_is_token0: config.icpswap_icp_is_token0, stable_token_name: "ckUSDC", stable_fee: CKUSDC_FEE, stable_ledger: config.ckusdc_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdc, dex_label: "ICPSwap", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
             };
             match compute_optimal_cross_pool_trade(&config, &cross).await {
                 Ok(dr) => {
@@ -611,6 +738,8 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
                 label: "ICPSwap-ckUSDT", strategy_tag: "C", stable_token_name: "ckUSDT",
                 stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger,
                 pool_enum: state::Pool::IcpswapCkusdt, stable_decimals: 6, uses_vp: false,
+                venue: state::Venue::Icpswap,
+                fee_pips: 0,
             };
             match compute_optimal_trade(&config, &target).await {
                 Ok(dr) => {
@@ -640,6 +769,8 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
                 label: "ICPSwap-icUSD", strategy_tag: "D", stable_token_name: "icUSD",
                 stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger,
                 pool_enum: state::Pool::IcpswapIcusd, stable_decimals: 8, uses_vp: false,
+                venue: state::Venue::Icpswap,
+                fee_pips: 0,
             };
             match compute_optimal_trade(&config, &target).await {
                 Ok(dr) => {
@@ -675,8 +806,8 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
             let config = state::read_state(|s| s.config.clone());
             let cross = CrossPoolTarget {
                 strategy_tag: "F",
-                buy_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false },
-                sell_side: CrossPoolSide { pool: config.icpswap_ckusdt_pool, icp_is_token0: config.icpswap_ckusdt_icp_is_token0, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdt, dex_label: "ICPSwap-ckUSDT", uses_vp: false },
+                buy_side: CrossPoolSide { pool: config.icpswap_icusd_pool, icp_is_token0: config.icpswap_icusd_icp_is_token0, stable_token_name: "icUSD", stable_fee: ICUSD_FEE, stable_ledger: config.icusd_ledger, stable_decimals: 8, pool_enum: state::Pool::IcpswapIcusd, dex_label: "ICPSwap-icUSD", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
+                sell_side: CrossPoolSide { pool: config.icpswap_ckusdt_pool, icp_is_token0: config.icpswap_ckusdt_icp_is_token0, stable_token_name: "ckUSDT", stable_fee: CKUSDT_FEE, stable_ledger: config.ckusdt_ledger, stable_decimals: 6, pool_enum: state::Pool::IcpswapCkusdt, dex_label: "ICPSwap-ckUSDT", uses_vp: false, venue: state::Venue::Icpswap, fee_pips: 0 },
             };
             match compute_optimal_cross_pool_trade(&config, &cross).await {
                 Ok(dr) => {
@@ -710,6 +841,11 @@ pub struct IcpswapTarget {
     pub stable_decimals: u8,    // 6 for ck*, 8 for icUSD/3USD
     /// If true, the stable token is 3USD and amounts must be VP-adjusted for USD conversion.
     pub uses_vp: bool,
+    /// Which DEX venue this leg trades against. Always `Icpswap` in PR2a —
+    /// no target sets `PartyDex` yet (that's PR2b).
+    pub venue: state::Venue,
+    /// Fee tier (pips) for PartyDEX pool_swaps. Ignored when venue is Icpswap.
+    pub fee_pips: u32,
 }
 
 /// Identifies one side of a cross-pool (ICPSwap-vs-ICPSwap) arbitrage.
@@ -725,6 +861,10 @@ pub struct CrossPoolSide {
     pub dex_label: &'static str,
     /// If true, the stable token is 3USD and amounts must be VP-adjusted for USD conversion.
     pub uses_vp: bool,
+    /// Which DEX venue this side trades against. Always `Icpswap` in PR2a.
+    pub venue: state::Venue,
+    /// Fee tier (pips) for PartyDEX pool_swaps. Ignored when venue is Icpswap.
+    pub fee_pips: u32,
 }
 
 /// Defines a cross-pool strategy: arb between two ICPSwap stable/ICP pools.
@@ -789,14 +929,29 @@ pub async fn compute_optimal_trade(
 ) -> Result<DryRunResult, String> {
     let mut result = DryRunResult::default();
 
-    // Fetch prices (use cycle-cached VP if available)
+    // Fetch prices (use cycle-cached VP if available). The venue-side price is
+    // routed through venue_price_icp — for target.venue == Icpswap (every
+    // target in PR2a) this is exactly the same fetch_icpswap_price call that
+    // fetch_all_prices_with_vp made internally, so behavior is unchanged.
     let cached_vp = fetch_virtual_price_cached(config.rumi_3pool).await.ok();
-    let prices = prices::fetch_all_prices_with_vp(
-        config.rumi_amm, RUMI_POOL_ID, config.icp_ledger,
-        config.rumi_3pool, target.pool, target.icp_is_token0,
-        target.stable_decimals,
-        cached_vp,
-    ).await?;
+    let rumi_fut = prices::fetch_rumi_price(config.rumi_amm, RUMI_POOL_ID, config.icp_ledger);
+    let venue_fut = venue_price_icp(target.pool, target.icp_is_token0, target.venue, target.fee_pips);
+    let (rumi_result, venue_result, vp) = match cached_vp {
+        Some(vp) => {
+            let (r, v) = futures::future::join(rumi_fut, venue_fut).await;
+            (r, v, vp)
+        }
+        None => {
+            let (r, v, vv) = futures::future::join3(rumi_fut, venue_fut, prices::fetch_virtual_price(config.rumi_3pool)).await;
+            (r, v, vv?)
+        }
+    };
+    let prices = PriceData {
+        rumi_icp_price_3usd_native: rumi_result?,
+        virtual_price: vp,
+        icpswap_icp_price_ckusdc_native: venue_result?,
+        icpswap_stable_decimals: target.stable_decimals,
+    };
 
     result.rumi_price_usd = prices.rumi_price_usd_6dec();
     result.virtual_price = prices.virtual_price;
@@ -853,8 +1008,9 @@ pub async fn compute_optimal_trade(
 
         // Reserve fee for the ICRC-2 approve that ICPSwap's depositFromAndSwap triggers
         let usable_stable = result.balance_ckusdc.saturating_sub(target.stable_fee);
-        // Min balance: $0.01 worth, scaled to native units
-        let min_native = usd_6dec_to_stable(10_000, target.stable_decimals);
+        // Min balance: per-venue floor (decision #3), scaled to native units.
+        // ICPSwap keeps the pre-PR2a $0.01 floor; PartyDEX needs ~$0.10.
+        let min_native = usd_6dec_to_stable(min_trade_floor_usd(target.venue), target.stable_decimals);
         if usable_stable < min_native {
             result.message = format!("[{}] Insufficient {} balance", target.strategy_tag, target.stable_token_name);
             return Ok(result);
@@ -908,13 +1064,11 @@ async fn find_optimal_rumi_to_icpswap(
         return;
     }
 
-    // Round 2: Quote ICPSwap (ICP→ckUSDC) for all ICP amounts in parallel
+    // Round 2: Quote the venue (ICP→ckUSDC) for all ICP amounts in parallel
     // Subtract ICP transfer fees: output fee from leg 1 + input fee for leg 2
     let icpswap_futs: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
         let usable = icp_amount.saturating_sub(ICP_FEE * 2);
-        prices::fetch_icpswap_quote_for_amount(
-            target.pool, usable, target.icp_is_token0,
-        )
+        venue_quote_icp_to_stable(target.pool, target.icp_is_token0, target.venue, target.fee_pips, usable)
     }).collect();
     let icpswap_results = futures::future::join_all(icpswap_futs).await;
 
@@ -932,7 +1086,8 @@ async fn find_optimal_rumi_to_icpswap(
 
         let input_usd = (input_3usd as u128 * prices.virtual_price as u128 / VP_PRECISION / 100) as i64;
         let output_usd = stable_to_usd_6dec_vp(ckusdc_out, target.stable_decimals, output_vp);
-        let fee_usd = stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, output_vp);
+        let fee_usd = stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, output_vp)
+            + partydex_extra_fee_usd(target.venue, target.stable_fee, target.stable_decimals, output_vp, icp_amount, ckusdc_out);
         let profit = output_usd - input_usd - fee_usd;
 
         result.candidates_evaluated.push(CandidateResult {
@@ -980,11 +1135,9 @@ async fn find_optimal_icpswap_to_rumi(
         .filter(|&a| a > 0)
         .collect();
 
-    // Round 1: Quote ICPSwap (stable→ICP) for all candidates in parallel
+    // Round 1: Quote the venue (stable→ICP) for all candidates in parallel
     let icpswap_futs: Vec<_> = candidates.iter().map(|&amount| {
-        prices::fetch_icpswap_quote_for_amount(
-            target.pool, amount, !target.icp_is_token0,
-        )
+        venue_quote_stable_to_icp(target.pool, target.icp_is_token0, target.venue, target.fee_pips, amount)
     }).collect();
     let icpswap_results = futures::future::join_all(icpswap_futs).await;
 
@@ -1024,7 +1177,8 @@ async fn find_optimal_icpswap_to_rumi(
 
         let input_usd = stable_to_usd_6dec_vp(input_ckusdc, target.stable_decimals, input_vp);
         let output_usd = (three_usd_out as u128 * prices.virtual_price as u128 / VP_PRECISION / 100) as i64;
-        let fee_usd = stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, input_vp);
+        let fee_usd = stable_to_usd_6dec_vp(target.stable_fee, target.stable_decimals, input_vp)
+            + partydex_extra_fee_usd(target.venue, target.stable_fee, target.stable_decimals, input_vp, icp_amount, input_ckusdc);
         let profit = output_usd - input_usd - fee_usd;
 
         result.candidates_evaluated.push(CandidateResult {
@@ -1074,10 +1228,10 @@ pub async fn compute_optimal_cross_pool_trade(
     } else { 0 };
     result.virtual_price = vp;
 
-    // Fetch prices from both pools in parallel
+    // Fetch prices from both pools/venues in parallel
     let (buy_res, sell_res) = futures::future::join(
-        prices::fetch_icpswap_price(target.buy_side.pool, target.buy_side.icp_is_token0),
-        prices::fetch_icpswap_price(target.sell_side.pool, target.sell_side.icp_is_token0),
+        venue_price_icp(target.buy_side.pool, target.buy_side.icp_is_token0, target.buy_side.venue, target.buy_side.fee_pips),
+        venue_price_icp(target.sell_side.pool, target.sell_side.icp_is_token0, target.sell_side.venue, target.sell_side.fee_pips),
     ).await;
     let buy_price_native = buy_res?;
     let sell_price_native = sell_res?;
@@ -1116,7 +1270,7 @@ pub async fn compute_optimal_cross_pool_trade(
         result.expected_output_token = Some(Token::CkUSDC);
 
         let usable = result.balance_3usd.saturating_sub(target.buy_side.stable_fee);
-        let min_native = usd_6dec_to_stable_vp(10_000, target.buy_side.stable_decimals, buy_vp);
+        let min_native = usd_6dec_to_stable_vp(min_trade_floor_usd(target.buy_side.venue), target.buy_side.stable_decimals, buy_vp);
         if usable < min_native {
             result.message = format!("[{}] Insufficient {} balance", target.strategy_tag, target.buy_side.stable_token_name);
             return Ok(result);
@@ -1133,7 +1287,7 @@ pub async fn compute_optimal_cross_pool_trade(
         result.expected_output_token = Some(Token::ThreeUSD);
 
         let usable = result.balance_ckusdc.saturating_sub(target.sell_side.stable_fee);
-        let min_native = usd_6dec_to_stable_vp(10_000, target.sell_side.stable_decimals, sell_vp);
+        let min_native = usd_6dec_to_stable_vp(min_trade_floor_usd(target.sell_side.venue), target.sell_side.stable_decimals, sell_vp);
         if usable < min_native {
             result.message = format!("[{}] Insufficient {} balance", target.strategy_tag, target.sell_side.stable_token_name);
             return Ok(result);
@@ -1163,9 +1317,7 @@ async fn find_optimal_cross_pool_forward(
 
     // Round 1: Quote buy_side pool (stable→ICP)
     let futs1: Vec<_> = candidates.iter().map(|&amount| {
-        prices::fetch_icpswap_quote_for_amount(
-            target.buy_side.pool, amount, !target.buy_side.icp_is_token0,
-        )
+        venue_quote_stable_to_icp(target.buy_side.pool, target.buy_side.icp_is_token0, target.buy_side.venue, target.buy_side.fee_pips, amount)
     }).collect();
     let results1 = futures::future::join_all(futs1).await;
 
@@ -1185,9 +1337,7 @@ async fn find_optimal_cross_pool_forward(
     // Round 2: Quote sell_side pool (ICP→stable)
     let futs2: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
         let usable = icp_amount.saturating_sub(ICP_FEE * 2);
-        prices::fetch_icpswap_quote_for_amount(
-            target.sell_side.pool, usable, target.sell_side.icp_is_token0,
-        )
+        venue_quote_icp_to_stable(target.sell_side.pool, target.sell_side.icp_is_token0, target.sell_side.venue, target.sell_side.fee_pips, usable)
     }).collect();
     let results2 = futures::future::join_all(futs2).await;
 
@@ -1204,7 +1354,9 @@ async fn find_optimal_cross_pool_forward(
         let input_usd = stable_to_usd_6dec_vp(input_amount, target.buy_side.stable_decimals, buy_vp);
         let output_usd = stable_to_usd_6dec_vp(output_amount, target.sell_side.stable_decimals, sell_vp);
         let fees = stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp)
-                 + stable_to_usd_6dec_vp(target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp);
+                 + stable_to_usd_6dec_vp(target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp)
+                 + partydex_extra_fee_usd(target.buy_side.venue, target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp, icp_amount, input_amount)
+                 + partydex_extra_fee_usd(target.sell_side.venue, target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp, icp_amount, output_amount);
         let profit = output_usd - input_usd - fees;
 
         result.candidates_evaluated.push(CandidateResult {
@@ -1255,9 +1407,7 @@ async fn find_optimal_cross_pool_reverse(
 
     // Round 1: Quote sell_side pool (stable→ICP)
     let futs1: Vec<_> = candidates.iter().map(|&amount| {
-        prices::fetch_icpswap_quote_for_amount(
-            target.sell_side.pool, amount, !target.sell_side.icp_is_token0,
-        )
+        venue_quote_stable_to_icp(target.sell_side.pool, target.sell_side.icp_is_token0, target.sell_side.venue, target.sell_side.fee_pips, amount)
     }).collect();
     let results1 = futures::future::join_all(futs1).await;
 
@@ -1277,9 +1427,7 @@ async fn find_optimal_cross_pool_reverse(
     // Round 2: Quote buy_side pool (ICP→stable)
     let futs2: Vec<_> = stage1.iter().map(|&(_, icp_amount)| {
         let usable = icp_amount.saturating_sub(ICP_FEE * 2);
-        prices::fetch_icpswap_quote_for_amount(
-            target.buy_side.pool, usable, target.buy_side.icp_is_token0,
-        )
+        venue_quote_icp_to_stable(target.buy_side.pool, target.buy_side.icp_is_token0, target.buy_side.venue, target.buy_side.fee_pips, usable)
     }).collect();
     let results2 = futures::future::join_all(futs2).await;
 
@@ -1296,7 +1444,9 @@ async fn find_optimal_cross_pool_reverse(
         let input_usd = stable_to_usd_6dec_vp(input_amount, target.sell_side.stable_decimals, sell_vp);
         let output_usd = stable_to_usd_6dec_vp(output_amount, target.buy_side.stable_decimals, buy_vp);
         let fees = stable_to_usd_6dec_vp(target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp)
-                 + stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp);
+                 + stable_to_usd_6dec_vp(target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp)
+                 + partydex_extra_fee_usd(target.sell_side.venue, target.sell_side.stable_fee, target.sell_side.stable_decimals, sell_vp, icp_amount, input_amount)
+                 + partydex_extra_fee_usd(target.buy_side.venue, target.buy_side.stable_fee, target.buy_side.stable_decimals, buy_vp, icp_amount, output_amount);
         let profit = output_usd - input_usd - fees;
 
         result.candidates_evaluated.push(CandidateResult {
@@ -1391,8 +1541,9 @@ async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarg
         "[{}] Leg 2: ICPSwap swap {} ICP → {} (min: {}, raw from Rumi: {})", target.strategy_tag, usable_icp, target.stable_token_name, min_stable_out, icp_out
     ));
 
-    let stable_out = match swaps::icpswap_swap(
-        target.pool, usable_icp, target.icp_is_token0, min_stable_out, ICP_FEE, target.stable_fee,
+    let stable_out = match venue_swap_icp_to_stable(
+        target.pool, target.icp_is_token0, target.venue, target.fee_pips,
+        usable_icp, min_stable_out, config.icp_ledger, target.stable_ledger, target.stable_fee,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 2 OK: {} ICP → {} {}", target.strategy_tag, icp_out, amount, target.stable_token_name));
@@ -1438,8 +1589,9 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
         "[{}] Leg 1: ICPSwap swap {} {} → ICP (min: {})", target.strategy_tag, trade_amount_stable, target.stable_token_name, min_icp_out
     ));
 
-    let icp_out = match swaps::icpswap_swap(
-        target.pool, trade_amount_stable, !target.icp_is_token0, min_icp_out, target.stable_fee, ICP_FEE,
+    let icp_out = match venue_swap_stable_to_icp(
+        target.pool, target.icp_is_token0, target.venue, target.fee_pips,
+        trade_amount_stable, min_icp_out, target.stable_ledger, target.stable_fee, config.icp_ledger,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 1 OK: {} {} → {} ICP", target.strategy_tag, trade_amount_stable, target.stable_token_name, amount));
@@ -1530,7 +1682,7 @@ async fn execute_icpswap_to_rumi(config: &state::BotConfig, target: &IcpswapTarg
 
 /// Cross-pool forward: buy_side stable → ICP → sell_side stable
 async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunResult) {
-    let slippage = state::read_state(|s| slippage_bps_clamped(&s.config));
+    let (slippage, icp_ledger) = state::read_state(|s| (slippage_bps_clamped(&s.config), s.config.icp_ledger));
     let trade_amount = dry_run.optimal_input_amount;
     let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
     let buy_vp = if target.buy_side.uses_vp { dry_run.virtual_price } else { 0 };
@@ -1542,10 +1694,9 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
         target.strategy_tag, target.buy_side.dex_label, trade_amount, target.buy_side.stable_token_name, min_icp_out
     ));
 
-    let icp_out = match swaps::icpswap_swap(
-        target.buy_side.pool, trade_amount,
-        !target.buy_side.icp_is_token0,
-        min_icp_out, target.buy_side.stable_fee, ICP_FEE,
+    let icp_out = match venue_swap_stable_to_icp(
+        target.buy_side.pool, target.buy_side.icp_is_token0, target.buy_side.venue, target.buy_side.fee_pips,
+        trade_amount, min_icp_out, target.buy_side.stable_ledger, target.buy_side.stable_fee, icp_ledger,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 1 OK: {} {} → {} ICP",
@@ -1589,10 +1740,9 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
         target.strategy_tag, target.sell_side.dex_label, usable_icp, target.sell_side.stable_token_name, min_out
     ));
 
-    let output = match swaps::icpswap_swap(
-        target.sell_side.pool, usable_icp,
-        target.sell_side.icp_is_token0,
-        min_out, ICP_FEE, target.sell_side.stable_fee,
+    let output = match venue_swap_icp_to_stable(
+        target.sell_side.pool, target.sell_side.icp_is_token0, target.sell_side.venue, target.sell_side.fee_pips,
+        usable_icp, min_out, icp_ledger, target.sell_side.stable_ledger, target.sell_side.stable_fee,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 2 OK: {} ICP → {} {}",
@@ -1635,7 +1785,7 @@ async fn execute_cross_pool_forward(target: &CrossPoolTarget, dry_run: &DryRunRe
 
 /// Cross-pool reverse: sell_side stable → ICP → buy_side stable
 async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunResult) {
-    let slippage = state::read_state(|s| slippage_bps_clamped(&s.config));
+    let (slippage, icp_ledger) = state::read_state(|s| (slippage_bps_clamped(&s.config), s.config.icp_ledger));
     let trade_amount = dry_run.optimal_input_amount;
     let min_icp_out = dry_run.expected_icp_amount * (10_000 - slippage) / 10_000;
     let buy_vp = if target.buy_side.uses_vp { dry_run.virtual_price } else { 0 };
@@ -1646,10 +1796,9 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
         target.strategy_tag, target.sell_side.dex_label, trade_amount, target.sell_side.stable_token_name, min_icp_out
     ));
 
-    let icp_out = match swaps::icpswap_swap(
-        target.sell_side.pool, trade_amount,
-        !target.sell_side.icp_is_token0,
-        min_icp_out, target.sell_side.stable_fee, ICP_FEE,
+    let icp_out = match venue_swap_stable_to_icp(
+        target.sell_side.pool, target.sell_side.icp_is_token0, target.sell_side.venue, target.sell_side.fee_pips,
+        trade_amount, min_icp_out, target.sell_side.stable_ledger, target.sell_side.stable_fee, icp_ledger,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 1 OK: {} {} → {} ICP",
@@ -1693,10 +1842,9 @@ async fn execute_cross_pool_reverse(target: &CrossPoolTarget, dry_run: &DryRunRe
         target.strategy_tag, target.buy_side.dex_label, usable_icp, target.buy_side.stable_token_name, min_out
     ));
 
-    let output = match swaps::icpswap_swap(
-        target.buy_side.pool, usable_icp,
-        target.buy_side.icp_is_token0,
-        min_out, ICP_FEE, target.buy_side.stable_fee,
+    let output = match venue_swap_icp_to_stable(
+        target.buy_side.pool, target.buy_side.icp_is_token0, target.buy_side.venue, target.buy_side.fee_pips,
+        usable_icp, min_out, icp_ledger, target.buy_side.stable_ledger, target.buy_side.stable_fee,
     ).await {
         Ok(amount) => {
             state::log_activity("swap", &format!("[{}] Leg 2 OK: {} ICP → {} {}",
@@ -1964,6 +2112,12 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
                         let usd = (out as u128 * vp_val as u128 / VP_PRECISION / 100) as i64;
                         ("ICPSwap-3USD", "3USD", out, usd, 0i64)
                     })
+            }
+            // PartyDEX pools are never added as drain candidates (decision #5 — PartyDEX
+            // legs always settle ICP back to the main balance, so ICPSwap/Rumi drain
+            // already covers recovery). Unreachable in practice; kept for exhaustiveness.
+            state::Pool::PartyDexIcpCkusdc | state::Pool::PartyDexIcpCkusdt => {
+                Err(swaps::SwapError::SwapFailed("PartyDEX pools are not drain candidates".to_string()))
             }
         };
         match result {

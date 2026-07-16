@@ -22,6 +22,10 @@ type BotConfig = record {
   icpswap_3usd_icp_is_token0: bool;
   slippage_bps: nat64;
   arb_interval_secs: nat64;
+  partydex_ckusdc_pool: principal;
+  partydex_ckusdt_pool: principal;
+  partydex_ckusdc_fee_pips: nat32;
+  partydex_ckusdt_fee_pips: nat32;
 };
 
 type Pool = variant {
@@ -30,6 +34,8 @@ type Pool = variant {
   IcpswapIcusd;
   IcpswapCkusdt;
   IcpswapThreeUsd;
+  PartyDexIcpCkusdc;
+  PartyDexIcpCkusdt;
 };
 
 type PendingExit = record {
@@ -140,6 +146,14 @@ type CycleSnapshot = record {
   spread_c_bps: int32;
   spread_d_bps: int32;
   spread_f_bps: int32;
+  spread_k_bps: int32;
+  spread_l_bps: int32;
+  spread_m_bps: int32;
+  spread_n_bps: int32;
+  spread_o_bps: int32;
+  spread_p_bps: int32;
+  spread_q_bps: int32;
+  spread_r_bps: int32;
   traded: bool;
   strategy_used: text;
 };

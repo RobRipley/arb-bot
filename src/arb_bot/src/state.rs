@@ -23,6 +23,20 @@ fn default_arb_interval_secs() -> u64 {
     600
 }
 
+/// PartyDEX ICP/ckUSDC pool (500-pip / 0.05% fee tier is where liquidity is concentrated).
+fn default_partydex_ckusdc_pool() -> Principal {
+    Principal::from_text("xjiq2-fiaaa-aaaan-q52ra-cai").expect("valid principal")
+}
+
+/// PartyDEX ICP/ckUSDT pool.
+fn default_partydex_ckusdt_pool() -> Principal {
+    Principal::from_text("6b2bo-kyaaa-aaaao-qpira-cai").expect("valid principal")
+}
+
+fn default_partydex_fee_pips() -> u32 {
+    500
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -77,6 +91,26 @@ pub struct BotConfig {
     /// of slower reaction to arbitrage opportunities. Default 600.
     #[serde(default = "default_arb_interval_secs")]
     pub arb_interval_secs: u64,
+    /// PartyDEX ICP/ckUSDC pool canister (used by Strategies K/L/M/Q in PR2b).
+    #[serde(default = "default_partydex_ckusdc_pool")]
+    pub partydex_ckusdc_pool: Principal,
+    /// PartyDEX ICP/ckUSDT pool canister (used by Strategies N/O/P/R in PR2b).
+    #[serde(default = "default_partydex_ckusdt_pool")]
+    pub partydex_ckusdt_pool: Principal,
+    /// Fee tier (pips) pool_swaps are pinned to on the PartyDEX ckUSDC pool. Default 500 (0.05%).
+    #[serde(default = "default_partydex_fee_pips")]
+    pub partydex_ckusdc_fee_pips: u32,
+    /// Fee tier (pips) pool_swaps are pinned to on the PartyDEX ckUSDT pool. Default 500 (0.05%).
+    #[serde(default = "default_partydex_fee_pips")]
+    pub partydex_ckusdt_fee_pips: u32,
+}
+
+/// Which DEX venue an arb leg trades against. Internal to arb targets — not
+/// part of BotConfig/CycleSnapshot, so it is not represented in arb_bot.did.
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Venue {
+    Icpswap,
+    PartyDex,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -151,6 +185,30 @@ pub struct CycleSnapshot {
     /// Strategy F spread (ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
     #[serde(default)]
     pub spread_f_bps: i32,
+    /// Strategy K spread (PartyDEX ckUSDC vs ICPSwap ckUSDC/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_k_bps: i32,
+    /// Strategy L spread (PartyDEX ckUSDC vs ICPSwap ckUSDT/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_l_bps: i32,
+    /// Strategy M spread (PartyDEX ckUSDC vs ICPSwap icUSD/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_m_bps: i32,
+    /// Strategy N spread (PartyDEX ckUSDT vs ICPSwap ckUSDC/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_n_bps: i32,
+    /// Strategy O spread (PartyDEX ckUSDT vs ICPSwap ckUSDT/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_o_bps: i32,
+    /// Strategy P spread (PartyDEX ckUSDT vs ICPSwap icUSD/ICP), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_p_bps: i32,
+    /// Strategy Q spread (Rumi 3pool vs PartyDEX ckUSDC), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_q_bps: i32,
+    /// Strategy R spread (Rumi 3pool vs PartyDEX ckUSDT), 0 if N/A. Populated in PR2b.
+    #[serde(default)]
+    pub spread_r_bps: i32,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"
@@ -164,6 +222,12 @@ pub enum Pool {
     IcpswapIcusd,
     IcpswapCkusdt,
     IcpswapThreeUsd,
+    /// PartyDEX ICP/ckUSDC pool. Label-only in PR2a — NOT wired into drain
+    /// candidates (PartyDEX legs always settle ICP back to the main balance,
+    /// so existing ICPSwap/Rumi drain already covers recovery).
+    PartyDexIcpCkusdc,
+    /// PartyDEX ICP/ckUSDT pool. Label-only in PR2a — see PartyDexIcpCkusdc.
+    PartyDexIcpCkusdt,
 }
 
 // ─── Volume bot types ───
@@ -412,6 +476,10 @@ impl Default for BotState {
                 icpswap_3usd_icp_is_token0: false,
                 slippage_bps: 50,
                 arb_interval_secs: 600,
+                partydex_ckusdc_pool: default_partydex_ckusdc_pool(),
+                partydex_ckusdt_pool: default_partydex_ckusdt_pool(),
+                partydex_ckusdc_fee_pips: default_partydex_fee_pips(),
+                partydex_ckusdt_fee_pips: default_partydex_fee_pips(),
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,

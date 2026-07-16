@@ -1295,6 +1295,14 @@
           <input type="number" id="cfg-arb-interval" placeholder="600" min="30" max="86400" step="1">
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">How often the arb cycle runs. Higher = fewer cycles burned, slower reaction. Min 30s, max 86400s (1 day).</div>
         </div>
+        <div>
+          <label>PartyDEX ckUSDC Fee Tier (pips)</label>
+          <input type="number" id="cfg-partydex-ckusdc-fee" placeholder="500" min="1" step="1">
+        </div>
+        <div>
+          <label>PartyDEX ckUSDT Fee Tier (pips)</label>
+          <input type="number" id="cfg-partydex-ckusdt-fee" placeholder="500" min="1" step="1">
+        </div>
         <button class="btn btn-primary btn-block" onclick="saveConfig(this)">Save Configuration</button>
       </div>
       <div style="margin-top:var(--sp-4);border-top:1px solid var(--border);padding-top:var(--sp-3)">
@@ -1675,7 +1683,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64 });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32 });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
@@ -1695,6 +1703,8 @@
       icpswap_icp_price_ckusdt: IDL.Nat64, spread_c_bps: IDL.Int32,
       spread_d_bps: IDL.Int32,
       spread_f_bps: IDL.Int32,
+      spread_k_bps: IDL.Int32, spread_l_bps: IDL.Int32, spread_m_bps: IDL.Int32, spread_n_bps: IDL.Int32,
+      spread_o_bps: IDL.Int32, spread_p_bps: IDL.Int32, spread_q_bps: IDL.Int32, spread_r_bps: IDL.Int32,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -1708,6 +1718,8 @@
         IcpswapIcusd: I.Null,
         IcpswapCkusdt: I.Null,
         IcpswapThreeUsd: I.Null,
+        PartyDexIcpCkusdc: I.Null,
+        PartyDexIcpCkusdt: I.Null,
       });
       const PendingExit = I.Record({
         entry_pool: Pool,
@@ -2968,8 +2980,11 @@
       const maxTradeRaw = parseFloat(document.getElementById('cfg-max-trade').value);
       const minProfitRaw = parseFloat(document.getElementById('cfg-min-profit').value);
       const arbIntervalRaw = parseInt(document.getElementById('cfg-arb-interval').value);
+      const partydexCkusdcFee = parseInt(document.getElementById('cfg-partydex-ckusdc-fee').value);
+      const partydexCkusdtFee = parseInt(document.getElementById('cfg-partydex-ckusdt-fee').value);
 
-      if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)) {
+      if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)
+          && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee)) {
         showToast('Enter at least one value to update', 'error');
         return;
       }
@@ -2977,11 +2992,13 @@
       btnLoading(btn, 'Saving...');
       try {
         // Update set_config-managed fields first
-        if (!isNaN(minSpread) || !isNaN(maxTradeRaw) || !isNaN(minProfitRaw)) {
+        if (!isNaN(minSpread) || !isNaN(maxTradeRaw) || !isNaN(minProfitRaw) || !isNaN(partydexCkusdcFee) || !isNaN(partydexCkusdtFee)) {
           const cfg = await anonymousActor.get_config();
           if (!isNaN(minSpread)) cfg.min_spread_bps = minSpread;
           if (!isNaN(maxTradeRaw)) cfg.max_trade_size_usd = BigInt(Math.round(maxTradeRaw * 1e6));
           if (!isNaN(minProfitRaw)) cfg.min_profit_usd = BigInt(Math.round(minProfitRaw * 1e6));
+          if (!isNaN(partydexCkusdcFee)) cfg.partydex_ckusdc_fee_pips = partydexCkusdcFee;
+          if (!isNaN(partydexCkusdtFee)) cfg.partydex_ckusdt_fee_pips = partydexCkusdtFee;
           await authenticatedActor.set_config(cfg);
         }
         // Arb interval uses dedicated setter so the timer is reset immediately
@@ -2996,6 +3013,8 @@
         document.getElementById('cfg-max-trade').value = '';
         document.getElementById('cfg-min-profit').value = '';
         document.getElementById('cfg-arb-interval').value = '';
+        document.getElementById('cfg-partydex-ckusdc-fee').value = '';
+        document.getElementById('cfg-partydex-ckusdt-fee').value = '';
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
@@ -3085,6 +3104,8 @@
         <div class="stat-row"><span class="stat-label">Rumi AMM</span><span class="stat-value">${short(c.rumi_amm)}</span></div>
         <div class="stat-row"><span class="stat-label">ICPSwap Pool</span><span class="stat-value">${short(c.icpswap_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">PartyDEX ckUSDC Pool</span><span class="stat-value">${c.partydex_ckusdc_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdc_pool)} (${bi(c.partydex_ckusdc_fee_pips)} pips)</span></div>
+        <div class="stat-row"><span class="stat-label">PartyDEX ckUSDT Pool</span><span class="stat-value">${c.partydex_ckusdt_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdt_pool)} (${bi(c.partydex_ckusdt_fee_pips)} pips)</span></div>
         <div class="stat-row"><span class="stat-label">Admins</span><span class="stat-value">${c.admins.length}</span></div>
       `;
       // Update admin status indicator
