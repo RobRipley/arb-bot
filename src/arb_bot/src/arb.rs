@@ -2173,6 +2173,252 @@ async fn find_optimal_cross_pool_reverse(
     }
 }
 
+// ─── Strategy S (icUSD/BOB triangular) evaluator ───
+//
+// BOB is the transit asset (the role ICP plays in strategies A–R); endpoints
+// are icUSD and banded ICP inventory. Reference: fair icUSD-per-BOB =
+// (ICP per BOB from the BOB/ICP pool) × (USD per ICP from the best stable/ICP
+// quote), with icUSD treated as $1 (matching stable_to_usd_6dec). Unused
+// until the cycle wiring task; allow(dead_code) keeps cargo check clean.
+
+/// Strategy S venue bundle, built inline in `run_arb_cycle` like the other targets.
+#[allow(dead_code)]
+pub struct BobTarget {
+    pub icusd_bob_pool: Principal,
+    pub icusd_is_token0: bool,
+    pub bob_icp_pool: Principal,
+    pub bob_icp_icp_is_token0: bool,
+    pub bob_ledger: Principal,
+    pub bob_fee: u64,
+    pub icusd_ledger: Principal,
+    pub icusd_fee: u64,
+    pub icp_ledger: Principal,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BobDirection {
+    /// icUSD → BOB (our pool) → ICP (BOB/ICP). BOB cheap in our pool.
+    Forward,
+    /// ICP → BOB (BOB/ICP) → icUSD (our pool). BOB rich in our pool.
+    Reverse,
+}
+
+#[allow(dead_code)]
+pub struct BobDryRun {
+    pub should_trade: bool,
+    pub direction: Option<BobDirection>,
+    /// Native input units: icUSD (8 dec) for Forward, ICP e8s for Reverse.
+    pub input_amount: u64,
+    /// Expected transit BOB from leg 1 (gross quote output, 8 dec).
+    pub bob_amount: u64,
+    /// Expected leg-2 output: ICP e8s (Forward) or icUSD 8 dec (Reverse).
+    pub output_amount: u64,
+    pub expected_profit_usd: i64,
+    pub spread_bps: u32,
+    pub usd_per_icp_6dec: u64,
+    pub pool_price_icusd_per_bob_8dec: u64,
+    pub ref_price_icusd_per_bob_8dec: u64,
+}
+
+impl Default for BobDryRun {
+    fn default() -> Self {
+        Self {
+            should_trade: false,
+            direction: None,
+            input_amount: 0,
+            bob_amount: 0,
+            output_amount: 0,
+            expected_profit_usd: 0,
+            spread_bps: 0,
+            usd_per_icp_6dec: 0,
+            pool_price_icusd_per_bob_8dec: 0,
+            ref_price_icusd_per_bob_8dec: 0,
+        }
+    }
+}
+
+/// USD mark (6-dec) for a BOB amount at the icUSD-per-BOB reference price
+/// (8-dec icUSD per 1 BOB; icUSD ≈ $1, so /100 lifts 8-dec icUSD to 6-dec USD).
+#[allow(dead_code)]
+fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
+    (bob_e8s as u128 * ref_price_icusd_per_bob_8dec as u128 / 100_000_000 / 100) as i64
+}
+
+#[allow(dead_code)]
+async fn find_optimal_bob(config: &state::BotConfig, target: &BobTarget) -> Result<BobDryRun, String> {
+    let mut result = BobDryRun::default();
+
+    // 1. Reference USD/ICP once, at a 1-ICP probe size.
+    let usd_per_icp = match best_stable_usd_per_icp(config, 100_000_000).await {
+        Some(q) if q.usd_per_icp_6dec > 0 => q.usd_per_icp_6dec,
+        _ => {
+            state::log_activity("dry_run", "[S] No stable/ICP reference quote available");
+            return Ok(result);
+        }
+    };
+    result.usd_per_icp_6dec = usd_per_icp;
+
+    // 2. Pool price and reference price at a 1-BOB probe (both quotes sell BOB).
+    const BOB_PROBE: u64 = 100_000_000; // 1 BOB (8 dec)
+    let (pool_res, ref_res) = futures::future::join(
+        prices::fetch_icpswap_quote_for_amount(target.icusd_bob_pool, BOB_PROBE, !target.icusd_is_token0),
+        prices::fetch_icpswap_quote_for_amount(target.bob_icp_pool, BOB_PROBE, !target.bob_icp_icp_is_token0),
+    ).await;
+    let pool_icusd_per_bob = pool_res?; // icUSD (8 dec) out per 1 BOB in
+    let ref_icp_per_bob = ref_res?;     // ICP (e8s) out per 1 BOB in
+    // Reference icUSD-per-BOB (8 dec): (icp_e8s × usd_6dec / 1e8) is 6-dec
+    // USD per BOB; ×100 lifts to 8-dec icUSD (icUSD ≈ $1). Combined: /1e6.
+    let ref_icusd_per_bob = (ref_icp_per_bob as u128 * usd_per_icp as u128 / 1_000_000) as u64;
+    result.pool_price_icusd_per_bob_8dec = pool_icusd_per_bob;
+    result.ref_price_icusd_per_bob_8dec = ref_icusd_per_bob;
+    if pool_icusd_per_bob == 0 || ref_icusd_per_bob == 0 {
+        state::log_activity("dry_run", "[S] Zero probe quote (pool or reference)");
+        return Ok(result);
+    }
+
+    // 3. Spread (pool vs reference deviation) and direction.
+    let (p, r) = (pool_icusd_per_bob as i64, ref_icusd_per_bob as i64);
+    result.spread_bps = ((p - r) * 10_000 / p.min(r)).unsigned_abs() as u32;
+    if (result.spread_bps as u64) < config.bob_min_spread_bps {
+        state::log_activity("dry_run", &format!(
+            "[S] Spread {} bps < minimum {} bps (pool {} vs ref {} icUSD/BOB 8dec)",
+            result.spread_bps, config.bob_min_spread_bps, pool_icusd_per_bob, ref_icusd_per_bob
+        ));
+        return Ok(result);
+    }
+    // Pool pays less icUSD per BOB than fair → BOB cheap in our pool → Forward.
+    let direction = if p < r { BobDirection::Forward } else { BobDirection::Reverse };
+    result.direction = Some(direction);
+
+    // 4. Candidate ladder: bob_max_trade_size_usd × 1/4..4/4, converted to
+    //    input units. Forward is additionally capped by usable icUSD balance
+    //    (Reverse is not — the execution top-up leg covers ICP shortfalls).
+    let max_input: u64 = match direction {
+        BobDirection::Forward => {
+            let bal_icusd = fetch_balance_cached(target.icusd_ledger).await.unwrap_or(0);
+            let usable = bal_icusd.saturating_sub(target.icusd_fee);
+            let min_native = usd_6dec_to_stable(min_trade_floor_usd(state::Venue::Icpswap), 8);
+            if usable < min_native {
+                state::log_activity("dry_run", "[S] Insufficient icUSD balance");
+                return Ok(result);
+            }
+            usable.min(usd_6dec_to_stable(config.bob_max_trade_size_usd, 8))
+        }
+        BobDirection::Reverse => {
+            // USD → ICP e8s at the reference rate.
+            (config.bob_max_trade_size_usd as u128 * 100_000_000 / usd_per_icp as u128) as u64
+        }
+    };
+    let candidates: Vec<u64> = (1..=NUM_CANDIDATES)
+        .map(|i| max_input * i / NUM_CANDIDATES)
+        .filter(|&a| a > 0)
+        .collect();
+    if candidates.is_empty() {
+        state::log_activity("dry_run", "[S] No candidate sizes > 0");
+        return Ok(result);
+    }
+
+    // Round 1: input → BOB on the entry pool.
+    let futs1: Vec<_> = candidates.iter().map(|&amount| match direction {
+        BobDirection::Forward =>
+            prices::fetch_icpswap_quote_for_amount(target.icusd_bob_pool, amount, target.icusd_is_token0),
+        BobDirection::Reverse =>
+            prices::fetch_icpswap_quote_for_amount(target.bob_icp_pool, amount, target.bob_icp_icp_is_token0),
+    }).collect();
+    let results1 = futures::future::join_all(futs1).await;
+
+    let mut stage1: Vec<(u64, u64)> = Vec::new();
+    for (i, res) in results1.into_iter().enumerate() {
+        match res {
+            Ok(bob_out) if bob_out > 0 => stage1.push((candidates[i], bob_out)),
+            _ => {}
+        }
+    }
+    if stage1.is_empty() {
+        state::log_activity("dry_run", &format!(
+            "[S] All {}→BOB quotes failed",
+            if direction == BobDirection::Forward { "icUSD" } else { "ICP" }
+        ));
+        return Ok(result);
+    }
+
+    // Round 2: transit BOB → output on the exit pool. The bot actually
+    // receives (bob_out - bob_fee) after the pool withdraw and spends another
+    // bob_fee on the next-hop deposit — same *2 convention as ICP transit.
+    let futs2: Vec<_> = stage1.iter().map(|&(_, bob_out)| {
+        let usable_bob = bob_out.saturating_sub(target.bob_fee * 2);
+        match direction {
+            BobDirection::Forward =>
+                prices::fetch_icpswap_quote_for_amount(target.bob_icp_pool, usable_bob, !target.bob_icp_icp_is_token0),
+            BobDirection::Reverse =>
+                prices::fetch_icpswap_quote_for_amount(target.icusd_bob_pool, usable_bob, !target.icusd_is_token0),
+        }
+    }).collect();
+    let results2 = futures::future::join_all(futs2).await;
+
+    // Ledger fees marked to USD: one icUSD fee (entry or exit stable) plus the
+    // two transit BOB fees at the reference mark. Slightly conservative — the
+    // BOB fees are also reflected in the reduced round-2 quote input above.
+    let fees_usd = stable_to_usd_6dec(target.icusd_fee, 8)
+        + mark_bob_usd(target.bob_fee * 2, ref_icusd_per_bob);
+
+    let mut best: Option<(u64, u64, u64, i64)> = None; // (input, bob, output, profit)
+    for (i, res) in results2.into_iter().enumerate() {
+        let (input_amount, bob_out) = stage1[i];
+        let output_amount = match res {
+            Ok(out) if out > 0 => out,
+            _ => continue,
+        };
+        let profit = match direction {
+            BobDirection::Forward => {
+                // Terminal ICP joins inventory net of transfer + next-hop
+                // approval spend (same convention as the A–R leg-2 usable math).
+                let icp_out_net = output_amount.saturating_sub(ICP_FEE * 2);
+                mark_icp_usd(icp_out_net, usd_per_icp)
+                    - stable_to_usd_6dec(input_amount, 8)
+                    - fees_usd
+            }
+            BobDirection::Reverse => {
+                stable_to_usd_6dec(output_amount, 8)
+                    - mark_icp_usd(input_amount, usd_per_icp)
+                    - fees_usd
+            }
+        };
+        if best.map_or(profit > 0, |(_, _, _, bp)| profit > bp) {
+            best = Some((input_amount, bob_out, output_amount, profit));
+        }
+    }
+
+    match best {
+        Some((input_amount, bob_amount, output_amount, profit)) => {
+            result.input_amount = input_amount;
+            result.bob_amount = bob_amount;
+            result.output_amount = output_amount;
+            result.expected_profit_usd = profit;
+            result.should_trade = profit > 0
+                && (config.min_profit_usd <= 0 || profit >= config.min_profit_usd);
+            let (in_tok, out_tok) = match direction {
+                BobDirection::Forward => ("icUSD", "ICP"),
+                BobDirection::Reverse => ("ICP", "icUSD"),
+            };
+            state::log_activity("dry_run", &format!(
+                "[S] Optimal: {} {} → {} BOB → {} {} = {} profit (spread {} bps, pool {} vs ref {} icUSD/BOB 8dec)",
+                input_amount, in_tok, bob_amount, output_amount, out_tok, profit,
+                result.spread_bps, pool_icusd_per_bob, ref_icusd_per_bob
+            ));
+        }
+        None => {
+            state::log_activity("dry_run", &format!(
+                "[S] No profitable trade found (spread {} bps, pool {} vs ref {} icUSD/BOB 8dec)",
+                result.spread_bps, pool_icusd_per_bob, ref_icusd_per_bob
+            ));
+        }
+    }
+
+    Ok(result)
+}
+
 // ─── Execute Trades ───
 
 async fn execute_rumi_to_icpswap(config: &state::BotConfig, target: &IcpswapTarget, dry_run: &DryRunResult) {
