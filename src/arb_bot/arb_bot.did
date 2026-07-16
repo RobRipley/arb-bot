@@ -300,6 +300,7 @@ service : (InitArgs) -> {
   resume: () -> ();
   setup_approvals: () -> (text);
   withdraw: (principal, principal, nat64) -> ();
+  recover_partydex_balance: (principal) -> (variant { Ok: record { nat64; nat64 }; Err: text });
   backfill_trade_legs: (vec TradeLeg) -> ();
   manual_arb_cycle: () -> ();
   execute_strategy_a: () -> ();
@@ -307,11 +308,27 @@ service : (InitArgs) -> {
   execute_strategy_c: () -> ();
   execute_strategy_d: () -> ();
   execute_strategy_f: () -> ();
+  execute_strategy_k: () -> ();
+  execute_strategy_l: () -> ();
+  execute_strategy_m: () -> ();
+  execute_strategy_n: () -> ();
+  execute_strategy_o: () -> ();
+  execute_strategy_p: () -> ();
+  execute_strategy_q: () -> ();
+  execute_strategy_r: () -> ();
   dry_run_arb_cycle: () -> (DryRunResult);
   dry_run_strategy_b: () -> (DryRunResult);
   dry_run_strategy_c: () -> (DryRunResult);
   dry_run_strategy_d: () -> (DryRunResult);
   dry_run_strategy_f: () -> (DryRunResult);
+  dry_run_strategy_k: () -> (DryRunResult);
+  dry_run_strategy_l: () -> (DryRunResult);
+  dry_run_strategy_m: () -> (DryRunResult);
+  dry_run_strategy_n: () -> (DryRunResult);
+  dry_run_strategy_o: () -> (DryRunResult);
+  dry_run_strategy_p: () -> (DryRunResult);
+  dry_run_strategy_q: () -> (DryRunResult);
+  dry_run_strategy_r: () -> (DryRunResult);
 
   // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
   pool_deposit: (nat8, nat64, nat64) -> ();

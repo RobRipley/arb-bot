@@ -418,14 +418,21 @@ pub async fn swap(
     let token_in_side = if token_in_is_base { TokenSide::Base } else { TokenSide::Quote };
     let token_out_side = if token_in_is_base { TokenSide::Quote } else { TokenSide::Base };
 
-    // 1. Deposit token_in into the pool's internal balance.
-    call_deposit(pool, token_in_side, Nat::from(amount_in)).await.map_err(|e| {
+    // 1. Deposit token_in into the pool's internal balance. `deposit` returns
+    // the amount ACTUALLY credited to the internal balance; use that (not the
+    // requested `amount_in`) for the subsequent quote/trade so a future
+    // deposit-fee change can't desync the trade from the real balance
+    // (hardening). Fall back to `amount_in` only if the credited amount comes
+    // back as 0 (field absent / unexpected).
+    let deposited = call_deposit(pool, token_in_side, Nat::from(amount_in)).await.map_err(|e| {
         SwapError::SwapFailed(format!("deposit({:?}) from {} failed: {}", token_in_side, token_in_ledger, e))
     })?;
+    let credited = nat_to_u64(&deposited);
+    let trade_input = if credited > 0 { credited } else { amount_in };
 
     // 2. Re-quote at execution time; bail out (refunding token_in) if the
     // fresh quote already can't clear min_out.
-    let quote = match call_quote_trade(pool, side, Nat::from(amount_in), None, None).await {
+    let quote = match call_quote_trade(pool, side, Nat::from(trade_input), None, None).await {
         Ok(q) => q,
         Err(e) => {
             refund_side(pool, token_in_side).await;
@@ -458,16 +465,78 @@ pub async fn swap(
         )));
     }
 
-    // 4. Sweep the output side back out to the bot's main account.
-    let user = match call_get_user(pool).await {
-        Ok(Some(u)) => u,
-        Ok(None) => return Err(SwapError::SwapFailed("get_user returned no record after trade".to_string())),
-        Err(e) => return Err(e),
+    // 4. Sweep the output side back out to the bot's main account. The trade
+    // has ALREADY settled at this point, so the output token sits in the pool's
+    // internal balance — if this sweep fails the funds are NOT lost, only
+    // stranded INSIDE PartyDEX until recovered. Retry a few times before
+    // surfacing that, and if it still fails return an error that makes the
+    // stranded-inside-PartyDEX situation unambiguous (so the caller's executor
+    // does not misreport it as the bot "holding ICP").
+    let mut last_err: Option<SwapError> = None;
+    for _attempt in 0..3 {
+        let avail = match call_get_user(pool).await {
+            Ok(Some(u)) => match token_out_side {
+                TokenSide::Base => u.available.base,
+                TokenSide::Quote => u.available.quote,
+            },
+            Ok(None) => {
+                last_err = Some(SwapError::SwapFailed("get_user returned no record after trade".to_string()));
+                continue;
+            }
+            Err(e) => {
+                last_err = Some(e);
+                continue;
+            }
+        };
+        if avail == Nat::from(0u64) {
+            // Nothing available to sweep yet — treat as a transient read and retry.
+            last_err = Some(SwapError::SwapFailed("output token not yet available in pool balance".to_string()));
+            continue;
+        }
+        match call_withdraw(pool, token_out_side, avail).await {
+            Ok(out) => return Ok(nat_to_u64(&out)),
+            Err(e) => last_err = Some(e),
+        }
+    }
+
+    // All retries exhausted: the output is held INSIDE the pool, not by the bot.
+    let token_label = match token_out_side {
+        TokenSide::Base => "base (ICP)",
+        TokenSide::Quote => "quote (stable)",
     };
-    let avail = match token_out_side {
-        TokenSide::Base => user.available.base,
-        TokenSide::Quote => user.available.quote,
-    };
-    let out_amount = call_withdraw(pool, token_out_side, avail).await?;
-    Ok(nat_to_u64(&out_amount))
+    Err(SwapError::SwapFailed(format!(
+        "PartyDEX trade SUCCEEDED but sweeping the output failed after 3 attempts: the output is held INSIDE PartyDEX pool {} as its {} token (ledger {}). Funds are NOT lost and are NOT held as ICP by the bot — call recover_partydex_balance({}) to sweep them out. Last sweep error: {}",
+        pool, token_label, token_out_ledger, pool,
+        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown".to_string())
+    )))
+}
+
+/// Admin recovery lever: sweep the FULL available `base` and `quote` balances
+/// out of the pool's internal account back to the bot's main account. Used when
+/// a trade settled but the post-trade withdraw failed, stranding output inside
+/// PartyDEX, and the pool is not expected to trade again soon (the normal
+/// sweep-entire-available-balance on the next successful trade auto-recovers
+/// otherwise). Skips a side whose available balance is 0. Returns
+/// `(base_withdrawn, quote_withdrawn)` in native units.
+pub async fn withdraw_all(pool: Principal) -> Result<(u64, u64), String> {
+    let user = call_get_user(pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "PartyDEX get_user returned no record".to_string())?;
+
+    let mut base_out = 0u64;
+    let mut quote_out = 0u64;
+    if user.available.base > Nat::from(0u64) {
+        let out = call_withdraw(pool, TokenSide::Base, user.available.base.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        base_out = nat_to_u64(&out);
+    }
+    if user.available.quote > Nat::from(0u64) {
+        let out = call_withdraw(pool, TokenSide::Quote, user.available.quote.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        quote_out = nat_to_u64(&out);
+    }
+    Ok((base_out, quote_out))
 }
