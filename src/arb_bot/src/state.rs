@@ -47,6 +47,29 @@ fn default_icp_inventory_ceiling() -> u64 {
     2_000_000_000
 }
 
+/// BOB ledger — mainnet-verified principal (fee 1_000_000 e8s, 8 decimals).
+fn default_bob_ledger() -> Principal {
+    Principal::from_text("7pail-xaaaa-aaaas-aabmq-cai").expect("valid principal")
+}
+
+fn default_bob_ledger_fee() -> u64 {
+    1_000_000
+}
+
+/// ICPSwap BOB/ICP pool — the sole BOB reference market (fee 3000 pips =
+/// 0.3%, token0 = BOB — verified live 2026-07-16).
+fn default_icpswap_bob_icp_pool() -> Principal {
+    Principal::from_text("ybilh-nqaaa-aaaag-qkhzq-cai").expect("valid principal")
+}
+
+fn default_bob_max_trade_size_usd() -> u64 {
+    50_000_000
+}
+
+fn default_bob_min_spread_bps() -> u64 {
+    150
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -128,6 +151,40 @@ pub struct BotConfig {
     pub icp_inventory_floor_e8s: u64,
     #[serde(default = "default_icp_inventory_ceiling")]
     pub icp_inventory_ceiling_e8s: u64,
+    /// Strategy S: BOB ledger canister (mainnet-verified).
+    #[serde(default = "default_bob_ledger")]
+    pub bob_ledger: Principal,
+    /// BOB ledger transfer fee (native units, 8 decimals).
+    #[serde(default = "default_bob_ledger_fee")]
+    pub bob_ledger_fee: u64,
+    /// Strategy S: ICPSwap BOB/ICP pool canister — BOB's sole reference market.
+    #[serde(default = "default_icpswap_bob_icp_pool")]
+    pub icpswap_bob_icp_pool: Principal,
+    /// Strategy S: ICPSwap icUSD/BOB pool canister. Anonymous until the pool
+    /// is created — this is Strategy S's master gate (inert while anonymous).
+    #[serde(default = "default_principal")]
+    pub icpswap_icusd_bob_pool: Principal,
+    /// Whether ICP is token0 in the ICPSwap BOB/ICP pool (resolved once).
+    #[serde(default)]
+    pub icpswap_bob_icp_icp_is_token0: bool,
+    /// Whether icUSD is token0 in the ICPSwap icUSD/BOB pool (resolved once).
+    #[serde(default)]
+    pub icpswap_icusd_bob_icusd_is_token0: bool,
+    /// Strategy S: max trade size per leg (6-dec USD). Default $50 — BOB/ICP
+    /// moves ~1% per $265 of volume, so this keeps clips small relative to depth.
+    #[serde(default = "default_bob_max_trade_size_usd")]
+    pub bob_max_trade_size_usd: u64,
+    /// Strategy S: minimum pool-vs-reference deviation (bps) required to trade.
+    /// Default 150 — covers two-to-three 0.3% fee legs plus thin-pool slippage
+    /// and reference uncertainty.
+    #[serde(default = "default_bob_min_spread_bps")]
+    pub bob_min_spread_bps: u64,
+    /// Strategy S execution kill switch. Dry-run evaluation + dashboard
+    /// surfacing always run once both BOB pools are configured; live
+    /// execution additionally requires this to be true. Defaults false
+    /// (dry-run-first, per design decision #5).
+    #[serde(default)]
+    pub bob_execution_enabled: bool,
 }
 
 /// Which DEX venue an arb leg trades against. Internal to arb targets — not
@@ -240,6 +297,18 @@ pub struct CycleSnapshot {
     /// PartyDEX ckUSDT per 1 ICP (6 dec USD), 0 if N/A.
     #[serde(default)]
     pub partydex_icp_price_ckusdt: u64,
+    /// Strategy S: icUSD out per 1 BOB on the icUSD/BOB pool (8 dec), 0 if N/A.
+    #[serde(default)]
+    pub bob_pool_price_icusd_per_bob: u64,
+    /// Strategy S: reference icUSD per 1 BOB — (ICP/BOB) × (USD/ICP) (8 dec), 0 if N/A.
+    #[serde(default)]
+    pub bob_ref_price_icusd_per_bob: u64,
+    /// Strategy S spread (pool vs reference), 0 if N/A.
+    #[serde(default)]
+    pub spread_s_bps: i64,
+    /// BOB balance (8 dec), 0 while Strategy S is inert.
+    #[serde(default)]
+    pub balance_bob: u64,
     // Trade activity
     pub traded: bool,
     pub strategy_used: String,           // "", "A", "B", "C", or "D"
@@ -419,6 +488,12 @@ pub struct BotHealthReport {
     pub arb_paused: bool,
     pub volume_stranded_icp: u64,
     pub pending_exit: Option<PendingExit>,
+    /// Strategy S: BOB acquired by a leg 1 whose leg 2 hasn't completed.
+    #[serde(default)]
+    pub pending_bob_exit: Option<PendingBobExit>,
+    /// BOB balance (8 dec). 0 if the ledger query failed.
+    #[serde(default)]
+    pub balance_bob: u64,
     pub slippage_bps: u64,
     pub pools: Vec<PoolHealth>,
 }
@@ -440,6 +515,29 @@ pub enum LegType {
     Leg1,
     Leg2,
     Drain,
+    /// Strategy S: ICP inventory top-up bought from the best stable pool
+    /// ahead of a reverse-direction (ICP→BOB→icUSD) trade. Appended after
+    /// Drain — candid-append-safe, old logs decode unchanged.
+    TopUp,
+}
+
+/// Which of the two Strategy S pools a stranded BOB balance entered through.
+/// Internal to BotState (not part of any candid method signature yet).
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BobPool {
+    /// ICPSwap icUSD/BOB pool.
+    IcusdBob,
+    /// ICPSwap BOB/ICP pool.
+    BobIcp,
+}
+
+/// Records the pool Strategy S acquired BOB through after a successful
+/// leg 1, so `drain_residual_bob` never sells back into the entry pool.
+#[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
+pub struct PendingBobExit {
+    pub entry_pool: BobPool,
+    /// BOB received by leg 1 (8 dec).
+    pub bob_amount: u64,
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -470,8 +568,19 @@ pub struct BotState {
     pub ckusdt_token_ordering_resolved: bool,
     #[serde(default)]
     pub icpswap_3usd_token_ordering_resolved: bool,
+    /// Strategy S: BOB/ICP pool token-ordering resolved once (mirrors the
+    /// `*_token_ordering_resolved` pattern above).
+    #[serde(default)]
+    pub bob_icp_ordering_resolved: bool,
+    /// Strategy S: icUSD/BOB pool token-ordering resolved once.
+    #[serde(default)]
+    pub icusd_bob_ordering_resolved: bool,
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
+    /// Strategy S: BOB acquired by leg 1 whose leg 2 has not completed.
+    /// `drain_residual_bob` recovers it next cycle.
+    #[serde(default)]
+    pub pending_bob_exit: Option<PendingBobExit>,
     #[serde(default)]
     pub volume: VolumeConfig,
     /// ICP amount stranded in the default account after a volume bot
@@ -514,12 +623,24 @@ impl Default for BotState {
                 partydex_ckusdt_fee_pips: default_partydex_fee_pips(),
                 icp_inventory_floor_e8s: default_icp_inventory_floor(),
                 icp_inventory_ceiling_e8s: default_icp_inventory_ceiling(),
+                bob_ledger: default_bob_ledger(),
+                bob_ledger_fee: default_bob_ledger_fee(),
+                icpswap_bob_icp_pool: default_icpswap_bob_icp_pool(),
+                icpswap_icusd_bob_pool: Principal::anonymous(),
+                icpswap_bob_icp_icp_is_token0: false,
+                icpswap_icusd_bob_icusd_is_token0: false,
+                bob_max_trade_size_usd: default_bob_max_trade_size_usd(),
+                bob_min_spread_bps: default_bob_min_spread_bps(),
+                bob_execution_enabled: false,
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
             icpswap_3usd_token_ordering_resolved: false,
+            bob_icp_ordering_resolved: false,
+            icusd_bob_ordering_resolved: false,
             pending_exit: None,
+            pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
         }
@@ -937,7 +1058,10 @@ pub fn load_from_stable_memory() {
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
             icpswap_3usd_token_ordering_resolved: legacy.icpswap_3usd_token_ordering_resolved,
+            bob_icp_ordering_resolved: false,
+            icusd_bob_ordering_resolved: false,
             pending_exit: legacy.pending_exit,
+            pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
         };

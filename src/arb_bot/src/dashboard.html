@@ -1102,6 +1102,23 @@
           </div>
           <div class="spread-action" id="spread-r-action"></div>
         </div>
+        <div class="spread-row" id="spread-s-row" style="margin-top:var(--sp-3)">
+          <div class="spread-pair">
+            <span class="spread-pool spread-pool-left"><span class="venue-logo icpswap"></span>ICPSwap icUSD / BOB</span>
+            <span class="spread-value" id="spread-s-value">--</span>
+            <span class="spread-pool spread-pool-right">BOB/ICP × USD/ICP reference</span>
+          </div>
+          <div class="spread-gauge-track">
+            <div class="spread-gauge-fill" id="spread-s-fill"></div>
+            <div class="spread-gauge-center"></div>
+            <div class="spread-gauge-threshold" id="spread-s-thresh-l"></div>
+            <div class="spread-gauge-threshold" id="spread-s-thresh-r"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--sp-2)">
+            <span id="spread-s-prices" style="font-size:11px;color:var(--text-tertiary)"></span>
+            <span id="spread-s-dryrun" style="display:none;background:rgba(240,160,91,0.15);color:#f0a05b;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.05em">DRY-RUN</span>
+          </div>
+        </div>
       </div>
 
       <!-- Live Prices + Balances -->
@@ -1149,6 +1166,7 @@
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(92,107,192,0.15);color:#5c6bc0">P</span>PartyDEX ckUSDT <span class="strat-vs">↔</span> ICPSwap icUSD</div>
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(141,110,99,0.15);color:#8d6e63">Q</span>Rumi 3USD <span class="strat-vs">↔</span> PartyDEX ckUSDC</div>
             <div class="strat-chip"><span class="strat-letter" style="background:rgba(120,144,156,0.15);color:#78909c">R</span>Rumi 3USD <span class="strat-vs">↔</span> PartyDEX ckUSDT</div>
+            <div class="strat-chip"><span class="strat-letter" style="background:rgba(255,167,38,0.15);color:#ffa726">S</span>icUSD/BOB <span class="strat-vs">↔</span> BOB/ICP reference</div>
           </div>
         </div>
 
@@ -1166,6 +1184,7 @@
             <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="bal-icusd">--</span></div>
             <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="bal-icp">--</span></div>
             <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="bal-ckusdt">--</span></div>
+            <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="bal-bob">--</span></div>
             <div class="divider"></div>
             <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="bal-total">--</span></div>
           </div>
@@ -1339,6 +1358,10 @@
             <div class="deck-stat-label">Slippage Tolerance</div>
             <div class="deck-stat-value" id="deck-slip">—</div>
           </div>
+          <div class="deck-stat">
+            <div class="deck-stat-label">BOB Balance</div>
+            <div class="deck-stat-value" id="deck-bob">—</div>
+          </div>
         </div>
       </div>
 
@@ -1355,6 +1378,21 @@
             <div><span class="pending-label">Intended Exit</span><span class="pending-val" id="pending-exit">—</span></div>
             <div><span class="pending-label">Stranded</span><span class="pending-val" id="pending-icp">—</span></div>
             <div><span class="pending-label">Age</span><span class="pending-val" id="pending-age">—</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pending BOB exit warning (Strategy S, only when present) -->
+      <div class="card warning-card" id="pending-bob-exit-card" style="display:none">
+        <div class="warning-rail"></div>
+        <div class="warning-body">
+          <div class="warning-header">
+            <span class="warning-icon">!</span>
+            <span>PENDING BOB EXIT — Strategy S leg 2 held open</span>
+          </div>
+          <div class="pending-grid">
+            <div><span class="pending-label">Entry Pool</span><span class="pending-val" id="pending-bob-entry">—</span></div>
+            <div><span class="pending-label">Stranded</span><span class="pending-val" id="pending-bob-amount">—</span></div>
           </div>
         </div>
       </div>
@@ -1415,6 +1453,16 @@
         </div>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Pauses only Strategies A/C/D/Q/R (the ones trading against the Rumi 3USD/ICP pool) — B/F/K/L/M/N/O/P keep running.</div>
       </div>
+      <div style="margin-top:var(--sp-3);border-top:1px solid var(--border);padding-top:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2);font-size:12px;color:var(--text-secondary)">
+          <span id="bob-exec-status-text">Strategy S: loading...</span>
+        </div>
+        <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap">
+          <button class="btn" onclick="doAction(this, async () => { const r = await authenticatedActor.set_bob_execution_enabled(true); if (r.Err) throw new Error(r.Err); }, 'Strategy S execution ENABLED')" style="background:#34d399;color:#0c0e14;border-color:#34d399;font-weight:600">Enable BOB Execution</button>
+          <button class="btn" onclick="doAction(this, async () => { const r = await authenticatedActor.set_bob_execution_enabled(false); if (r.Err) throw new Error(r.Err); }, 'Strategy S back to dry-run')" style="background:#e06b9f;color:#fff;border-color:#e06b9f">Dry-run Only</button>
+        </div>
+        <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Dry-run evaluation and dashboard surfacing always run once both BOB pools are configured; this flag only gates live execution (and the Force Exec S button bypasses it).</div>
+      </div>
     </div>
 
     <!-- Row 1, Col 2: Configuration -->
@@ -1454,6 +1502,24 @@
         <div>
           <label>PartyDEX ckUSDT Fee Tier (pips)</label>
           <input type="number" id="cfg-partydex-ckusdt-fee" placeholder="500" min="1" step="1">
+        </div>
+        <div>
+          <label>BOB Max Trade Size (USD)</label>
+          <input type="number" id="cfg-bob-max-trade" placeholder="50" min="0.000001" max="500" step="0.01">
+        </div>
+        <div>
+          <label>BOB Min Spread (bps)</label>
+          <input type="number" id="cfg-bob-min-spread" placeholder="150" min="100" max="10000" step="1">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Strategy S sizing and gating. Both must be set together (single set_bob_params call). Max trade ≤ $500; min spread 100–10000 bps (the 2–3 fee legs alone cost ~60–90 bps).</div>
+        </div>
+        <div>
+          <label>BOB/ICP Pool (principal)</label>
+          <input type="text" id="cfg-bob-icp-pool" placeholder="ybilh-nqaaa-aaaag-qkhzq-cai">
+        </div>
+        <div>
+          <label>icUSD/BOB Pool (principal)</label>
+          <input type="text" id="cfg-icusd-bob-pool" placeholder="pool principal (once created)">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Both must be set together (set_bob_pools re-probes token ordering on change). Run Setup Approvals afterwards.</div>
         </div>
         <button class="btn btn-primary btn-block" onclick="saveConfig(this)">Save Configuration</button>
       </div>
@@ -1497,6 +1563,7 @@
           <button class="btn btn-block" onclick="doForceArb(this, 'p')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">P</button>
           <button class="btn btn-block" onclick="doForceArb(this, 'q')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">Q</button>
           <button class="btn btn-block" onclick="doForceArb(this, 'r')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff">R</button>
+          <button class="btn btn-block" onclick="doForceArb(this, 's')" style="flex:1;background:#b45309;border-color:#b45309;color:#fff" title="Bypasses bob_execution_enabled">S</button>
         </div>
         <button class="btn btn-primary btn-block" onclick="doDryRun(this, 'both')">Run All</button>
         <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-1)">
@@ -1512,7 +1579,8 @@
           O = PartyDEX ckUSDT vs ICPSwap ckUSDT/ICP<br>
           P = PartyDEX ckUSDT vs ICPSwap icUSD/ICP<br>
           Q = Rumi 3USD/ICP vs PartyDEX ckUSDC<br>
-          R = Rumi 3USD/ICP vs PartyDEX ckUSDT
+          R = Rumi 3USD/ICP vs PartyDEX ckUSDT<br>
+          S = ICPSwap icUSD/BOB vs BOB/ICP×USD/ICP reference (no dry-run button — its dry-run runs every cycle; see the S spread card and activity log). Force Exec S bypasses bob_execution_enabled.
         </div>
       </div>
       <div id="dry-run-result" style="display:none;margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)"></div>
@@ -1577,6 +1645,7 @@
             <option value="3usd">3USD</option>
             <option value="ckusdt">ckUSDT</option>
             <option value="icusd">icUSD</option>
+            <option value="bob">BOB</option>
           </select>
         </div>
         <div style="margin-bottom:var(--sp-3)">
@@ -1859,10 +1928,10 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64 });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
-    const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
+    const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null, TopUp: IDL.Null });
     const TradeLeg = IDL.Record({ timestamp: IDL.Nat64, leg_type: LegType, dex: IDL.Text, sold_token: IDL.Text, sold_amount: IDL.Nat64, bought_token: IDL.Text, bought_amount: IDL.Nat64, sold_usd_value: IDL.Int64, bought_usd_value: IDL.Int64, fees_usd: IDL.Int64 });
     const ErrorRecord = IDL.Record({ timestamp: IDL.Nat64, message: IDL.Text });
     const ActivityRecord = IDL.Record({ timestamp: IDL.Nat64, category: IDL.Text, message: IDL.Text });
@@ -1883,6 +1952,8 @@
       spread_f_bps: IDL.Int32,
       spread_k_bps: IDL.Int32, spread_l_bps: IDL.Int32, spread_m_bps: IDL.Int32, spread_n_bps: IDL.Int32,
       spread_o_bps: IDL.Int32, spread_p_bps: IDL.Int32, spread_q_bps: IDL.Int32, spread_r_bps: IDL.Int32,
+      bob_pool_price_icusd_per_bob: IDL.Nat64, bob_ref_price_icusd_per_bob: IDL.Nat64,
+      spread_s_bps: IDL.Int64, balance_bob: IDL.Nat64,
       traded: IDL.Bool, strategy_used: IDL.Text,
     });
 
@@ -1905,6 +1976,11 @@
         timestamp: I.Nat64,
         icp_amount: I.Nat64,
       });
+      const BobPool = I.Variant({ IcusdBob: I.Null, BobIcp: I.Null });
+      const PendingBobExit = I.Record({
+        entry_pool: BobPool,
+        bob_amount: I.Nat64,
+      });
       const PoolHealth = I.Record({
         pool: VolumePool,
         enabled: I.Bool,
@@ -1925,6 +2001,8 @@
         arb_paused: I.Bool,
         volume_stranded_icp: I.Nat64,
         pending_exit: I.Opt(PendingExit),
+        pending_bob_exit: I.Opt(PendingBobExit),
+        balance_bob: I.Nat64,
         slippage_bps: I.Nat64,
         pools: I.Vec(PoolHealth),
       });
@@ -2000,6 +2078,7 @@
         execute_strategy_p: I.Func([], [], []),
         execute_strategy_q: I.Func([], [], []),
         execute_strategy_r: I.Func([], [], []),
+        execute_strategy_s: I.Func([], [], []),
         dry_run_arb_cycle: I.Func([], [DryRunResult], []),
         dry_run_strategy_b: I.Func([], [DryRunResult], []),
         dry_run_strategy_c: I.Func([], [DryRunResult], []),
@@ -2036,6 +2115,9 @@
         set_slippage_bps: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_arb_interval_secs: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_icp_inventory_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_pools: I.Func([I.Principal, I.Principal], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_params: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
       });
@@ -2063,6 +2145,7 @@
       '3usd': { decimals: 8, label: '3USD',   getLedger: () => currentConfig?.three_usd_ledger.toText() },
       ckusdt: { decimals: 6, label: 'ckUSDT', getLedger: () => 'cngnf-vqaaa-aaaar-qag4q-cai' },
       icusd:  { decimals: 8, label: 'icUSD',  getLedger: () => 't6bor-paaaa-aaaap-qrd5q-cai' },
+      bob:    { decimals: 8, label: 'BOB',    getLedger: () => currentConfig?.bob_ledger.toText() },
     };
 
     // 3pool: 0=icUSD, 1=ckUSDT, 2=ckUSDC
@@ -2286,7 +2369,7 @@
     // ═══════ Data Loading ═══════
 
     function fmtTokAmt(amount, token) {
-      const dec = (token === 'ICP' || token === '3USD' || token === 'icUSD') ? 8 : 6;
+      const dec = (token === 'ICP' || token === '3USD' || token === 'icUSD' || token === 'BOB') ? 8 : 6;
       return `${fmtTok(amount, dec)} ${token}`;
     }
 
@@ -2334,7 +2417,9 @@
       if (!bals) return;
       const vp = prices?.vp || 1.0;
       const icpPrice = prices?.icpswap || 0;
-      const total = (bi(bals.b3usd) / 1e8 * vp) + (bi(bals.bCkusdc) / 1e6) + (bi(bals.bCkusdt) / 1e6) + (bi(bals.bIcusd) / 1e8) + (bi(bals.bIcp) / 1e8 * icpPrice);
+      // BOB priced at the latest snapshot's reference (0 until Strategy S is live)
+      const bobUsd = window._latestBobUsd || 0;
+      const total = (bi(bals.b3usd) / 1e8 * vp) + (bi(bals.bCkusdc) / 1e6) + (bi(bals.bCkusdt) / 1e6) + (bi(bals.bIcusd) / 1e8) + (bi(bals.bIcp) / 1e8 * icpPrice) + (bi(bals.bBob || 0) / 1e8 * bobUsd);
       document.getElementById('bal-total').textContent = '$' + total.toFixed(2);
     }
 
@@ -2376,12 +2461,13 @@
         const botPrincipal = Principal.fromText(canisterId);
         const account = { owner: botPrincipal, subaccount: [] };
 
-        const [b1, b2, b3, b4, b5] = await Promise.all([
+        const [b1, b2, b3, b4, b5, b6] = await Promise.all([
           createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.ckusdc_ledger.toText()).then(a => a.icrc1_balance_of(account)),
           createBalanceActor('cngnf-vqaaa-aaaar-qag4q-cai').then(a => a.icrc1_balance_of(account)),
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(account)),
+          createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(account)).catch(() => 0n),
         ]);
 
         document.getElementById('bal-3usd').textContent = fmtTok(b1, 8);
@@ -2389,8 +2475,9 @@
         document.getElementById('bal-ckusdt').textContent = fmtTok(b3, 6);
         document.getElementById('bal-icusd').textContent = fmtTok(b4, 8);
         document.getElementById('bal-icp').textContent = fmtTok(b5, 8);
+        document.getElementById('bal-bob').textContent = fmtTok(b6, 8);
 
-        window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5 };
+        window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5, bBob: b6 };
         updateBalanceTotal();
       } catch (e) { console.error('loadBalances:', e); }
     }
@@ -2468,8 +2555,8 @@
             profitHtml = `<span class="${cls}">${fmt$(profit)}</span>`;
             if ('Leg2' in t.leg_type) { lastLeg1Cost = 0; lastLeg1Fees = 0; }
           }
-          const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'var(--warning)';
-          const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'Drain';
+          const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'TopUp' in t.leg_type ? 'var(--success, #34d399)' : 'var(--warning)';
+          const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'TopUp' in t.leg_type ? 'Top-up' : 'Drain';
           return `<tr>
             <td>${fmtTime(t.timestamp)}</td>
             <td style="color:${typeColor}">${typeStr}</td>
@@ -2788,6 +2875,42 @@
         } else {
           document.getElementById('spread-r-value').textContent = 'N/A';
         }
+        // Strategy S: ICPSwap icUSD/BOB pool vs (BOB/ICP × USD/ICP) reference.
+        // Gated on BOTH BOB pools being configured (has_bob in arb.rs); uses
+        // its own bob_min_spread_bps threshold, not the global min_spread_bps.
+        // No action label — the gauge sides are pool-vs-reference, not two
+        // execution venues, so "sell ICP →" would mislead.
+        const hasBob = currentConfig
+          && currentConfig.icpswap_icusd_bob_pool.toText() !== '2vxsx-fae'
+          && currentConfig.icpswap_bob_icp_pool.toText() !== '2vxsx-fae';
+        const bobDryRunBadge = document.getElementById('spread-s-dryrun');
+        if (bobDryRunBadge) {
+          bobDryRunBadge.style.display = (hasBob && !currentConfig.bob_execution_enabled) ? 'inline-block' : 'none';
+        }
+        if (hasBob) {
+          const bobMinSpread = bi(currentConfig.bob_min_spread_bps) || 150;
+          updateSpreadGauge(
+            document.getElementById('spread-s-fill'),
+            document.getElementById('spread-s-value'),
+            document.getElementById('spread-s-thresh-l'),
+            document.getElementById('spread-s-thresh-r'),
+            bi(s.spread_s_bps !== undefined ? s.spread_s_bps : 0), bobMinSpread,
+            null
+          );
+          const bobPoolP = bi(s.bob_pool_price_icusd_per_bob !== undefined ? s.bob_pool_price_icusd_per_bob : 0);
+          const bobRefP = bi(s.bob_ref_price_icusd_per_bob !== undefined ? s.bob_ref_price_icusd_per_bob : 0);
+          const bobPricesEl = document.getElementById('spread-s-prices');
+          if (bobPricesEl) {
+            bobPricesEl.textContent = (bobPoolP > 0 && bobRefP > 0)
+              ? `pool ${(bobPoolP / 1e8).toFixed(4)} vs ref ${(bobRefP / 1e8).toFixed(4)} icUSD/BOB`
+              : '';
+          }
+          // icUSD ≈ $1, so the 8-dec reference price doubles as USD/BOB for
+          // the balance total.
+          window._latestBobUsd = bobRefP > 0 ? bobRefP / 1e8 : 0;
+        } else {
+          document.getElementById('spread-s-value').textContent = 'N/A';
+        }
 
         const hint = document.getElementById('prices-login-hint');
         if (hint) hint.style.display = 'none';
@@ -2806,7 +2929,7 @@
         } else {
           let lastLeg1Cost = 0, lastLeg1Fees = 0;
           const rows = legs.map(t => {
-            const legKey = 'Leg1' in t.leg_type ? 'Leg1' : 'Leg2' in t.leg_type ? 'Leg2' : 'Drain';
+            const legKey = 'Leg1' in t.leg_type ? 'Leg1' : 'Leg2' in t.leg_type ? 'Leg2' : 'TopUp' in t.leg_type ? 'TopUp' : 'Drain';
             const hidden = currentLegFilter !== 'all' && legKey !== currentLegFilter;
 
             let profitHtml = '--';
@@ -2822,8 +2945,8 @@
               if ('Leg2' in t.leg_type) { lastLeg1Cost = 0; lastLeg1Fees = 0; }
             }
 
-            const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'var(--warning)';
-            const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'Drain';
+            const typeColor = 'Leg1' in t.leg_type ? 'var(--info)' : 'Leg2' in t.leg_type ? 'var(--accent)' : 'TopUp' in t.leg_type ? 'var(--success, #34d399)' : 'var(--warning)';
+            const typeStr = 'Leg1' in t.leg_type ? 'Leg 1' : 'Leg2' in t.leg_type ? 'Leg 2' : 'TopUp' in t.leg_type ? 'Top-up' : 'Drain';
 
             return `<tr style="${hidden ? 'display:none' : ''}">
               <td>${fmtTime(t.timestamp)}</td>
@@ -3301,6 +3424,7 @@
         p: () => authenticatedActor.execute_strategy_p(),
         q: () => authenticatedActor.execute_strategy_q(),
         r: () => authenticatedActor.execute_strategy_r(),
+        s: () => authenticatedActor.execute_strategy_s(),
       };
       const fn_ = fnMap[strategy];
       if (!fn_) return;
@@ -3410,14 +3534,27 @@
       const partydexCkusdtFee = parseInt(document.getElementById('cfg-partydex-ckusdt-fee').value);
       const icpFloorRaw = parseFloat(document.getElementById('cfg-icp-floor').value);
       const icpCeilingRaw = parseFloat(document.getElementById('cfg-icp-ceiling').value);
+      const bobMaxTradeRaw = parseFloat(document.getElementById('cfg-bob-max-trade').value);
+      const bobMinSpreadRaw = parseInt(document.getElementById('cfg-bob-min-spread').value);
+      const bobIcpPoolRaw = document.getElementById('cfg-bob-icp-pool').value.trim();
+      const icusdBobPoolRaw = document.getElementById('cfg-icusd-bob-pool').value.trim();
 
       if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)
-          && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee) && isNaN(icpFloorRaw) && isNaN(icpCeilingRaw)) {
+          && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee) && isNaN(icpFloorRaw) && isNaN(icpCeilingRaw)
+          && isNaN(bobMaxTradeRaw) && isNaN(bobMinSpreadRaw) && !bobIcpPoolRaw && !icusdBobPoolRaw) {
         showToast('Enter at least one value to update', 'error');
         return;
       }
       if (isNaN(icpFloorRaw) !== isNaN(icpCeilingRaw)) {
         showToast('ICP inventory floor and ceiling must be set together', 'error');
+        return;
+      }
+      if (isNaN(bobMaxTradeRaw) !== isNaN(bobMinSpreadRaw)) {
+        showToast('BOB max trade size and min spread must be set together', 'error');
+        return;
+      }
+      if (!!bobIcpPoolRaw !== !!icusdBobPoolRaw) {
+        showToast('Both BOB pool principals must be set together', 'error');
         return;
       }
 
@@ -3447,6 +3584,22 @@
           );
           if (res.Err) throw new Error(res.Err);
         }
+        // BOB params + pools use their dedicated setters (validated pairs;
+        // set_bob_pools also resets ordering-resolved flags on change).
+        if (!isNaN(bobMaxTradeRaw) && !isNaN(bobMinSpreadRaw)) {
+          const res = await authenticatedActor.set_bob_params(
+            BigInt(Math.round(bobMaxTradeRaw * 1e6)),
+            BigInt(bobMinSpreadRaw)
+          );
+          if (res.Err) throw new Error(res.Err);
+        }
+        if (bobIcpPoolRaw && icusdBobPoolRaw) {
+          const res = await authenticatedActor.set_bob_pools(
+            Principal.fromText(bobIcpPoolRaw),
+            Principal.fromText(icusdBobPoolRaw)
+          );
+          if (res.Err) throw new Error(res.Err);
+        }
         showToast('Config updated', 'success');
         await loadConfig();
         displayConfig();
@@ -3458,6 +3611,10 @@
         document.getElementById('cfg-partydex-ckusdt-fee').value = '';
         document.getElementById('cfg-icp-floor').value = '';
         document.getElementById('cfg-icp-ceiling').value = '';
+        document.getElementById('cfg-bob-max-trade').value = '';
+        document.getElementById('cfg-bob-min-spread').value = '';
+        document.getElementById('cfg-bob-icp-pool').value = '';
+        document.getElementById('cfg-icusd-bob-pool').value = '';
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
@@ -3551,6 +3708,11 @@
         <div class="stat-row"><span class="stat-label">icUSD Pool</span><span class="stat-value">${c.icpswap_icusd_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_pool)}</span></div>
         <div class="stat-row"><span class="stat-label">PartyDEX ckUSDC Pool</span><span class="stat-value">${c.partydex_ckusdc_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdc_pool)} (${bi(c.partydex_ckusdc_fee_pips)} pips)</span></div>
         <div class="stat-row"><span class="stat-label">PartyDEX ckUSDT Pool</span><span class="stat-value">${c.partydex_ckusdt_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.partydex_ckusdt_pool)} (${bi(c.partydex_ckusdt_fee_pips)} pips)</span></div>
+        <div class="stat-row"><span class="stat-label">BOB/ICP Pool</span><span class="stat-value">${short(c.icpswap_bob_icp_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Pool</span><span class="stat-value">${c.icpswap_icusd_bob_pool.toText() === '2vxsx-fae' ? 'Not configured' : short(c.icpswap_icusd_bob_pool)}</span></div>
+        <div class="stat-row"><span class="stat-label">BOB Max Trade Size</span><span class="stat-value">${fmt$(c.bob_max_trade_size_usd)}</span></div>
+        <div class="stat-row"><span class="stat-label">BOB Min Spread</span><span class="stat-value">${bi(c.bob_min_spread_bps)} bps</span></div>
+        <div class="stat-row"><span class="stat-label">Strategy S Execution</span><span class="stat-value">${c.bob_execution_enabled ? '<span style="color:#34d399;font-weight:600">Enabled</span>' : '<span style="color:var(--warning);font-weight:600">Dry-run only</span>'}</span></div>
         <div class="stat-row"><span class="stat-label">Admins</span><span class="stat-value">${c.admins.length}</span></div>
       `;
       // Update admin status indicator
@@ -3567,6 +3729,16 @@
         rumiAmmText.innerHTML = c.rumi_amm_paused
           ? 'Rumi AMM: <span style="color:var(--warning);font-weight:600">PAUSED</span> (Strategies A/C/D/Q/R skipped)'
           : 'Rumi AMM: <span style="color:#34d399;font-weight:600">ACTIVE</span>';
+      }
+      const bobExecText = document.getElementById('bob-exec-status-text');
+      if (bobExecText) {
+        const bobConfigured = c.icpswap_icusd_bob_pool.toText() !== '2vxsx-fae'
+          && c.icpswap_bob_icp_pool.toText() !== '2vxsx-fae';
+        bobExecText.innerHTML = !bobConfigured
+          ? 'Strategy S (icUSD/BOB): <span style="color:var(--text-tertiary);font-weight:600">INERT</span> (pools not configured)'
+          : c.bob_execution_enabled
+            ? 'Strategy S (icUSD/BOB): <span style="color:#34d399;font-weight:600">LIVE</span>'
+            : 'Strategy S (icUSD/BOB): <span style="color:var(--warning);font-weight:600">DRY-RUN</span>';
       }
     }
 
@@ -3898,6 +4070,9 @@
       return Object.keys(v)[0] || '—';
     }
     function poolLabel(v) { return POOL_LABELS[variantKey(v)] || variantKey(v); }
+
+    const BOB_POOL_LABELS = { IcusdBob: 'ICPSwap icUSD/BOB', BobIcp: 'ICPSwap BOB/ICP' };
+    function bobPoolLabel(v) { return BOB_POOL_LABELS[variantKey(v)] || variantKey(v); }
     function directionLabel(v) { return DIRECTION_LABELS[variantKey(v)] || variantKey(v); }
 
     function optVal(o) {
@@ -3971,6 +4146,10 @@
           ? (Number(report.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP'
           : '0.0000 ICP';
 
+      // BOB balance (Strategy S)
+      document.getElementById('deck-bob').textContent =
+        (Number(report.balance_bob) / 1e8).toFixed(4) + ' BOB';
+
       // Slippage
       document.getElementById('deck-slip').textContent = report.slippage_bps + ' bps';
       const slipInput = document.getElementById('slip-input');
@@ -3992,6 +4171,19 @@
         document.getElementById('pending-age').textContent = fmtElapsed(nowNs, pending.timestamp);
       } else {
         card.style.display = 'none';
+      }
+
+      // Pending BOB exit (Strategy S) — mirrors the ICP pending-exit card.
+      // PendingBobExit carries no timestamp, so there is no Age fact.
+      const pendingBob = optVal(report.pending_bob_exit);
+      const bobCard = document.getElementById('pending-bob-exit-card');
+      if (pendingBob) {
+        bobCard.style.display = '';
+        document.getElementById('pending-bob-entry').textContent = bobPoolLabel(pendingBob.entry_pool);
+        document.getElementById('pending-bob-amount').textContent =
+          (Number(pendingBob.bob_amount) / 1e8).toFixed(4) + ' BOB';
+      } else {
+        bobCard.style.display = 'none';
       }
 
       // Gate cards

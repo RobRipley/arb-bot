@@ -195,6 +195,11 @@ fn get_summary() -> TradeSummary {
                     summary.unpaired_drain_sold_usd += leg.sold_usd_value;
                 }
             }
+            state::LegType::TopUp => {
+                // Strategy S ICP inventory top-up ahead of a reverse trade.
+                // Flows into the shared usd_in/usd_out/fees sums above; no
+                // dedicated counter (TradeSummary is candid-frozen).
+            }
         }
         if leg.dex == "Rumi" { summary.rumi_count += 1; }
         else { summary.icpswap_count += 1; }
@@ -395,6 +400,16 @@ async fn setup_approvals() -> String {
     if config.partydex_ckusdt_pool != Principal::anonymous() {
         approvals.push(("ICP→PartyDEX-ckUSDT", config.icp_ledger, config.partydex_ckusdt_pool));
         approvals.push(("ckUSDT→PartyDEX-ckUSDT", config.ckusdt_ledger, config.partydex_ckusdt_pool));
+    }
+
+    // Strategy S approvals (if BOB pools are configured)
+    if config.icpswap_bob_icp_pool != Principal::anonymous() {
+        approvals.push(("BOB→ICPSwap-BOB-ICP", config.bob_ledger, config.icpswap_bob_icp_pool));
+        approvals.push(("ICP→ICPSwap-BOB-ICP", config.icp_ledger, config.icpswap_bob_icp_pool));
+    }
+    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
+        approvals.push(("icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
+        approvals.push(("BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
     }
 
     for (label, ledger, spender) in approvals {
@@ -872,6 +887,15 @@ async fn execute_strategy_r() {
     require_admin();
     state::log_activity("admin", &format!("Force-execute strategy R by {}", ic_cdk::api::caller()));
     arb::run_specific_strategy("R").await;
+}
+
+/// Admin override for Strategy S — executes regardless of
+/// bob_execution_enabled, matching A–R force-execute semantics.
+#[update]
+async fn execute_strategy_s() {
+    require_admin();
+    state::log_activity("admin", &format!("Force-execute strategy S by {}", ic_cdk::api::caller()));
+    arb::run_specific_strategy("S").await;
 }
 
 #[update]
@@ -1831,6 +1855,68 @@ fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
     Ok(())
 }
 
+/// Sets both Strategy S pool principals in one call. Resets the resolved-
+/// ordering flag for any pool whose principal actually changes, so a
+/// re-pointed pool gets its token ordering re-probed on the next cycle
+/// instead of running with stale `icp_is_token0`/`icusd_is_token0` bits.
+#[update]
+fn set_bob_pools(bob_icp_pool: Principal, icusd_bob_pool: Principal) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| {
+        if s.config.icpswap_bob_icp_pool != bob_icp_pool {
+            s.config.icpswap_bob_icp_pool = bob_icp_pool;
+            s.bob_icp_ordering_resolved = false;
+        }
+        if s.config.icpswap_icusd_bob_pool != icusd_bob_pool {
+            s.config.icpswap_icusd_bob_pool = icusd_bob_pool;
+            s.icusd_bob_ordering_resolved = false;
+        }
+    });
+    state::log_activity("admin", &format!(
+        "bob pools set: bob/icp={}, icusd/bob={}", bob_icp_pool, icusd_bob_pool
+    ));
+    Ok(())
+}
+
+/// Sets Strategy S's sizing/gating knobs. Single method so the pair can't
+/// pass through an invalid intermediate state.
+#[update]
+fn set_bob_params(max_trade_size_usd: u64, min_spread_bps: u64) -> Result<(), String> {
+    require_admin();
+    // $500 cap: BOB/ICP (~$53K depth) moves ~1% per ~$265 of volume — larger
+    // clips would eat their own edge and lean on a thin reference.
+    if max_trade_size_usd == 0 || max_trade_size_usd > 500_000_000 {
+        return Err("max_trade_size_usd must be 1..=500000000 ($500 cap, 6-dec USD)".to_string());
+    }
+    // 100 bps floor: the 2-3 leg 0.3%-fee route costs ~60-90 bps before
+    // slippage, so any spread gate below 100 bps trades at a loss to fees
+    // (fat-finger guard).
+    if min_spread_bps < 100 || min_spread_bps > 10_000 {
+        return Err("min_spread_bps must be 100..=10000".to_string());
+    }
+    state::mutate_state(|s| {
+        s.config.bob_max_trade_size_usd = max_trade_size_usd;
+        s.config.bob_min_spread_bps = min_spread_bps;
+    });
+    state::log_activity("admin", &format!(
+        "bob params set: max_trade_size_usd={}, min_spread_bps={}", max_trade_size_usd, min_spread_bps
+    ));
+    Ok(())
+}
+
+/// Execution kill switch for Strategy S. Dry-run evaluation + dashboard
+/// surfacing run regardless of this flag once both BOB pools are configured;
+/// this only gates whether Strategy S can actually execute trades.
+#[update]
+fn set_bob_execution_enabled(enabled: bool) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| { s.config.bob_execution_enabled = enabled; });
+    state::log_activity("admin", &format!(
+        "bob_execution_enabled set to {} by {}", enabled, ic_cdk::api::caller()
+    ));
+    Ok(())
+}
+
 #[update]
 fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
     require_admin();
@@ -1846,16 +1932,21 @@ fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
 async fn get_bot_health() -> state::BotHealthReport {
     require_admin();
 
-    let (bot_config, volume_config, pending_exit, arb_paused, stranded) = state::read_state(|s| (
+    let (bot_config, volume_config, pending_exit, pending_bob_exit, arb_paused, stranded) = state::read_state(|s| (
         s.config.clone(),
         s.volume.clone(),
         s.pending_exit.clone(),
+        s.pending_bob_exit.clone(),
         s.config.paused,
         s.volume_stranded_icp,
     ));
 
     let arb_in_progress = arb::is_cycle_in_progress();
     let volume_in_progress = volume::is_volume_cycle_in_progress();
+
+    // Strategy S visibility: BOB balance (0 if the query fails — health must
+    // never trap on a flaky ledger).
+    let balance_bob = arb::fetch_balance(bot_config.bob_ledger).await.unwrap_or(0);
 
     let pools_to_check = [
         state::VolumePool::IcusdIcp,
@@ -1948,6 +2039,8 @@ async fn get_bot_health() -> state::BotHealthReport {
         arb_paused,
         volume_stranded_icp: stranded,
         pending_exit,
+        pending_bob_exit,
+        balance_bob,
         slippage_bps: bot_config.slippage_bps,
         pools: pool_reports,
     }

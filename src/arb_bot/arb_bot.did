@@ -29,6 +29,15 @@ type BotConfig = record {
   partydex_ckusdt_fee_pips: nat32;
   icp_inventory_floor_e8s: nat64;
   icp_inventory_ceiling_e8s: nat64;
+  bob_ledger: principal;
+  bob_ledger_fee: nat64;
+  icpswap_bob_icp_pool: principal;
+  icpswap_icusd_bob_pool: principal;
+  icpswap_bob_icp_icp_is_token0: bool;
+  icpswap_icusd_bob_icusd_is_token0: bool;
+  bob_max_trade_size_usd: nat64;
+  bob_min_spread_bps: nat64;
+  bob_execution_enabled: bool;
 };
 
 type Pool = variant {
@@ -46,6 +55,16 @@ type PendingExit = record {
   intended_exit_pool: Pool;
   timestamp: nat64;
   icp_amount: nat64;
+};
+
+type BobPool = variant {
+  IcusdBob;
+  BobIcp;
+};
+
+type PendingBobExit = record {
+  entry_pool: BobPool;
+  bob_amount: nat64;
 };
 
 type PoolHealth = record {
@@ -69,6 +88,8 @@ type BotHealthReport = record {
   arb_paused: bool;
   volume_stranded_icp: nat64;
   pending_exit: opt PendingExit;
+  pending_bob_exit: opt PendingBobExit;
+  balance_bob: nat64;
   slippage_bps: nat64;
   pools: vec PoolHealth;
 };
@@ -116,6 +137,7 @@ type LegType = variant {
   Leg1;
   Leg2;
   Drain;
+  TopUp;
 };
 
 type TradeLeg = record {
@@ -159,6 +181,10 @@ type CycleSnapshot = record {
   spread_r_bps: int32;
   partydex_icp_price_ckusdc: nat64;
   partydex_icp_price_ckusdt: nat64;
+  bob_pool_price_icusd_per_bob: nat64;
+  bob_ref_price_icusd_per_bob: nat64;
+  spread_s_bps: int64;
+  balance_bob: nat64;
   traded: bool;
   strategy_used: text;
 };
@@ -322,6 +348,7 @@ service : (InitArgs) -> {
   execute_strategy_p: () -> ();
   execute_strategy_q: () -> ();
   execute_strategy_r: () -> ();
+  execute_strategy_s: () -> ();
   dry_run_arb_cycle: () -> (DryRunResult);
   dry_run_strategy_b: () -> (DryRunResult);
   dry_run_strategy_c: () -> (DryRunResult);
@@ -361,6 +388,9 @@ service : (InitArgs) -> {
   set_slippage_bps: (nat64) -> (variant { Ok; Err: text });
   set_arb_interval_secs: (nat64) -> (variant { Ok; Err: text });
   set_icp_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
+  set_bob_pools: (principal, principal) -> (variant { Ok; Err: text });
+  set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
+  set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
   get_bot_health: () -> (BotHealthReport);
   trigger_volume_rebalance: () -> ();
   volume_swap: (bool, nat64, nat64) -> ();
