@@ -1192,6 +1192,7 @@
             <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vol-bal-icp">--</span></div>
             <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vol-bal-icusd">--</span></div>
             <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vol-bal-3usd">--</span></div>
+            <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="vol-bal-bob">--</span></div>
             <div class="divider"></div>
             <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="vol-bal-total">--</span></div>
           </div>
@@ -1669,6 +1670,7 @@
           <div class="stat-row"><span class="stat-label">ckUSDT</span><span class="stat-value" id="my-bal-ckusdt">--</span></div>
           <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="my-bal-icusd">--</span></div>
           <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="my-bal-icp">--</span></div>
+          <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="my-bal-bob">--</span></div>
         </div>
         <div style="display:flex;flex-direction:column;gap:var(--sp-2);margin-top:var(--sp-3)">
           <button class="btn btn-sm btn-block" onclick="doDeposit('3usd')">Deposit 3USD</button>
@@ -1676,6 +1678,7 @@
           <button class="btn btn-sm btn-block" onclick="doDeposit('ckusdt')">Deposit ckUSDT</button>
           <button class="btn btn-sm btn-block" onclick="doDeposit('icusd')">Deposit icUSD</button>
           <button class="btn btn-sm btn-block" onclick="doDeposit('icp')">Deposit ICP</button>
+          <button class="btn btn-sm btn-block" onclick="doDeposit('bob')">Deposit BOB</button>
         </div>
       </div>
     </div>
@@ -1712,6 +1715,7 @@
         <div class="stat-row"><span class="stat-label">ICP</span><span class="stat-value" id="vp-bal-icp">--</span></div>
         <div class="stat-row"><span class="stat-label">icUSD</span><span class="stat-value" id="vp-bal-icusd">--</span></div>
         <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vp-bal-3usd">--</span></div>
+        <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="vp-bal-bob">--</span></div>
         <div class="stat-row" style="border-top:1px solid var(--border);padding-top:var(--sp-2);margin-top:var(--sp-1)"><span class="stat-label" style="font-weight:600">Total (USD)</span><span class="stat-value" style="font-weight:600;color:var(--accent)" id="vp-bal-total">--</span></div>
       </div>
     </div>
@@ -1886,6 +1890,9 @@
       <p style="font-size:12px;color:var(--text-secondary);margin:0 0 var(--sp-3) 0">Send ICP directly here. Bypasses the arb bot drain.</p>
       <code style="display:block;font-size:12px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;word-break:break-all;cursor:pointer;transition:border-color 0.15s" onclick="copyToClipboard(this.textContent, 'Address copied')" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" title="Click to copy">f85851515f54f6d313b0df2e678c27096a363dac76652f3a112011cc3ce02c01</code>
       <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-2)">ICP Account Identifier — click to copy</div>
+      <p style="font-size:12px;color:var(--text-secondary);margin:var(--sp-3) 0 var(--sp-2) 0">Send BOB (or any other ICRC-1 token) directly here — this is the volume subaccount's ICRC-1 textual address.</p>
+      <code style="display:block;font-size:12px;background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius);padding:10px 12px;word-break:break-all;cursor:pointer;transition:border-color 0.15s" onclick="copyToClipboard(this.textContent, 'Address copied')" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'" title="Click to copy">ucjxv-nqaaa-aaaaj-qrsaq-cai-la2bzay.1</code>
+      <div style="font-size:11px;color:var(--text-tertiary);margin-top:var(--sp-2)">ICRC-1 Account (volume subaccount) — click to copy</div>
     </div>
 
     <!-- Fund / Withdraw -->
@@ -1898,6 +1905,7 @@
             <option value="icp">ICP</option>
             <option value="icusd">icUSD</option>
             <option value="3usd">3USD</option>
+            <option value="bob">BOB</option>
           </select>
         </div>
         <div>
@@ -2624,30 +2632,34 @@
 
         // 3USD ledger ignores subaccounts — query default account instead (shared with arb bot)
         const botAccount = { owner: botPrincipal, subaccount: [] };
-        const [bIcp, bIcusd, b3usd] = await Promise.all([
+        const [bIcp, bIcusd, b3usd, bBob] = await Promise.all([
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(volAccount)),
           createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(botAccount)),
+          createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
         ]);
 
-        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = fmtTok(b3usd, 8) + '*';
+        const fIcp = fmtTok(bIcp, 8), fIcusd = fmtTok(bIcusd, 8), f3usd = fmtTok(b3usd, 8) + '*', fBob = fmtTok(bBob, 8);
         document.getElementById('vol-bal-icp').textContent = fIcp;
         document.getElementById('vol-bal-icusd').textContent = fIcusd;
         document.getElementById('vol-bal-3usd').textContent = f3usd;
+        document.getElementById('vol-bal-bob').textContent = fBob;
 
         // Estimate total in USD using latest prices
         const prices = window._latestPrices || {};
         const icpUsd = prices.icpswap || 0;
+        const bobUsd = window._latestBobUsd || 0;
         const icpVal = (bi(bIcp) / 1e8) * icpUsd;
         const icusdVal = bi(bIcusd) / 1e8;
         const threeusdVal = bi(b3usd) / 1e8;
-        const total = icpVal + icusdVal + threeusdVal;
+        const bobVal = (bi(bBob) / 1e8) * bobUsd;
+        const total = icpVal + icusdVal + threeusdVal + bobVal;
         const fTotal = total > 0 ? '$' + total.toFixed(2) : '--';
         document.getElementById('vol-bal-total').textContent = fTotal;
 
         // Also populate volume page balances card
         const vp = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        vp('vp-bal-icp', fIcp); vp('vp-bal-icusd', fIcusd); vp('vp-bal-3usd', f3usd); vp('vp-bal-total', fTotal);
+        vp('vp-bal-icp', fIcp); vp('vp-bal-icusd', fIcusd); vp('vp-bal-3usd', f3usd); vp('vp-bal-bob', fBob); vp('vp-bal-total', fTotal);
       } catch (e) { console.error('loadVolumeBalances:', e); }
     }
 
@@ -3709,19 +3721,21 @@
         if (!authClient || !(await authClient.isAuthenticated())) return;
         document.getElementById('deposit-section').style.display = 'block';
         const acct = { owner: authClient.getIdentity().getPrincipal(), subaccount: [] };
-        const [a1, a2, a3, a4, a5] = await Promise.all([
+        const [a1, a2, a3, a4, a5, a6] = await Promise.all([
           createBalanceActor(config.three_usd_ledger.toText()),
           createBalanceActor(config.ckusdc_ledger.toText()),
           createBalanceActor(TOKEN_INFO.ckusdt.getLedger()),
           createBalanceActor(TOKEN_INFO.icusd.getLedger()),
           createBalanceActor(config.icp_ledger.toText()),
+          createBalanceActor(config.bob_ledger.toText()),
         ]);
-        const [b1, b2, b3, b4, b5] = await Promise.all([a1, a2, a3, a4, a5].map(a => a.icrc1_balance_of(acct)));
+        const [b1, b2, b3, b4, b5, b6] = await Promise.all([a1, a2, a3, a4, a5, a6].map(a => a.icrc1_balance_of(acct)));
         document.getElementById('my-bal-3usd').textContent = fmtTok(b1, 8);
         document.getElementById('my-bal-ckusdc').textContent = fmtTok(b2, 6);
         document.getElementById('my-bal-ckusdt').textContent = fmtTok(b3, 6);
         document.getElementById('my-bal-icusd').textContent = fmtTok(b4, 8);
         document.getElementById('my-bal-icp').textContent = fmtTok(b5, 8);
+        document.getElementById('my-bal-bob').textContent = fmtTok(b6, 8);
       } catch (e) { console.error('loadMyBalances:', e); }
     }
 
@@ -3988,8 +4002,9 @@
       icp: () => currentConfig?.icp_ledger,
       icusd: () => Principal.fromText('t6bor-paaaa-aaaap-qrd5q-cai'),
       '3usd': () => currentConfig?.three_usd_ledger,
+      bob: () => currentConfig?.bob_ledger,
     };
-    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 8 };
+    const VOLUME_TOKEN_DECIMALS = { icp: 8, icusd: 8, '3usd': 8, bob: 8 };
 
     function volVariantKey(v) { return Object.keys(v)[0]; }
     function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
