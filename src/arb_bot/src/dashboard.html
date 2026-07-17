@@ -1439,6 +1439,15 @@
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">How often the arb cycle runs. Higher = fewer cycles burned, slower reaction. Min 30s, max 86400s (1 day).</div>
         </div>
         <div>
+          <label>ICP Inventory Floor (ICP)</label>
+          <input type="number" id="cfg-icp-floor" placeholder="2" min="1" step="0.01">
+        </div>
+        <div>
+          <label>ICP Inventory Ceiling (ICP)</label>
+          <input type="number" id="cfg-icp-ceiling" placeholder="20" step="0.01">
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Drain skims above ceiling in steady state; recovers down to floor during a pending-exit recovery. Both must be set together.</div>
+        </div>
+        <div>
           <label>PartyDEX ckUSDC Fee Tier (pips)</label>
           <input type="number" id="cfg-partydex-ckusdc-fee" placeholder="500" min="1" step="1">
         </div>
@@ -1850,7 +1859,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32 });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64 });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null });
@@ -2026,6 +2035,7 @@
         volume_swap: I.Func([I.Bool, I.Nat64, I.Nat64], [], []),
         set_slippage_bps: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_arb_interval_secs: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_icp_inventory_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
       });
@@ -3398,10 +3408,16 @@
       const arbIntervalRaw = parseInt(document.getElementById('cfg-arb-interval').value);
       const partydexCkusdcFee = parseInt(document.getElementById('cfg-partydex-ckusdc-fee').value);
       const partydexCkusdtFee = parseInt(document.getElementById('cfg-partydex-ckusdt-fee').value);
+      const icpFloorRaw = parseFloat(document.getElementById('cfg-icp-floor').value);
+      const icpCeilingRaw = parseFloat(document.getElementById('cfg-icp-ceiling').value);
 
       if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)
-          && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee)) {
+          && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee) && isNaN(icpFloorRaw) && isNaN(icpCeilingRaw)) {
         showToast('Enter at least one value to update', 'error');
+        return;
+      }
+      if (isNaN(icpFloorRaw) !== isNaN(icpCeilingRaw)) {
+        showToast('ICP inventory floor and ceiling must be set together', 'error');
         return;
       }
 
@@ -3422,6 +3438,15 @@
           const res = await authenticatedActor.set_arb_interval_secs(BigInt(arbIntervalRaw));
           if (res.Err) throw new Error(res.Err);
         }
+        // ICP inventory band uses a dedicated setter (single call, so the pair
+        // can't pass through an invalid intermediate state).
+        if (!isNaN(icpFloorRaw) && !isNaN(icpCeilingRaw)) {
+          const res = await authenticatedActor.set_icp_inventory_band(
+            BigInt(Math.round(icpFloorRaw * 1e8)),
+            BigInt(Math.round(icpCeilingRaw * 1e8))
+          );
+          if (res.Err) throw new Error(res.Err);
+        }
         showToast('Config updated', 'success');
         await loadConfig();
         displayConfig();
@@ -3431,6 +3456,8 @@
         document.getElementById('cfg-arb-interval').value = '';
         document.getElementById('cfg-partydex-ckusdc-fee').value = '';
         document.getElementById('cfg-partydex-ckusdt-fee').value = '';
+        document.getElementById('cfg-icp-floor').value = '';
+        document.getElementById('cfg-icp-ceiling').value = '';
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
@@ -3517,6 +3544,7 @@
         <div class="stat-row"><span class="stat-label">Max Trade Size</span><span class="stat-value">${fmt$(c.max_trade_size_usd)}</span></div>
         <div class="stat-row"><span class="stat-label">Min Profit</span><span class="stat-value">$${(bi(c.min_profit_usd) / 1e6).toFixed(2)} USD</span></div>
         <div class="stat-row"><span class="stat-label">Arb Cycle Interval</span><span class="stat-value">${bi(c.arb_interval_secs)} s</span></div>
+        <div class="stat-row"><span class="stat-label">ICP Inventory Band</span><span class="stat-value">${fmtTok(c.icp_inventory_floor_e8s, 8)} - ${fmtTok(c.icp_inventory_ceiling_e8s, 8)} ICP</span></div>
         <div class="stat-row"><span class="stat-label">Rumi AMM</span><span class="stat-value">${short(c.rumi_amm)}</span></div>
         <div class="stat-row"><span class="stat-label">Rumi AMM Paused</span><span class="stat-value">${c.rumi_amm_paused ? '<span style="color:var(--warning);font-weight:600">Yes (A/C/D/Q/R skipped)</span>' : 'No'}</span></div>
         <div class="stat-row"><span class="stat-label">ICPSwap Pool</span><span class="stat-value">${short(c.icpswap_pool)}</span></div>

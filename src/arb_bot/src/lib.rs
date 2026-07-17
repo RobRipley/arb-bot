@@ -3,7 +3,7 @@ use ic_cdk_macros::{init, post_upgrade, pre_upgrade, query, update};
 use ic_cdk_timers::TimerId;
 use std::cell::RefCell;
 
-mod state;
+pub mod state; // pub so integration tests can verify serde upgrade defaults
 mod prices;
 mod swaps;
 mod partydex;
@@ -284,6 +284,15 @@ async fn get_prices() -> PriceInfo {
 #[update]
 fn set_config(config: BotConfig) {
     require_admin();
+    // Reject a wholesale config write that would break the ICP inventory band
+    // invariant (floor >= 1 ICP, ceiling > floor) — the drain depends on it.
+    // A stale cached dashboard omitting the band fields decodes to the valid
+    // serde defaults, so this only trips on genuinely bad values.
+    if config.icp_inventory_floor_e8s < 100_000_000
+        || config.icp_inventory_ceiling_e8s <= config.icp_inventory_floor_e8s
+    {
+        ic_cdk::trap("set_config rejected: invalid ICP inventory band (need floor >= 1 ICP and ceiling > floor)");
+    }
     state::mutate_state(|s| {
         let original_owner = s.config.owner;
         s.config = config;
@@ -1798,6 +1807,27 @@ fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
     state::mutate_state(|s| { s.config.arb_interval_secs = interval_secs; });
     setup_timer();
     state::log_activity("admin", &format!("arb_interval_secs set to {}", interval_secs));
+    Ok(())
+}
+
+/// Sets the ICP inventory band (e8s) the drain uses in place of the old fixed
+/// `ICP_RESERVE`. Floor: minimum working balance always left behind. Ceiling:
+/// steady-state skim threshold. Single method so the pair can't pass through
+/// an invalid intermediate state (e.g. floor temporarily above ceiling).
+#[update]
+fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+    require_admin();
+    if floor_e8s < 100_000_000 {
+        return Err("floor must be >= 1 ICP".into());
+    }
+    if ceiling_e8s <= floor_e8s {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.icp_inventory_floor_e8s = floor_e8s;
+        s.config.icp_inventory_ceiling_e8s = ceiling_e8s;
+    });
+    state::log_activity("admin", &format!("icp inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
     Ok(())
 }
 

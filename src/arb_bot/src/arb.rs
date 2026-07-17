@@ -31,9 +31,6 @@ const NUM_CANDIDATES: u64 = 4;
 /// VP precision (1e18)
 const VP_PRECISION: u128 = 1_000_000_000_000_000_000;
 
-/// ICP reserve: keep at least 1 ICP in the bot for approval fees etc.
-const ICP_RESERVE: u64 = 100_000_000; // 1 ICP (8 decimals)
-
 // ─── Venue dispatch (PR2a) ───
 //
 // Thin per-venue dispatch. No target sets `venue: state::Venue::PartyDex` in
@@ -2424,12 +2421,29 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
 
     let icp_balance = fetch_balance(config.icp_ledger).await?;
 
-    // Keep ICP_RESERVE in the bot for approval fees etc.
+    // Steady state: only skim inventory above the band ceiling. During a
+    // pending_exit recovery (stranded leg-2 ICP), drain down to the floor —
+    // the leg1_cap below still limits the drain to what that trade put here.
     // Also exclude any ICP stranded by the volume bot — those belong to it.
+    let has_pending = state::read_state(|s| s.pending_exit.is_some());
+    let band_reserve = if has_pending {
+        config.icp_inventory_floor_e8s
+    } else {
+        config.icp_inventory_ceiling_e8s
+    };
     let volume_stranded = state::read_state(|s| s.volume_stranded_icp);
-    let reserved = ICP_RESERVE.saturating_add(volume_stranded);
+    let reserved = band_reserve.saturating_add(volume_stranded);
     let drainable = icp_balance.saturating_sub(reserved);
     if drainable <= ICP_FEE * 2 {
+        // Normally just "nothing to skim" — but with a pending_exit it means
+        // stranded leg-2 ICP can't be recovered (e.g. inventory floor set
+        // above the live balance). Surface that instead of stalling silently.
+        if has_pending {
+            state::log_activity("drain", &format!(
+                "pending_exit set but only {} ICP above reserve {} (balance {}); recovery deferred",
+                drainable, reserved, icp_balance
+            ));
+        }
         return Ok(());
     }
 
@@ -2598,12 +2612,14 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     let mut any_success = false;
     let mut remaining_amount = drain_amount;
     for (i, cand) in order.iter().enumerate() {
-        // Refresh balance if this is a retry after failure.
+        // Refresh balance if this is a retry after failure. Respect the full
+        // reserve (band + volume-stranded ICP) and never exceed the original
+        // leg1-capped drain amount.
         if i > 0 {
             let bal = fetch_balance(config.icp_ledger).await.unwrap_or(0);
-            let d = bal.saturating_sub(ICP_RESERVE);
+            let d = bal.saturating_sub(reserved);
             if d <= ICP_FEE * 2 { break; }
-            remaining_amount = d - ICP_FEE;
+            remaining_amount = (d - ICP_FEE).min(remaining_amount);
         }
         // Use 0 slippage on fallback attempts — we already failed once, just get out.
         let min_out = if i == 0 { cand.min_out } else { 0 };

@@ -37,6 +37,16 @@ fn default_partydex_fee_pips() -> u32 {
     500
 }
 
+/// ICP inventory band floor (e8s) — 2 ICP.
+fn default_icp_inventory_floor() -> u64 {
+    200_000_000
+}
+
+/// ICP inventory band ceiling (e8s) — 20 ICP.
+fn default_icp_inventory_ceiling() -> u64 {
+    2_000_000_000
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -111,6 +121,13 @@ pub struct BotConfig {
     /// Fee tier (pips) pool_swaps are pinned to on the PartyDEX ckUSDT pool. Default 500 (0.05%).
     #[serde(default = "default_partydex_fee_pips")]
     pub partydex_ckusdt_fee_pips: u32,
+    /// ICP inventory band (e8s). Floor: minimum working balance the drain
+    /// always leaves (fee buffer + strategy-S top-up trigger). Ceiling: the
+    /// drain skims any balance above this to the best stable pool.
+    #[serde(default = "default_icp_inventory_floor")]
+    pub icp_inventory_floor_e8s: u64,
+    #[serde(default = "default_icp_inventory_ceiling")]
+    pub icp_inventory_ceiling_e8s: u64,
 }
 
 /// Which DEX venue an arb leg trades against. Internal to arb targets — not
@@ -495,6 +512,8 @@ impl Default for BotState {
                 partydex_ckusdt_pool: default_partydex_ckusdt_pool(),
                 partydex_ckusdc_fee_pips: default_partydex_fee_pips(),
                 partydex_ckusdt_fee_pips: default_partydex_fee_pips(),
+                icp_inventory_floor_e8s: default_icp_inventory_floor(),
+                icp_inventory_ceiling_e8s: default_icp_inventory_ceiling(),
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
