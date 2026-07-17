@@ -130,3 +130,41 @@ fn old_snapshot_without_strategy_s_fields_decodes_with_defaults() {
     assert_eq!(decoded.timestamp, 1);
     assert_eq!(decoded.strategy_used, "A");
 }
+
+/// Same guard for the volume bot's icUSD/BOB fields: a blob persisted before
+/// the icUSD/BOB pool was added to `VolumeConfig` must still decode, with
+/// `icusd_bob` defaulting inert (`enabled: false`) and `icusd_bob_state`
+/// defaulting to `BuyBob` (not `VolumePoolState::default()`'s `BuyIcp` —
+/// this pool's ping-pong never touches `BuyIcp`/`SellIcp`).
+#[test]
+fn old_state_without_icusd_bob_volume_fields_decodes_with_defaults() {
+    use arb_bot::state::VolumeDirection;
+
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let volume = v
+        .get_mut("volume")
+        .and_then(|c| c.as_object_mut())
+        .expect("volume object");
+    assert!(volume.remove("icusd_bob").is_some());
+    assert!(volume.remove("icusd_bob_state").is_some());
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode pre-icUSD/BOB volume state");
+    assert!(!decoded.volume.icusd_bob.enabled, "icusd_bob ships inert");
+    assert_eq!(decoded.volume.icusd_bob_state.next_direction, VolumeDirection::BuyBob);
+    assert_eq!(decoded.volume.icusd_bob_state.trade_count, 0);
+}
+
+/// Same guard for `volume_stranded_bob` (top-level BotState field, added
+/// alongside the icUSD/BOB hardening pass): a blob persisted before it
+/// existed must still decode, with the balance defaulting to 0 (nothing
+/// stranded) so `drain_residual_bob` doesn't withhold BOB from a fresh
+/// upgrade that never had this field.
+#[test]
+fn old_state_without_volume_stranded_bob_decodes_with_default() {
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let obj = v.as_object_mut().expect("state object");
+    assert!(obj.remove("volume_stranded_bob").is_some());
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode pre-volume_stranded_bob state");
+    assert_eq!(decoded.volume_stranded_bob, 0);
+}

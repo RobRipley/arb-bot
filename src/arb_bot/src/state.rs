@@ -336,12 +336,19 @@ pub enum Pool {
 pub enum VolumePool {
     IcusdIcp,
     ThreeUsdIcp,
+    /// icUSD/BOB ICPSwap pool. Ships inert (enabled=false, pool anonymous)
+    /// until an admin enables it and sets the pool — see `VolumePoolConfig::default()`.
+    IcusdBob,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq)]
 pub enum VolumeDirection {
     BuyIcp,
     SellIcp,
+    /// icUSD/BOB pool: spend icUSD to buy BOB.
+    BuyBob,
+    /// icUSD/BOB pool: sell BOB for icUSD.
+    SellBob,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -395,6 +402,16 @@ impl Default for VolumePoolState {
     }
 }
 
+/// Default state for the icUSD/BOB pool — same shape as `VolumePoolState::default()`
+/// but starts on `BuyBob` (the icUSD/BOB analogue of `BuyIcp`) rather than `BuyIcp`,
+/// since that pool's ping-pong never touches `BuyIcp`/`SellIcp`.
+fn default_icusd_bob_state() -> VolumePoolState {
+    VolumePoolState {
+        next_direction: VolumeDirection::BuyBob,
+        ..VolumePoolState::default()
+    }
+}
+
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct VolumeConfig {
     pub volume_paused: bool,
@@ -407,6 +424,12 @@ pub struct VolumeConfig {
     pub three_usd_icp: VolumePoolConfig,
     pub icusd_icp_state: VolumePoolState,
     pub three_usd_icp_state: VolumePoolState,
+    /// icUSD/BOB pool config. Ships inert — `VolumePoolConfig::default()` has
+    /// `enabled: false`, and the pool principal on `BotConfig` defaults anonymous.
+    #[serde(default)]
+    pub icusd_bob: VolumePoolConfig,
+    #[serde(default = "default_icusd_bob_state")]
+    pub icusd_bob_state: VolumePoolState,
 }
 
 impl Default for VolumeConfig {
@@ -422,6 +445,8 @@ impl Default for VolumeConfig {
             three_usd_icp: VolumePoolConfig::default(),
             icusd_icp_state: VolumePoolState::default(),
             three_usd_icp_state: VolumePoolState::default(),
+            icusd_bob: VolumePoolConfig::default(),
+            icusd_bob_state: default_icusd_bob_state(),
         }
     }
 }
@@ -450,10 +475,14 @@ pub struct VolumeStats {
     pub daily_cost_cap_usd_3usd: u64,
     pub icusd_icp: VolumePoolStatus,
     pub three_usd_icp: VolumePoolStatus,
+    #[serde(default)]
+    pub daily_cost_cap_usd_icusd_bob: u64,
+    #[serde(default)]
+    pub icusd_bob: VolumePoolStatus,
     pub total_trade_count: u64,
 }
 
-#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default)]
 pub struct VolumePoolStatus {
     pub config: VolumePoolConfig,
     pub state: VolumePoolState,
@@ -587,6 +616,12 @@ pub struct BotState {
     /// transfer-to-subaccount failure.  The arb drain must not touch this.
     #[serde(default)]
     pub volume_stranded_icp: u64,
+    /// BOB amount stranded in the default account after a volume bot
+    /// icUSD/BOB transfer-to-subaccount failure (BuyBob leg only — SellBob
+    /// receives icUSD, which `drain_residual_bob` never touches). Mirrors
+    /// `volume_stranded_icp`; `drain_residual_bob` must not sweep this.
+    #[serde(default)]
+    pub volume_stranded_bob: u64,
 }
 
 impl Default for BotState {
@@ -643,6 +678,7 @@ impl Default for BotState {
             pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
+            volume_stranded_bob: 0,
         }
     }
 }
@@ -1064,6 +1100,7 @@ pub fn load_from_stable_memory() {
             pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
+            volume_stranded_bob: 0,
         };
 
         // Touching any thread_local stable structure below triggers

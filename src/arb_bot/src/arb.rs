@@ -149,6 +149,18 @@ pub fn is_cycle_in_progress() -> bool {
     CYCLE_IN_PROGRESS.with(|c| c.get())
 }
 
+/// Admin escape hatch for a wedged cycle lock. `CYCLE_IN_PROGRESS` is normally
+/// released by a `Guard` Drop at the end of `run_arb_cycle` /
+/// `run_specific_strategy`, but a wasm trap unwinds without running Drop — so a
+/// trap after the flag commits would leave it stuck `true`, silently rejecting
+/// every future cycle and manual strategy run until the next upgrade. Clears the
+/// flag (and the per-cycle caches it guards) and reports the prior state.
+pub fn force_clear_cycle_lock() -> bool {
+    let was_locked = CYCLE_IN_PROGRESS.with(|c| c.replace(false));
+    clear_cycle_cache();
+    was_locked
+}
+
 fn clear_cycle_cache() {
     CYCLE_BALANCE_CACHE.with(|c| c.borrow_mut().clear());
     CYCLE_VP_CACHE.with(|c| c.set(None));
@@ -271,7 +283,7 @@ async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64)
 /// and skew the S reference; the median requires moving half the candidate
 /// set. Even count → mean of the middle two; single candidate → itself;
 /// degenerate zero-rate quotes are excluded.
-async fn median_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<u64> {
+pub(crate) async fn median_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<u64> {
     if icp_amount_e8s == 0 {
         return None;
     }
@@ -2408,7 +2420,7 @@ impl Default for BobDryRun {
 
 /// USD mark (6-dec) for a BOB amount at the icUSD-per-BOB reference price
 /// (8-dec icUSD per 1 BOB; icUSD ≈ $1, so /100 lifts 8-dec icUSD to 6-dec USD).
-fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
+pub(crate) fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
     (bob_e8s as u128 * ref_price_icusd_per_bob_8dec as u128 / 100_000_000 / 100) as i64
 }
 
@@ -3363,15 +3375,18 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
     // (works even after a canister restart that cleared pending_exit).
     let pending_exit: Option<state::PendingExit> =
         state::read_state(|s| s.pending_exit.clone());
-    // Scan backward through trade_legs for the most recent Leg1 with a
-    // recognized dex string. Skip any Leg1 whose dex doesn't map (e.g.
-    // historical backfilled entries from deprecated strategies).
+    // Look only at the SINGLE most recent Leg1 and use its pool if the dex maps.
+    // The closure returns Some for ANY Leg1, so the scan stops at the newest one
+    // instead of skipping past unmapped legs into stale history: a strategy S
+    // Leg1 ("ICPSwap-icUSD-BOB" / "ICPSwap-BOB-ICP") doesn't map to an ICP pool,
+    // so it yields Some(None) here — `.flatten()` turns that into "no fallback
+    // exclusion" rather than reaching back to an already-resolved A–R Leg1.
     let fallback_entry_pool: Option<state::Pool> = state::find_map_last_trade_leg(|l| {
         match l.leg_type {
-            state::LegType::Leg1 => dex_string_to_pool(&l.dex),
+            state::LegType::Leg1 => Some(dex_string_to_pool(&l.dex)),
             _ => None,
         }
-    });
+    }).flatten();
     let entry_pool: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.entry_pool).or(fallback_entry_pool);
     let intended_exit: Option<state::Pool> = pending_exit.as_ref().map(|pe| pe.intended_exit_pool);
 
@@ -3569,13 +3584,15 @@ async fn drain_residual_icp(config: &state::BotConfig) -> Result<(), String> {
         }
     }
 
-    // Clear pending_exit regardless: either we drained (success) or all non-entry
-    // pools failed (stale state cleared so next cycle can reassess).
-    state::mutate_state(|s| s.pending_exit = None);
-
+    // Clear pending_exit ONLY on success — mirror of drain_residual_bob. On a
+    // total drain failure the leg-2 ICP is still stranded here, so the marker
+    // must survive to keep the entry-pool exclusion intact for next cycle's
+    // retry; clearing it regardless would let a retry sell that ICP back into
+    // the very pool it was bought from.
     if !any_success && !order.is_empty() {
         return Err("All drain attempts failed".to_string());
     }
+    state::mutate_state(|s| s.pending_exit = None);
     Ok(())
 }
 
@@ -3596,7 +3613,12 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
     }
 
     let bob_balance = fetch_balance(config.bob_ledger).await?;
-    if bob_balance <= config.bob_ledger_fee * 10 {
+    // Exclude any BOB stranded by the volume bot's icUSD/BOB path (a failed
+    // transfer-to-subaccount after a BuyBob leg) — that belongs to it, not
+    // to this drain. Mirrors drain_residual_icp's volume_stranded handling.
+    let volume_stranded = state::read_state(|s| s.volume_stranded_bob);
+    let drainable_balance = bob_balance.saturating_sub(volume_stranded);
+    if drainable_balance <= config.bob_ledger_fee * 10 {
         // Dust — not worth a swap. If a pending exit is still marked, the BOB
         // it tracked is gone (nothing left to recover): clear it so it can't
         // hold the drain-relevance gate open forever.
@@ -3608,7 +3630,7 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
 
     let slippage = slippage_bps_clamped(config);
     // Leave one transfer fee of headroom for the pool deposit.
-    let drain_amount = bob_balance.saturating_sub(config.bob_ledger_fee);
+    let drain_amount = drainable_balance.saturating_sub(config.bob_ledger_fee);
 
     state::log_activity("drain", &format!(
         "Draining {} residual BOB (balance: {})", drain_amount, bob_balance

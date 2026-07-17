@@ -1268,6 +1268,7 @@
           <button class="chip" data-legfilter="Leg1" onclick="filterLegs('Leg1')">Leg 1</button>
           <button class="chip" data-legfilter="Leg2" onclick="filterLegs('Leg2')">Leg 2</button>
           <button class="chip" data-legfilter="Drain" onclick="filterLegs('Drain')">Drain</button>
+          <button class="chip" data-legfilter="TopUp" onclick="filterLegs('TopUp')">Top-up</button>
         </div>
         <span style="font-size:12px;color:var(--text-tertiary)" id="trades-count"></span>
       </div>
@@ -1698,6 +1699,9 @@
         <div class="stat-row"><span class="stat-label">3USD/ICP</span><span class="stat-value" id="vol-3usd-status">--</span></div>
         <div class="stat-row"><span class="stat-label">3USD Direction</span><span class="stat-value" id="vol-3usd-dir">--</span></div>
         <div class="stat-row"><span class="stat-label">3USD Trades</span><span class="stat-value" id="vol-3usd-count">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB</span><span class="stat-value" id="vol-icusdbob-status">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Direction</span><span class="stat-value" id="vol-icusdbob-dir">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Trades</span><span class="stat-value" id="vol-icusdbob-count">--</span></div>
       </div>
     </div>
 
@@ -1761,6 +1765,8 @@
         <div class="stat-row"><span class="stat-label">icUSD Cost</span><span class="stat-value" id="vol-icusd-cost">--</span></div>
         <div class="stat-row"><span class="stat-label">3USD Volume</span><span class="stat-value" id="vol-3usd-volume">--</span></div>
         <div class="stat-row"><span class="stat-label">3USD Cost</span><span class="stat-value" id="vol-3usd-cost">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Volume</span><span class="stat-value" id="vol-icusdbob-volume">--</span></div>
+        <div class="stat-row"><span class="stat-label">icUSD/BOB Cost</span><span class="stat-value" id="vol-icusdbob-cost">--</span></div>
         <div class="stat-row"><span class="stat-label">Total Trades</span><span class="stat-value" id="vol-total-trades">--</span></div>
         <div class="stat-row"><span class="stat-label">Interval</span><span class="stat-value" id="vol-interval">--</span></div>
       </div>
@@ -1828,6 +1834,33 @@
           <input type="number" id="vol-3usd-daily-cap" placeholder="50.00" step="0.01">
         </div>
         <button class="btn btn-primary" onclick="saveVolumePoolConfig('3usd')">Save 3USD Config</button>
+      </div>
+    </div>
+
+    <!-- icUSD/BOB Config -->
+    <div class="card">
+      <div class="card-header">icUSD/BOB Config</div>
+      <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+        <div style="display:flex;align-items:center;gap:var(--sp-2)">
+          <input type="checkbox" id="vol-icusdbob-enabled"> <label for="vol-icusdbob-enabled" style="margin:0">Enabled</label>
+        </div>
+        <div>
+          <label>Trade Size (USD)</label>
+          <input type="number" id="vol-icusdbob-trade-size" placeholder="5.00" step="0.01">
+        </div>
+        <div>
+          <label>Variance %</label>
+          <input type="number" id="vol-icusdbob-variance" placeholder="20">
+        </div>
+        <div>
+          <label>Idle Threshold (bps)</label>
+          <input type="number" id="vol-icusdbob-idle-threshold" placeholder="10">
+        </div>
+        <div>
+          <label>Daily Cost Cap (USD)</label>
+          <input type="number" id="vol-icusdbob-daily-cap" placeholder="50.00" step="0.01">
+        </div>
+        <button class="btn btn-primary" onclick="saveVolumePoolConfig('icusdbob')">Save icUSD/BOB Config</button>
       </div>
     </div>
 
@@ -1958,8 +1991,8 @@
     });
 
     const idlFactory = ({ IDL: I }) => {
-      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null });
-      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null });
+      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null, IcusdBob: I.Null });
+      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null, BuyBob: I.Null, SellBob: I.Null });
       const VolumeTradeType = I.Variant({ PingPong: I.Null, Rebalance: I.Null });
       const Pool = I.Variant({
         RumiThreeUsd: I.Null,
@@ -2033,6 +2066,8 @@
         daily_cost_cap_usd_3usd: I.Nat64,
         icusd_icp: VolumePoolStatus,
         three_usd_icp: VolumePoolStatus,
+        daily_cost_cap_usd_icusd_bob: I.Nat64,
+        icusd_bob: VolumePoolStatus,
         total_trade_count: I.Nat64,
       });
       const VolumeTradeLeg = I.Record({
@@ -2063,6 +2098,7 @@
         remove_admin: I.Func([I.Principal], [], []),
         pause: I.Func([], [], []),
         resume: I.Func([], [], []),
+        clear_cycle_lock: I.Func([], [], []),
         setup_approvals: I.Func([], [I.Text], []),
         manual_arb_cycle: I.Func([], [], []),
         execute_strategy_a: I.Func([], [], []),
@@ -2634,6 +2670,7 @@
         if (id === currentConfig.icp_ledger.toText()) return { name: 'ICP', dec: 8 };
         if (id === currentConfig.icusd_ledger?.toText()) return { name: 'icUSD', dec: 8 };
         if (id === currentConfig.three_usd_ledger.toText()) return { name: '3USD', dec: 8 };
+        if (id === currentConfig.bob_ledger?.toText()) return { name: 'BOB', dec: 8 };
       }
       // Fallback hardcoded
       if (id === 'ryjl3-tyaaa-aaaaa-aaaba-cai') return { name: 'ICP', dec: 8 };
@@ -3975,12 +4012,16 @@
 
         const ic = stats.icusd_icp;
         const tu = stats.three_usd_icp;
+        const ib = stats.icusd_bob;
         document.getElementById('vol-icusd-status').textContent = ic.config.enabled ? 'Enabled' : 'Disabled';
         document.getElementById('vol-icusd-dir').textContent = volVariantKey(ic.state.next_direction);
         document.getElementById('vol-icusd-count').textContent = ic.state.trade_count.toString();
         document.getElementById('vol-3usd-status').textContent = tu.config.enabled ? 'Enabled' : 'Disabled';
         document.getElementById('vol-3usd-dir').textContent = volVariantKey(tu.state.next_direction);
         document.getElementById('vol-3usd-count').textContent = tu.state.trade_count.toString();
+        document.getElementById('vol-icusdbob-status').textContent = ib.config.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('vol-icusdbob-dir').textContent = volVariantKey(ib.state.next_direction);
+        document.getElementById('vol-icusdbob-count').textContent = ib.state.trade_count.toString();
 
         // Analytics
         document.getElementById('vol-daily-spend').textContent = '$' + volFmtSignedUsd6(stats.daily_spend_usd);
@@ -3988,6 +4029,8 @@
         document.getElementById('vol-icusd-cost').textContent = '$' + volFmtSignedUsd6(ic.state.total_cost_usd);
         document.getElementById('vol-3usd-volume').textContent = '$' + volFmtUsd6(tu.state.total_volume_usd);
         document.getElementById('vol-3usd-cost').textContent = '$' + volFmtSignedUsd6(tu.state.total_cost_usd);
+        document.getElementById('vol-icusdbob-volume').textContent = '$' + volFmtUsd6(ib.state.total_volume_usd);
+        document.getElementById('vol-icusdbob-cost').textContent = '$' + volFmtSignedUsd6(ib.state.total_cost_usd);
         document.getElementById('vol-total-trades').textContent = stats.total_trade_count.toString();
         document.getElementById('vol-interval').textContent = stats.interval_secs.toString() + 's';
 
@@ -4003,6 +4046,12 @@
         document.getElementById('vol-3usd-variance').value = tu.config.trade_variance_pct.toString();
         document.getElementById('vol-3usd-idle-threshold').value = tu.config.idle_threshold_bps.toString();
         document.getElementById('vol-3usd-daily-cap').value = volFmtUsd6(tu.config.daily_cost_cap_usd);
+
+        document.getElementById('vol-icusdbob-enabled').checked = ib.config.enabled;
+        document.getElementById('vol-icusdbob-trade-size').value = volFmtUsd6(ib.config.trade_size_usd);
+        document.getElementById('vol-icusdbob-variance').value = ib.config.trade_variance_pct.toString();
+        document.getElementById('vol-icusdbob-idle-threshold').value = ib.config.idle_threshold_bps.toString();
+        document.getElementById('vol-icusdbob-daily-cap').value = volFmtUsd6(ib.config.daily_cost_cap_usd);
 
         document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
 
@@ -4028,10 +4077,15 @@
       }
     }
 
+    const VOLUME_POOL_KEY_INFO = {
+      icusd: { prefix: 'vol-icusd', variant: { IcusdIcp: null } },
+      '3usd': { prefix: 'vol-3usd', variant: { ThreeUsdIcp: null } },
+      icusdbob: { prefix: 'vol-icusdbob', variant: { IcusdBob: null } },
+    };
+
     window.saveVolumePoolConfig = async function(poolKey) {
       if (!requireAuth()) return;
-      const prefix = poolKey === 'icusd' ? 'vol-icusd' : 'vol-3usd';
-      const pool = poolKey === 'icusd' ? { IcusdIcp: null } : { ThreeUsdIcp: null };
+      const { prefix, variant: pool } = VOLUME_POOL_KEY_INFO[poolKey];
       const config = {
         enabled: document.getElementById(prefix + '-enabled').checked,
         trade_size_usd: BigInt(Math.round(parseFloat(document.getElementById(prefix + '-trade-size').value || '0') * 1_000_000)),
@@ -4057,13 +4111,14 @@
     const POOL_LABELS = {
       IcusdIcp: 'icUSD / ICP',
       ThreeUsdIcp: '3USD / ICP',
+      IcusdBob: 'icUSD / BOB',
       RumiThreeUsd: 'Rumi 3USD',
       IcpswapCkusdc: 'ICPSwap ckUSDC',
       IcpswapIcusd: 'ICPSwap icUSD',
       IcpswapCkusdt: 'ICPSwap ckUSDT',
       IcpswapThreeUsd: 'ICPSwap 3USD',
     };
-    const DIRECTION_LABELS = { BuyIcp: 'Buy ICP', SellIcp: 'Sell ICP' };
+    const DIRECTION_LABELS = { BuyIcp: 'Buy ICP', SellIcp: 'Sell ICP', BuyBob: 'Buy BOB', SellBob: 'Sell BOB' };
 
     function variantKey(v) {
       if (!v || typeof v !== 'object') return '—';
@@ -4204,14 +4259,21 @@
         const balance = optVal(p.input_balance);
         const minRequired = optVal(p.min_required_native);
 
-        // Token decimals: icUSD = 8, 3USD = 8, ICP = 8. All 8 decimals.
-        // For BuyIcp the input is the pool's stable token; for SellIcp the input is ICP.
+        // Token decimals: icUSD = 8, 3USD = 8, ICP = 8, BOB = 8. All 8 decimals.
+        // For BuyIcp/BuyBob the input is the pool's $1-pegged token; for
+        // SellIcp/SellBob the input is the pool's other (priced) leg.
         const direction = variantKey(p.next_direction);
         const poolKey = variantKey(p.pool);
         const inputDec = 8; // all tokens are 8 decimals
-        const inputSym = direction === 'BuyIcp'
-          ? (poolKey === 'IcusdIcp' ? 'icUSD' : '3USD')
-          : 'ICP';
+        const INPUT_SYM_LOOKUP = {
+          'BuyIcp|IcusdIcp': 'icUSD',
+          'BuyIcp|ThreeUsdIcp': '3USD',
+          'SellIcp|IcusdIcp': 'ICP',
+          'SellIcp|ThreeUsdIcp': 'ICP',
+          'BuyBob|IcusdBob': 'icUSD',
+          'SellBob|IcusdBob': 'BOB',
+        };
+        const inputSym = INPUT_SYM_LOOKUP[direction + '|' + poolKey] || '?';
 
         const facts = [
           ['Next Direction', directionLabel(p.next_direction)],
@@ -4223,8 +4285,8 @@
           ['Min Required', minRequired != null
             ? (Number(minRequired) / Math.pow(10, inputDec)).toFixed(inputDec === 8 ? 4 : 2) + ' ' + inputSym
             : '—'],
-          ['Last Price', lastPrice != null ? (Number(lastPrice) / 1e6).toFixed(6) : '—'],
-          ['Current Price', currentPrice != null ? (Number(currentPrice) / 1e6).toFixed(6) : '—'],
+          ['Last Price', lastPrice != null ? (Number(lastPrice) / 1e8).toFixed(6) : '—'],
+          ['Current Price', currentPrice != null ? (Number(currentPrice) / 1e8).toFixed(6) : '—'],
         ];
 
         const el = document.createElement('div');

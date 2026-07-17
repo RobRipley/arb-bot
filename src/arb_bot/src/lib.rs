@@ -172,25 +172,33 @@ fn get_summary() -> TradeSummary {
         unpaired_drain_usd: 0,
         unpaired_drain_sold_usd: 0,
     };
-    let mut has_pending_leg1 = false;
+    // Track the Leg1→Drain pairing separately per transit denomination. Strategies
+    // A–R trade through ICP; strategy S trades through BOB. A single shared flag
+    // mispairs when the two interleave chronologically (an S Leg1 followed by an
+    // A–R Drain, or vice versa), corrupting unpaired_drain_usd. A leg is BOB-family
+    // iff either of its tokens is BOB (only strategy S touches BOB).
+    let mut has_pending_icp_leg1 = false;
+    let mut has_pending_bob_leg1 = false;
     state::fold_trade_legs((), |_, leg| {
         summary.total_usd_in += leg.sold_usd_value;
         summary.total_usd_out += leg.bought_usd_value;
         summary.total_fees_usd += leg.fees_usd;
+        let is_bob = leg.sold_token == "BOB" || leg.bought_token == "BOB";
         match leg.leg_type {
             state::LegType::Leg1 => {
                 summary.leg1_count += 1;
-                has_pending_leg1 = true;
+                if is_bob { has_pending_bob_leg1 = true; } else { has_pending_icp_leg1 = true; }
             }
             state::LegType::Leg2 => {
                 summary.leg2_count += 1;
-                has_pending_leg1 = false;
+                if is_bob { has_pending_bob_leg1 = false; } else { has_pending_icp_leg1 = false; }
             }
             state::LegType::Drain => {
                 summary.drain_count += 1;
+                let has_pending_leg1 = if is_bob { has_pending_bob_leg1 } else { has_pending_icp_leg1 };
                 if !has_pending_leg1 {
-                    // This drain has no matching Leg1 — it's recovering
-                    // pre-existing ICP, not arb profit
+                    // This drain has no matching Leg1 in its own denomination —
+                    // it's recovering pre-existing inventory, not arb profit.
                     summary.unpaired_drain_usd += leg.bought_usd_value;
                     summary.unpaired_drain_sold_usd += leg.sold_usd_value;
                 }
@@ -320,6 +328,20 @@ fn resume() {
     state::log_activity("admin", &format!("Bot resumed by {}", ic_cdk::api::caller()));
 }
 
+/// Admin escape hatch for a stuck arb-cycle lock. Cycles gate on an in-progress
+/// flag released by a Drop guard; a wasm trap after the flag commits unwinds
+/// without running Drop, wedging every future cycle and manual strategy run
+/// until an upgrade. This force-clears the flag (and per-cycle caches) so cycles
+/// can resume without redeploying.
+#[update]
+fn clear_cycle_lock() {
+    require_admin();
+    let was_locked = arb::force_clear_cycle_lock();
+    state::log_activity("admin", &format!(
+        "Cycle lock cleared by {} (was_locked={})", ic_cdk::api::caller(), was_locked
+    ));
+}
+
 /// Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
 /// (every strategy that trades against `rumi_amm`) without touching the
 /// other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
@@ -426,7 +448,7 @@ async fn setup_approvals() -> String {
     }
 
     // Volume bot subaccount approvals
-    let volume_approvals = vec![
+    let mut volume_approvals = vec![
         ("Vol: icUSD→ICPSwap-icUSD", config.icusd_ledger, config.icpswap_icusd_pool),
         ("Vol: ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool),
         ("Vol: 3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool),
@@ -435,6 +457,11 @@ async fn setup_approvals() -> String {
         ("Vol: 3USD→RumiAMM", config.three_usd_ledger, config.rumi_amm),
         ("Vol: icUSD→3pool", config.icusd_ledger, config.rumi_3pool),
     ];
+    // Volume bot icUSD/BOB approvals (if the icUSD/BOB pool is configured)
+    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
+        volume_approvals.push(("Vol: icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
+        volume_approvals.push(("Vol: BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
+    }
     for (label, token, spender) in volume_approvals {
         match swaps::approve_infinite_subaccount(token, spender, swaps::VOLUME_SUBACCOUNT).await {
             Ok(_) => ok.push(format!("{}: OK", label)),
@@ -1754,6 +1781,7 @@ async fn set_volume_config(pool: state::VolumePool, new_config: state::VolumePoo
         match pool {
             state::VolumePool::IcusdIcp => s.volume.icusd_icp = new_config,
             state::VolumePool::ThreeUsdIcp => s.volume.three_usd_icp = new_config,
+            state::VolumePool::IcusdBob => s.volume.icusd_bob = new_config,
         }
     });
     Ok(())
@@ -1951,6 +1979,7 @@ async fn get_bot_health() -> state::BotHealthReport {
     let pools_to_check = [
         state::VolumePool::IcusdIcp,
         state::VolumePool::ThreeUsdIcp,
+        state::VolumePool::IcusdBob,
     ];
 
     let mut pool_reports: Vec<state::PoolHealth> = Vec::new();
@@ -1959,21 +1988,25 @@ async fn get_bot_health() -> state::BotHealthReport {
         let (pool_config, pool_state) = match &pool {
             state::VolumePool::IcusdIcp => (volume_config.icusd_icp.clone(), volume_config.icusd_icp_state.clone()),
             state::VolumePool::ThreeUsdIcp => (volume_config.three_usd_icp.clone(), volume_config.three_usd_icp_state.clone()),
+            state::VolumePool::IcusdBob => (volume_config.icusd_bob.clone(), volume_config.icusd_bob_state.clone()),
         };
 
-        let (icpswap_pool, icp_is_token0) = match &pool {
-            state::VolumePool::IcusdIcp => (bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0),
-            state::VolumePool::ThreeUsdIcp => (bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0),
+        // For icUSD/BOB, "current_price" is the external reference
+        // (ref_icusd_per_bob) — see volume::run_volume_cycle for why (BOB is
+        // NOT $1-pegged and its own thin pool is manipulable).
+        let current_price = match &pool {
+            state::VolumePool::IcusdIcp => prices::fetch_icpswap_price(bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0).await.ok(),
+            state::VolumePool::ThreeUsdIcp => prices::fetch_icpswap_price(bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0).await.ok(),
+            state::VolumePool::IcusdBob => volume::ref_icusd_per_bob(&bot_config).await.ok(),
         };
 
-        let current_price = prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await.ok();
-
-        let input_token = match &pool_state.next_direction {
-            state::VolumeDirection::BuyIcp => match &pool {
-                state::VolumePool::IcusdIcp => bot_config.icusd_ledger,
-                state::VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
-            },
-            state::VolumeDirection::SellIcp => bot_config.icp_ledger,
+        let input_token = match (&pool_state.next_direction, &pool) {
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp) => bot_config.icusd_ledger,
+            (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp) => bot_config.three_usd_ledger,
+            (state::VolumeDirection::SellIcp, _) => bot_config.icp_ledger,
+            (state::VolumeDirection::BuyBob, _) => bot_config.icusd_ledger,
+            (state::VolumeDirection::SellBob, _) => bot_config.bob_ledger,
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdBob) => unreachable!("BuyIcp never paired with IcusdBob"),
         };
 
         // 3USD ledger ignores subaccounts — check default account
@@ -1986,12 +2019,17 @@ async fn get_bot_health() -> state::BotHealthReport {
         let min_required_native: Option<u64> = match (&pool_state.next_direction, &pool, current_price) {
             (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp, _) => Some(pool_config.trade_size_usd * 100),
             (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp, _) => Some(pool_config.trade_size_usd * 100), // 3USD is 8 decimals
-            (state::VolumeDirection::SellIcp, _, Some(p)) if p > 0 => {
-                let stable_native = match &pool {
-                    state::VolumePool::IcusdIcp => pool_config.trade_size_usd * 100,
-                    state::VolumePool::ThreeUsdIcp => pool_config.trade_size_usd * 100, // 3USD is 8 decimals
-                };
+            (state::VolumeDirection::SellIcp, state::VolumePool::IcusdIcp, Some(p))
+            | (state::VolumeDirection::SellIcp, state::VolumePool::ThreeUsdIcp, Some(p)) if p > 0 => {
+                let stable_native = pool_config.trade_size_usd * 100; // icUSD/3USD are 8 decimals
                 Some((stable_native as u128 * 100_000_000u128 / p as u128) as u64)
+            }
+            // BuyBob spends icUSD ($1-pegged) — flat ×100, same as BuyIcp.
+            (state::VolumeDirection::BuyBob, _, _) => Some(pool_config.trade_size_usd * 100),
+            // SellBob spends BOB (NOT $1-pegged) — size via the reference price.
+            (state::VolumeDirection::SellBob, _, Some(p)) if p > 0 => {
+                let icusd_target_native = pool_config.trade_size_usd * 100;
+                Some((icusd_target_native as u128 * 100_000_000u128 / p as u128) as u64)
             }
             _ => None,
         };
@@ -2071,7 +2109,14 @@ fn get_volume_stats() -> state::VolumeStats {
             config: s.volume.three_usd_icp.clone(),
             state: s.volume.three_usd_icp_state.clone(),
         },
-        total_trade_count: s.volume.icusd_icp_state.trade_count + s.volume.three_usd_icp_state.trade_count,
+        daily_cost_cap_usd_icusd_bob: s.volume.icusd_bob.daily_cost_cap_usd,
+        icusd_bob: state::VolumePoolStatus {
+            config: s.volume.icusd_bob.clone(),
+            state: s.volume.icusd_bob_state.clone(),
+        },
+        total_trade_count: s.volume.icusd_icp_state.trade_count
+            + s.volume.three_usd_icp_state.trade_count
+            + s.volume.icusd_bob_state.trade_count,
     })
 }
 
