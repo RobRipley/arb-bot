@@ -111,7 +111,9 @@ async fn checked_bob_prices(config: &state::BotConfig) -> Result<(u64, u64), Str
         return Err("zero price (reference or pool)".to_string());
     }
     let diff = if pool_price > ref_price { pool_price - ref_price } else { ref_price - pool_price };
-    let deviation_bps = diff * 10_000 / ref_price;
+    // u128 so an extreme (self-funded) pool_price can't overflow the *10_000
+    // and wrap the deviation down past the guard threshold.
+    let deviation_bps = (diff as u128 * 10_000 / ref_price as u128) as u64;
     if deviation_bps > VOLUME_BOB_MAX_DEVIATION_BPS {
         return Err(format!(
             "icUSD/BOB pool price deviates {}bps from reference; deferring to arb strategy S",
@@ -188,7 +190,11 @@ async fn execute_volume_trade(
     // rather than the pool's own (thin, manipulable) quote.
     let zero_for_one_quote = base_is_token0;
     let price_before = match pool {
-        VolumePool::IcusdBob => ref_icusd_per_bob(config).await?,
+        // Reuse the caller's guard-checked pool price (within
+        // VOLUME_BOB_MAX_DEVIATION_BPS of the reference) for both sizing and
+        // marking, rather than a fresh unguarded ref re-fetch — avoids a TOCTOU
+        // where the reference could shift between the guard and the mark.
+        VolumePool::IcusdBob => bob_pool_price,
         _ => prices::fetch_icpswap_price(icpswap_pool, zero_for_one_quote)
             .await
             .map_err(|e| format!("Price fetch failed: {}", e))?,
