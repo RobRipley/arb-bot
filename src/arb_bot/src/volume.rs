@@ -80,6 +80,9 @@ async fn execute_volume_trade(
             THREE_USD_FEE,
             8u32,
         ),
+        // Wired in task V2 (icUSD/BOB ping-pong execution). Unreachable
+        // until then — IcusdBob is never enumerated by `run_volume_cycle`.
+        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into execute_volume_trade"),
     };
 
     // Fetch price before trade (1 ICP quote)
@@ -107,6 +110,8 @@ async fn execute_volume_trade(
             let zfo = icp_is_token0;
             (config.icp_ledger, icp_amount, zfo, ICP_FEE, stable_fee)
         },
+        // Wired in task V2.
+        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
     };
 
     // Step 1: Transfer tokens from volume subaccount to default account
@@ -145,10 +150,14 @@ async fn execute_volume_trade(
     let token_out = match direction {
         VolumeDirection::BuyIcp => config.icp_ledger,
         VolumeDirection::SellIcp => stable_ledger,
+        // Wired in task V2.
+        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
     };
     let out_fee = match direction {
         VolumeDirection::BuyIcp => ICP_FEE,
         VolumeDirection::SellIcp => stable_fee,
+        // Wired in task V2.
+        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
     };
     if amount_out > out_fee && !is_3usd(token_out, config) {
         let transfer_amount = amount_out - out_fee;
@@ -256,6 +265,8 @@ pub async fn run_volume_cycle() -> Vec<String> {
             match &pool {
                 VolumePool::IcusdIcp => (s.volume.icusd_icp.clone(), s.volume.icusd_icp_state.clone()),
                 VolumePool::ThreeUsdIcp => (s.volume.three_usd_icp.clone(), s.volume.three_usd_icp_state.clone()),
+                // Wired in task V2.
+                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
             }
         });
 
@@ -276,6 +287,8 @@ pub async fn run_volume_cycle() -> Vec<String> {
         let (icpswap_pool, icp_is_token0) = state::read_state(|s| match &pool {
             VolumePool::IcusdIcp => (s.config.icpswap_icusd_pool, s.config.icpswap_icusd_icp_is_token0),
             VolumePool::ThreeUsdIcp => (s.config.icpswap_3usd_pool, s.config.icpswap_3usd_icp_is_token0),
+            // Wired in task V2.
+            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
         });
         let current_price = match prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await {
             Ok(p) => p,
@@ -292,6 +305,8 @@ pub async fn run_volume_cycle() -> Vec<String> {
                 match &pool {
                     VolumePool::IcusdIcp => s.volume.icusd_icp_state.last_price = Some(current_price),
                     VolumePool::ThreeUsdIcp => s.volume.three_usd_icp_state.last_price = Some(current_price),
+                    // Wired in task V2.
+                    VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
                 }
             });
             outcomes.push(format!(
@@ -305,8 +320,12 @@ pub async fn run_volume_cycle() -> Vec<String> {
             VolumeDirection::BuyIcp => match &pool {
                 VolumePool::IcusdIcp => bot_config.icusd_ledger,
                 VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
+                // Wired in task V2.
+                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
             },
             VolumeDirection::SellIcp => bot_config.icp_ledger,
+            // Wired in task V2.
+            VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into run_volume_cycle"),
         };
         // 3USD ledger ignores subaccounts — check default account instead
         let balance = if is_3usd(input_token, &bot_config) {
@@ -334,6 +353,8 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     let stable_native = match &pool {
                         VolumePool::IcusdIcp => trade_size * 100,
                         VolumePool::ThreeUsdIcp => trade_size * 100, // 3USD is 8 decimals
+                        // Wired in task V2.
+                        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
                     };
                     (stable_native as u128 * 100_000_000u128 / current_price as u128) as u64
                 } else {
@@ -341,6 +362,10 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     continue;
                 }
             }
+            // Wired in task V2.
+            (VolumeDirection::BuyIcp, VolumePool::IcusdBob)
+            | (VolumeDirection::BuyBob, _)
+            | (VolumeDirection::SellBob, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into run_volume_cycle"),
         };
 
         if balance < min_native {
@@ -380,6 +405,11 @@ pub async fn run_volume_cycle() -> Vec<String> {
                         let out_6 = amount_out / 100;
                         (in_6, out_6)
                     },
+                    // Wired in task V2.
+                    (VolumeDirection::BuyIcp, VolumePool::IcusdBob)
+                    | (VolumeDirection::SellIcp, VolumePool::IcusdBob)
+                    | (VolumeDirection::BuyBob, _)
+                    | (VolumeDirection::SellBob, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into run_volume_cycle"),
                 };
                 let cost = in_usd as i64 - out_usd as i64;
 
@@ -394,7 +424,11 @@ pub async fn run_volume_cycle() -> Vec<String> {
                         VolumeDirection::SellIcp => match &pool {
                             VolumePool::IcusdIcp => bot_config.icusd_ledger,
                             VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
+                            // Wired in task V2.
+                            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
                         },
+                        // Wired in task V2.
+                        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into run_volume_cycle"),
                     },
                     amount_in,
                     amount_out,
@@ -408,11 +442,15 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     let ps = match &pool {
                         VolumePool::IcusdIcp => &mut s.volume.icusd_icp_state,
                         VolumePool::ThreeUsdIcp => &mut s.volume.three_usd_icp_state,
+                        // Wired in task V2.
+                        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
                     };
                     ps.last_price = Some(price_after);
                     ps.next_direction = match ps.next_direction {
                         VolumeDirection::BuyIcp => VolumeDirection::SellIcp,
                         VolumeDirection::SellIcp => VolumeDirection::BuyIcp,
+                        VolumeDirection::BuyBob => VolumeDirection::SellBob,
+                        VolumeDirection::SellBob => VolumeDirection::BuyBob,
                     };
                     ps.trade_count += 1;
                     ps.total_volume_usd += trade_size;
@@ -449,6 +487,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
         let pool_config = match &pool {
             VolumePool::IcusdIcp => &volume.icusd_icp,
             VolumePool::ThreeUsdIcp => &volume.three_usd_icp,
+            // Wired in task V3 (separate one-hop unwind branch).
+            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
         };
         if !pool_config.enabled {
             continue;
@@ -457,6 +497,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
         let (stable_ledger, _stable_fee) = match &pool {
             VolumePool::IcusdIcp => (config.icusd_ledger, ICUSD_FEE),
             VolumePool::ThreeUsdIcp => (config.three_usd_ledger, THREE_USD_FEE),
+            // Wired in task V3.
+            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
         };
 
         let icp_bal = swaps::icrc1_balance_of_subaccount(config.icp_ledger, VOLUME_SUBACCOUNT)
@@ -471,6 +513,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
         let (icpswap_pool, icp_is_token0) = match &pool {
             VolumePool::IcusdIcp => (config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0),
             VolumePool::ThreeUsdIcp => (config.icpswap_3usd_pool, config.icpswap_3usd_icp_is_token0),
+            // Wired in task V3.
+            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
         };
         let price = match prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await {
             Ok(p) => p,
@@ -517,6 +561,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                                     }
                                 }
                             }
+                            // Wired in task V3.
+                            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
                         }
                         state::log_activity("volume", &format!("rebalance: sold {} ICP via Rumi for {:?}", excess_icp, pool));
                     },
@@ -533,6 +579,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
             let min_amount = match &pool {
                 VolumePool::IcusdIcp => ICUSD_FEE * 3,
                 VolumePool::ThreeUsdIcp => THREE_USD_FEE * 3,
+                // Wired in task V3.
+                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
             };
             if excess_stable > min_amount {
                 match &pool {
@@ -586,6 +634,8 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                             Err(e) => state::log_activity("volume", &format!("rebalance: transfer failed: {:?}", e)),
                         }
                     },
+                    // Wired in task V3.
+                    VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
                 }
             }
         }

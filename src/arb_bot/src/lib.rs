@@ -1776,6 +1776,7 @@ async fn set_volume_config(pool: state::VolumePool, new_config: state::VolumePoo
         match pool {
             state::VolumePool::IcusdIcp => s.volume.icusd_icp = new_config,
             state::VolumePool::ThreeUsdIcp => s.volume.three_usd_icp = new_config,
+            state::VolumePool::IcusdBob => s.volume.icusd_bob = new_config,
         }
     });
     Ok(())
@@ -1981,11 +1982,15 @@ async fn get_bot_health() -> state::BotHealthReport {
         let (pool_config, pool_state) = match &pool {
             state::VolumePool::IcusdIcp => (volume_config.icusd_icp.clone(), volume_config.icusd_icp_state.clone()),
             state::VolumePool::ThreeUsdIcp => (volume_config.three_usd_icp.clone(), volume_config.three_usd_icp_state.clone()),
+            // Wired in task V2.
+            state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
         };
 
         let (icpswap_pool, icp_is_token0) = match &pool {
             state::VolumePool::IcusdIcp => (bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0),
             state::VolumePool::ThreeUsdIcp => (bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0),
+            // Wired in task V2.
+            state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
         };
 
         let current_price = prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await.ok();
@@ -1994,8 +1999,12 @@ async fn get_bot_health() -> state::BotHealthReport {
             state::VolumeDirection::BuyIcp => match &pool {
                 state::VolumePool::IcusdIcp => bot_config.icusd_ledger,
                 state::VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
+                // Wired in task V2.
+                state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
             },
             state::VolumeDirection::SellIcp => bot_config.icp_ledger,
+            // Wired in task V2.
+            state::VolumeDirection::BuyBob | state::VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into get_bot_health"),
         };
 
         // 3USD ledger ignores subaccounts — check default account
@@ -2008,13 +2017,20 @@ async fn get_bot_health() -> state::BotHealthReport {
         let min_required_native: Option<u64> = match (&pool_state.next_direction, &pool, current_price) {
             (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp, _) => Some(pool_config.trade_size_usd * 100),
             (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp, _) => Some(pool_config.trade_size_usd * 100), // 3USD is 8 decimals
-            (state::VolumeDirection::SellIcp, _, Some(p)) if p > 0 => {
+            (state::VolumeDirection::SellIcp, state::VolumePool::IcusdIcp, Some(p))
+            | (state::VolumeDirection::SellIcp, state::VolumePool::ThreeUsdIcp, Some(p)) if p > 0 => {
                 let stable_native = match &pool {
                     state::VolumePool::IcusdIcp => pool_config.trade_size_usd * 100,
                     state::VolumePool::ThreeUsdIcp => pool_config.trade_size_usd * 100, // 3USD is 8 decimals
+                    // Wired in task V2.
+                    state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
                 };
                 Some((stable_native as u128 * 100_000_000u128 / p as u128) as u64)
             }
+            // Wired in task V2.
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdBob, _)
+            | (state::VolumeDirection::BuyBob, _, _)
+            | (state::VolumeDirection::SellBob, _, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into get_bot_health"),
             _ => None,
         };
 
@@ -2093,7 +2109,14 @@ fn get_volume_stats() -> state::VolumeStats {
             config: s.volume.three_usd_icp.clone(),
             state: s.volume.three_usd_icp_state.clone(),
         },
-        total_trade_count: s.volume.icusd_icp_state.trade_count + s.volume.three_usd_icp_state.trade_count,
+        daily_cost_cap_usd_icusd_bob: s.volume.icusd_bob.daily_cost_cap_usd,
+        icusd_bob: state::VolumePoolStatus {
+            config: s.volume.icusd_bob.clone(),
+            state: s.volume.icusd_bob_state.clone(),
+        },
+        total_trade_count: s.volume.icusd_icp_state.trade_count
+            + s.volume.three_usd_icp_state.trade_count
+            + s.volume.icusd_bob_state.trade_count,
     })
 }
 

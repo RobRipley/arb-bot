@@ -1959,8 +1959,8 @@
     });
 
     const idlFactory = ({ IDL: I }) => {
-      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null });
-      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null });
+      const VolumePool = I.Variant({ IcusdIcp: I.Null, ThreeUsdIcp: I.Null, IcusdBob: I.Null });
+      const VolumeDirection = I.Variant({ BuyIcp: I.Null, SellIcp: I.Null, BuyBob: I.Null, SellBob: I.Null });
       const VolumeTradeType = I.Variant({ PingPong: I.Null, Rebalance: I.Null });
       const Pool = I.Variant({
         RumiThreeUsd: I.Null,
@@ -2034,6 +2034,8 @@
         daily_cost_cap_usd_3usd: I.Nat64,
         icusd_icp: VolumePoolStatus,
         three_usd_icp: VolumePoolStatus,
+        daily_cost_cap_usd_icusd_bob: I.Nat64,
+        icusd_bob: VolumePoolStatus,
         total_trade_count: I.Nat64,
       });
       const VolumeTradeLeg = I.Record({

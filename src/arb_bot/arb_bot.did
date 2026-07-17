@@ -253,9 +253,9 @@ type InitArgs = record {
   config: BotConfig;
 };
 
-type VolumePool = variant { IcusdIcp; ThreeUsdIcp };
+type VolumePool = variant { IcusdIcp; ThreeUsdIcp; IcusdBob };
 
-type VolumeDirection = variant { BuyIcp; SellIcp };
+type VolumeDirection = variant { BuyIcp; SellIcp; BuyBob; SellBob };
 
 type VolumeTradeType = variant { PingPong; Rebalance };
 
@@ -289,6 +289,8 @@ type VolumeStats = record {
     daily_cost_cap_usd_3usd: nat64;
     icusd_icp: VolumePoolStatus;
     three_usd_icp: VolumePoolStatus;
+    daily_cost_cap_usd_icusd_bob: nat64;
+    icusd_bob: VolumePoolStatus;
     total_trade_count: nat64;
 };
 
