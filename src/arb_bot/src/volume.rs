@@ -41,6 +41,30 @@ async fn randomized_trade_size(base_usd: u64, variance_pct: u64) -> u64 {
     result.max(1)
 }
 
+/// Reference icUSD-per-BOB rate (8 dec): (ICP per 1 BOB, from the BOB/ICP
+/// pool) × (USD per 1 ICP, median across the stable/ICP candidate pools) —
+/// the same two-step formula `arb::find_optimal_bob` uses for Strategy S's
+/// reference price (steps 1-2), reusing `arb::median_stable_usd_per_icp`
+/// rather than duplicating the manipulation-hardened median logic. BOB is
+/// NOT $1-pegged, so the icUSD/BOB volume pool's BOB leg sizes and marks off
+/// this reference in both directions instead of the flat ×100 the ICP-paired
+/// pools use for their $1-pegged stable leg.
+pub(crate) async fn ref_icusd_per_bob(config: &state::BotConfig) -> Result<u64, String> {
+    let usd_per_icp = arb::median_stable_usd_per_icp(config, 100_000_000).await
+        .filter(|&r| r > 0)
+        .ok_or_else(|| "No stable/ICP reference quote available".to_string())?;
+    const BOB_PROBE: u64 = 100_000_000; // 1 BOB (8 dec)
+    let ref_icp_per_bob = prices::fetch_icpswap_quote_for_amount(
+        config.icpswap_bob_icp_pool, BOB_PROBE, !config.icpswap_bob_icp_icp_is_token0,
+    ).await.map_err(|e| format!("BOB/ICP reference quote failed: {}", e))?;
+    if ref_icp_per_bob == 0 {
+        return Err("Zero BOB/ICP reference quote".to_string());
+    }
+    // (icp_e8s × usd_6dec / 1e8) is 6-dec USD per BOB; ×100 lifts to 8-dec
+    // icUSD (icUSD ≈ $1). Combined: /1e6. Mirrors arb::find_optimal_bob.
+    Ok((ref_icp_per_bob as u128 * usd_per_icp as u128 / 1_000_000) as u64)
+}
+
 fn is_pool_idle(current_price: u64, last_price: Option<u64>, threshold_bps: u64) -> bool {
     match last_price {
         None => true,
@@ -64,8 +88,14 @@ async fn execute_volume_trade(
     config: &state::BotConfig,
 ) -> Result<(u64, u64, u64, u64), String> {
     // Returns: (amount_in, amount_out, price_before, price_after)
-
-    let (icpswap_pool, icp_is_token0, stable_ledger, stable_fee, _stable_decimals) = match pool {
+    //
+    // The tuple below is generalized so the "other" leg isn't assumed to be
+    // ICP: `base_is_token0` marks whichever leg is available elsewhere on
+    // `config` without needing to flow through this tuple (ICP for the
+    // ICP-paired pools, icUSD for the icUSD/BOB pool); `other_ledger`/
+    // `other_fee` carry the leg that varies per pool (the $1-pegged stable
+    // for ICP pools, BOB for the icUSD/BOB pool — NOT $1-pegged).
+    let (icpswap_pool, base_is_token0, other_ledger, other_fee, _other_decimals) = match pool {
         VolumePool::IcusdIcp => (
             config.icpswap_icusd_pool,
             config.icpswap_icusd_icp_is_token0,
@@ -80,24 +110,35 @@ async fn execute_volume_trade(
             THREE_USD_FEE,
             8u32,
         ),
-        // Wired in task V2 (icUSD/BOB ping-pong execution). Unreachable
-        // until then — IcusdBob is never enumerated by `run_volume_cycle`.
-        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into execute_volume_trade"),
+        VolumePool::IcusdBob => (
+            config.icpswap_icusd_bob_pool,
+            config.icpswap_icusd_bob_icusd_is_token0,
+            config.bob_ledger,
+            config.bob_ledger_fee,
+            8u32,
+        ),
     };
 
-    // Fetch price before trade (1 ICP quote)
-    let zero_for_one_quote = icp_is_token0;
-    let price_before = prices::fetch_icpswap_price(icpswap_pool, zero_for_one_quote)
-        .await
-        .map_err(|e| format!("Price fetch failed: {}", e))?;
+    // Fetch price before trade. For the ICP-paired pools this is the pool's
+    // own 1-ICP quote. For the icUSD/BOB pool it is the external reference
+    // (`ref_icusd_per_bob`) instead — BOB is NOT $1-pegged, so both sizing
+    // and marking for its leg go through the reference in both directions
+    // rather than the pool's own (thin, manipulable) quote.
+    let zero_for_one_quote = base_is_token0;
+    let price_before = match pool {
+        VolumePool::IcusdBob => ref_icusd_per_bob(config).await?,
+        _ => prices::fetch_icpswap_price(icpswap_pool, zero_for_one_quote)
+            .await
+            .map_err(|e| format!("Price fetch failed: {}", e))?,
+    };
 
     // Convert trade_size_usd (6-dec) to native token amount
     let (token_in, amount_in_native, zero_for_one, token_in_fee, token_out_fee) = match direction {
         VolumeDirection::BuyIcp => {
             // All volume-bot stables are 8 decimals; USD is 6-dec → multiply by 100
             let amount = trade_size_usd * 100;
-            let zfo = !icp_is_token0;
-            (stable_ledger, amount, zfo, stable_fee, ICP_FEE)
+            let zfo = !base_is_token0;
+            (other_ledger, amount, zfo, other_fee, ICP_FEE)
         },
         VolumeDirection::SellIcp => {
             let icp_amount = if price_before > 0 {
@@ -107,15 +148,33 @@ async fn execute_volume_trade(
             } else {
                 return Err("Zero price".to_string());
             };
-            let zfo = icp_is_token0;
-            (config.icp_ledger, icp_amount, zfo, ICP_FEE, stable_fee)
+            let zfo = base_is_token0;
+            (config.icp_ledger, icp_amount, zfo, ICP_FEE, other_fee)
         },
-        // Wired in task V2.
-        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
+        VolumeDirection::BuyBob => {
+            // Spend icUSD (the implicit $1-pegged leg) — flat ×100, same as
+            // BuyIcp's stable leg. No reference price needed on this side.
+            let amount = trade_size_usd * 100;
+            let zfo = base_is_token0;
+            (config.icusd_ledger, amount, zfo, ICUSD_FEE, other_fee)
+        },
+        VolumeDirection::SellBob => {
+            // Spend BOB (NOT $1-pegged) — size via the reference price,
+            // mirroring SellIcp's price-dependent sizing.
+            let bob_amount = if price_before > 0 {
+                let trade_native = trade_size_usd * 100; // icUSD-equivalent target, 8 dec
+                (trade_native as u128 * 100_000_000u128 / price_before as u128) as u64
+            } else {
+                return Err("Zero reference price".to_string());
+            };
+            let zfo = !base_is_token0;
+            (other_ledger, bob_amount, zfo, other_fee, ICUSD_FEE)
+        },
     };
 
     // Step 1: Transfer tokens from volume subaccount to default account
-    // (3USD ledger ignores subaccounts — tokens are already in default account)
+    // (3USD ledger ignores subaccounts — tokens are already in default account;
+    // BOB and icUSD are normal ICRC ledgers and follow this subaccount path)
     if !is_3usd(token_in, config) {
         swaps::transfer_from_subaccount(token_in, amount_in_native, VOLUME_SUBACCOUNT)
             .await
@@ -149,15 +208,15 @@ async fn execute_volume_trade(
     // (3USD ledger ignores subaccounts — output stays in default account)
     let token_out = match direction {
         VolumeDirection::BuyIcp => config.icp_ledger,
-        VolumeDirection::SellIcp => stable_ledger,
-        // Wired in task V2.
-        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
+        VolumeDirection::SellIcp => other_ledger,
+        VolumeDirection::BuyBob => other_ledger,
+        VolumeDirection::SellBob => config.icusd_ledger,
     };
     let out_fee = match direction {
         VolumeDirection::BuyIcp => ICP_FEE,
-        VolumeDirection::SellIcp => stable_fee,
-        // Wired in task V2.
-        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into execute_volume_trade"),
+        VolumeDirection::SellIcp => other_fee,
+        VolumeDirection::BuyBob => other_fee,
+        VolumeDirection::SellBob => ICUSD_FEE,
     };
     if amount_out > out_fee && !is_3usd(token_out, config) {
         let transfer_amount = amount_out - out_fee;
@@ -189,9 +248,12 @@ async fn execute_volume_trade(
     }
 
     // Fetch price after trade
-    let price_after = prices::fetch_icpswap_price(icpswap_pool, zero_for_one_quote)
-        .await
-        .unwrap_or(price_before);
+    let price_after = match pool {
+        VolumePool::IcusdBob => ref_icusd_per_bob(config).await.unwrap_or(price_before),
+        _ => prices::fetch_icpswap_price(icpswap_pool, zero_for_one_quote)
+            .await
+            .unwrap_or(price_before),
+    };
 
     Ok((amount_in_native, amount_out, price_before, price_after))
 }
@@ -257,16 +319,16 @@ pub async fn run_volume_cycle() -> Vec<String> {
             s.volume.daily_spend_reset_ts = now;
             s.volume.icusd_icp_state.daily_cost_usd = 0;
             s.volume.three_usd_icp_state.daily_cost_usd = 0;
+            s.volume.icusd_bob_state.daily_cost_usd = 0;
         });
     }
 
-    for pool in [VolumePool::IcusdIcp, VolumePool::ThreeUsdIcp] {
+    for pool in [VolumePool::IcusdIcp, VolumePool::ThreeUsdIcp, VolumePool::IcusdBob] {
         let (pool_config, pool_state) = state::read_state(|s| {
             match &pool {
                 VolumePool::IcusdIcp => (s.volume.icusd_icp.clone(), s.volume.icusd_icp_state.clone()),
                 VolumePool::ThreeUsdIcp => (s.volume.three_usd_icp.clone(), s.volume.three_usd_icp_state.clone()),
-                // Wired in task V2.
-                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
+                VolumePool::IcusdBob => (s.volume.icusd_bob.clone(), s.volume.icusd_bob_state.clone()),
             }
         });
 
@@ -284,20 +346,37 @@ pub async fn run_volume_cycle() -> Vec<String> {
             continue;
         }
 
-        let (icpswap_pool, icp_is_token0) = state::read_state(|s| match &pool {
-            VolumePool::IcusdIcp => (s.config.icpswap_icusd_pool, s.config.icpswap_icusd_icp_is_token0),
-            VolumePool::ThreeUsdIcp => (s.config.icpswap_3usd_pool, s.config.icpswap_3usd_icp_is_token0),
-            // Wired in task V2.
-            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
-        });
-        let current_price = match prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await {
-            Ok(p) => p,
-            Err(e) => {
-                let msg = format!("{:?}: skipped (price fetch failed: {})", pool, e);
-                state::log_activity("volume", &msg);
-                outcomes.push(msg);
-                continue;
+        // For the ICP-paired pools, "current_price" is the pool's own 1-ICP
+        // quote. For icUSD/BOB it is the external reference (ref_icusd_per_bob)
+        // instead — BOB is NOT $1-pegged and its own thin pool is manipulable,
+        // so idle-check + sizing anchor to the multi-venue reference (also
+        // what get_bot_health surfaces as "current_price" for this pool).
+        let current_price = match &pool {
+            VolumePool::IcusdIcp | VolumePool::ThreeUsdIcp => {
+                let (icpswap_pool, icp_is_token0) = state::read_state(|s| match &pool {
+                    VolumePool::IcusdIcp => (s.config.icpswap_icusd_pool, s.config.icpswap_icusd_icp_is_token0),
+                    VolumePool::ThreeUsdIcp => (s.config.icpswap_3usd_pool, s.config.icpswap_3usd_icp_is_token0),
+                    VolumePool::IcusdBob => unreachable!("handled by the outer match arm"),
+                });
+                match prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let msg = format!("{:?}: skipped (price fetch failed: {})", pool, e);
+                        state::log_activity("volume", &msg);
+                        outcomes.push(msg);
+                        continue;
+                    }
+                }
             }
+            VolumePool::IcusdBob => match ref_icusd_per_bob(&bot_config).await {
+                Ok(p) => p,
+                Err(e) => {
+                    let msg = format!("{:?}: skipped (reference price fetch failed: {})", pool, e);
+                    state::log_activity("volume", &msg);
+                    outcomes.push(msg);
+                    continue;
+                }
+            },
         };
 
         if !is_pool_idle(current_price, pool_state.last_price, pool_config.idle_threshold_bps) {
@@ -305,8 +384,7 @@ pub async fn run_volume_cycle() -> Vec<String> {
                 match &pool {
                     VolumePool::IcusdIcp => s.volume.icusd_icp_state.last_price = Some(current_price),
                     VolumePool::ThreeUsdIcp => s.volume.three_usd_icp_state.last_price = Some(current_price),
-                    // Wired in task V2.
-                    VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
+                    VolumePool::IcusdBob => s.volume.icusd_bob_state.last_price = Some(current_price),
                 }
             });
             outcomes.push(format!(
@@ -316,16 +394,16 @@ pub async fn run_volume_cycle() -> Vec<String> {
             continue;
         }
 
-        let input_token = match &pool_state.next_direction {
-            VolumeDirection::BuyIcp => match &pool {
-                VolumePool::IcusdIcp => bot_config.icusd_ledger,
-                VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
-                // Wired in task V2.
-                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
-            },
-            VolumeDirection::SellIcp => bot_config.icp_ledger,
-            // Wired in task V2.
-            VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into run_volume_cycle"),
+        let input_token = match (&pool_state.next_direction, &pool) {
+            (VolumeDirection::BuyIcp, VolumePool::IcusdIcp) => bot_config.icusd_ledger,
+            (VolumeDirection::BuyIcp, VolumePool::ThreeUsdIcp) => bot_config.three_usd_ledger,
+            (VolumeDirection::SellIcp, _) => bot_config.icp_ledger,
+            (VolumeDirection::BuyBob, _) => bot_config.icusd_ledger,
+            (VolumeDirection::SellBob, _) => bot_config.bob_ledger,
+            // BuyIcp/IcusdBob never pair — `next_direction` only ever holds
+            // BuyIcp/SellIcp for the ICP-paired pools and BuyBob/SellBob for
+            // icUSD/BOB (see `default_icusd_bob_state` and the toggle below).
+            (VolumeDirection::BuyIcp, VolumePool::IcusdBob) => unreachable!("BuyIcp never paired with IcusdBob"),
         };
         // 3USD ledger ignores subaccounts — check default account instead
         let balance = if is_3usd(input_token, &bot_config) {
@@ -348,24 +426,31 @@ pub async fn run_volume_cycle() -> Vec<String> {
         let min_native = match (&pool_state.next_direction, &pool) {
             (VolumeDirection::BuyIcp, VolumePool::IcusdIcp) => trade_size * 100,
             (VolumeDirection::BuyIcp, VolumePool::ThreeUsdIcp) => trade_size * 100, // 3USD is 8 decimals
-            (VolumeDirection::SellIcp, _) => {
+            (VolumeDirection::SellIcp, VolumePool::IcusdIcp) | (VolumeDirection::SellIcp, VolumePool::ThreeUsdIcp) => {
                 if current_price > 0 {
-                    let stable_native = match &pool {
-                        VolumePool::IcusdIcp => trade_size * 100,
-                        VolumePool::ThreeUsdIcp => trade_size * 100, // 3USD is 8 decimals
-                        // Wired in task V2.
-                        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
-                    };
+                    let stable_native = trade_size * 100; // icUSD/3USD are 8 decimals
                     (stable_native as u128 * 100_000_000u128 / current_price as u128) as u64
                 } else {
                     outcomes.push(format!("{:?}: skipped (zero price)", pool));
                     continue;
                 }
             }
-            // Wired in task V2.
+            // BuyBob spends icUSD ($1-pegged) — flat ×100, same as BuyIcp.
+            (VolumeDirection::BuyBob, _) => trade_size * 100,
+            // SellBob spends BOB (NOT $1-pegged) — size via the reference
+            // price (`current_price` is `ref_icusd_per_bob` for this pool).
+            (VolumeDirection::SellBob, _) => {
+                if current_price > 0 {
+                    let icusd_target_native = trade_size * 100;
+                    (icusd_target_native as u128 * 100_000_000u128 / current_price as u128) as u64
+                } else {
+                    outcomes.push(format!("{:?}: skipped (zero reference price)", pool));
+                    continue;
+                }
+            }
+            // Unreachable: BuyIcp/SellIcp never pair with IcusdBob (see input_token above).
             (VolumeDirection::BuyIcp, VolumePool::IcusdBob)
-            | (VolumeDirection::BuyBob, _)
-            | (VolumeDirection::SellBob, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into run_volume_cycle"),
+            | (VolumeDirection::SellIcp, VolumePool::IcusdBob) => unreachable!("BuyIcp/SellIcp never paired with IcusdBob"),
         };
 
         if balance < min_native {
@@ -405,11 +490,23 @@ pub async fn run_volume_cycle() -> Vec<String> {
                         let out_6 = amount_out / 100;
                         (in_6, out_6)
                     },
-                    // Wired in task V2.
+                    (VolumeDirection::BuyBob, _) => {
+                        // in: icUSD (8 dec, $1) → 6 dec flat; out: BOB (8 dec) marked
+                        // at the reference price (arb::mark_bob_usd's exact scaling:
+                        // amount × ref_icusd_per_bob / 1e8 / 100).
+                        let in_6 = amount_in / 100;
+                        let out_6 = arb::mark_bob_usd(amount_out, price_before).max(0) as u64;
+                        (in_6, out_6)
+                    },
+                    (VolumeDirection::SellBob, _) => {
+                        // in: BOB (8 dec) marked at the reference price; out: icUSD (8 dec, $1) → 6 dec flat.
+                        let in_6 = arb::mark_bob_usd(amount_in, price_before).max(0) as u64;
+                        let out_6 = amount_out / 100;
+                        (in_6, out_6)
+                    },
+                    // Unreachable: BuyIcp/SellIcp never pair with IcusdBob (see input_token above).
                     (VolumeDirection::BuyIcp, VolumePool::IcusdBob)
-                    | (VolumeDirection::SellIcp, VolumePool::IcusdBob)
-                    | (VolumeDirection::BuyBob, _)
-                    | (VolumeDirection::SellBob, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into run_volume_cycle"),
+                    | (VolumeDirection::SellIcp, VolumePool::IcusdBob) => unreachable!("BuyIcp/SellIcp never paired with IcusdBob"),
                 };
                 let cost = in_usd as i64 - out_usd as i64;
 
@@ -419,16 +516,13 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     direction: pool_state.next_direction.clone(),
                     trade_type: VolumeTradeType::PingPong,
                     token_in: input_token,
-                    token_out: match &pool_state.next_direction {
-                        VolumeDirection::BuyIcp => bot_config.icp_ledger,
-                        VolumeDirection::SellIcp => match &pool {
-                            VolumePool::IcusdIcp => bot_config.icusd_ledger,
-                            VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
-                            // Wired in task V2.
-                            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
-                        },
-                        // Wired in task V2.
-                        VolumeDirection::BuyBob | VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into run_volume_cycle"),
+                    token_out: match (&pool_state.next_direction, &pool) {
+                        (VolumeDirection::BuyIcp, _) => bot_config.icp_ledger,
+                        (VolumeDirection::SellIcp, VolumePool::IcusdIcp) => bot_config.icusd_ledger,
+                        (VolumeDirection::SellIcp, VolumePool::ThreeUsdIcp) => bot_config.three_usd_ledger,
+                        (VolumeDirection::BuyBob, _) => bot_config.bob_ledger,
+                        (VolumeDirection::SellBob, _) => bot_config.icusd_ledger,
+                        (VolumeDirection::SellIcp, VolumePool::IcusdBob) => unreachable!("SellIcp never paired with IcusdBob"),
                     },
                     amount_in,
                     amount_out,
@@ -442,8 +536,7 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     let ps = match &pool {
                         VolumePool::IcusdIcp => &mut s.volume.icusd_icp_state,
                         VolumePool::ThreeUsdIcp => &mut s.volume.three_usd_icp_state,
-                        // Wired in task V2.
-                        VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_volume_cycle"),
+                        VolumePool::IcusdBob => &mut s.volume.icusd_bob_state,
                     };
                     ps.last_price = Some(price_after);
                     ps.next_direction = match ps.next_direction {

@@ -283,7 +283,7 @@ async fn best_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64)
 /// and skew the S reference; the median requires moving half the candidate
 /// set. Even count → mean of the middle two; single candidate → itself;
 /// degenerate zero-rate quotes are excluded.
-async fn median_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<u64> {
+pub(crate) async fn median_stable_usd_per_icp(config: &state::BotConfig, icp_amount_e8s: u64) -> Option<u64> {
     if icp_amount_e8s == 0 {
         return None;
     }
@@ -2420,7 +2420,7 @@ impl Default for BobDryRun {
 
 /// USD mark (6-dec) for a BOB amount at the icUSD-per-BOB reference price
 /// (8-dec icUSD per 1 BOB; icUSD ≈ $1, so /100 lifts 8-dec icUSD to 6-dec USD).
-fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
+pub(crate) fn mark_bob_usd(bob_e8s: u64, ref_price_icusd_per_bob_8dec: u64) -> i64 {
     (bob_e8s as u128 * ref_price_icusd_per_bob_8dec as u128 / 100_000_000 / 100) as i64
 }
 

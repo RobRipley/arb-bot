@@ -1974,6 +1974,7 @@ async fn get_bot_health() -> state::BotHealthReport {
     let pools_to_check = [
         state::VolumePool::IcusdIcp,
         state::VolumePool::ThreeUsdIcp,
+        state::VolumePool::IcusdBob,
     ];
 
     let mut pool_reports: Vec<state::PoolHealth> = Vec::new();
@@ -1982,29 +1983,25 @@ async fn get_bot_health() -> state::BotHealthReport {
         let (pool_config, pool_state) = match &pool {
             state::VolumePool::IcusdIcp => (volume_config.icusd_icp.clone(), volume_config.icusd_icp_state.clone()),
             state::VolumePool::ThreeUsdIcp => (volume_config.three_usd_icp.clone(), volume_config.three_usd_icp_state.clone()),
-            // Wired in task V2.
-            state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
+            state::VolumePool::IcusdBob => (volume_config.icusd_bob.clone(), volume_config.icusd_bob_state.clone()),
         };
 
-        let (icpswap_pool, icp_is_token0) = match &pool {
-            state::VolumePool::IcusdIcp => (bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0),
-            state::VolumePool::ThreeUsdIcp => (bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0),
-            // Wired in task V2.
-            state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
+        // For icUSD/BOB, "current_price" is the external reference
+        // (ref_icusd_per_bob) — see volume::run_volume_cycle for why (BOB is
+        // NOT $1-pegged and its own thin pool is manipulable).
+        let current_price = match &pool {
+            state::VolumePool::IcusdIcp => prices::fetch_icpswap_price(bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0).await.ok(),
+            state::VolumePool::ThreeUsdIcp => prices::fetch_icpswap_price(bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0).await.ok(),
+            state::VolumePool::IcusdBob => volume::ref_icusd_per_bob(&bot_config).await.ok(),
         };
 
-        let current_price = prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await.ok();
-
-        let input_token = match &pool_state.next_direction {
-            state::VolumeDirection::BuyIcp => match &pool {
-                state::VolumePool::IcusdIcp => bot_config.icusd_ledger,
-                state::VolumePool::ThreeUsdIcp => bot_config.three_usd_ledger,
-                // Wired in task V2.
-                state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
-            },
-            state::VolumeDirection::SellIcp => bot_config.icp_ledger,
-            // Wired in task V2.
-            state::VolumeDirection::BuyBob | state::VolumeDirection::SellBob => unreachable!("BuyBob/SellBob not yet wired into get_bot_health"),
+        let input_token = match (&pool_state.next_direction, &pool) {
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp) => bot_config.icusd_ledger,
+            (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp) => bot_config.three_usd_ledger,
+            (state::VolumeDirection::SellIcp, _) => bot_config.icp_ledger,
+            (state::VolumeDirection::BuyBob, _) => bot_config.icusd_ledger,
+            (state::VolumeDirection::SellBob, _) => bot_config.bob_ledger,
+            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdBob) => unreachable!("BuyIcp never paired with IcusdBob"),
         };
 
         // 3USD ledger ignores subaccounts — check default account
@@ -2019,18 +2016,16 @@ async fn get_bot_health() -> state::BotHealthReport {
             (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp, _) => Some(pool_config.trade_size_usd * 100), // 3USD is 8 decimals
             (state::VolumeDirection::SellIcp, state::VolumePool::IcusdIcp, Some(p))
             | (state::VolumeDirection::SellIcp, state::VolumePool::ThreeUsdIcp, Some(p)) if p > 0 => {
-                let stable_native = match &pool {
-                    state::VolumePool::IcusdIcp => pool_config.trade_size_usd * 100,
-                    state::VolumePool::ThreeUsdIcp => pool_config.trade_size_usd * 100, // 3USD is 8 decimals
-                    // Wired in task V2.
-                    state::VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into get_bot_health"),
-                };
+                let stable_native = pool_config.trade_size_usd * 100; // icUSD/3USD are 8 decimals
                 Some((stable_native as u128 * 100_000_000u128 / p as u128) as u64)
             }
-            // Wired in task V2.
-            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdBob, _)
-            | (state::VolumeDirection::BuyBob, _, _)
-            | (state::VolumeDirection::SellBob, _, _) => unreachable!("IcusdBob/BuyBob/SellBob not yet wired into get_bot_health"),
+            // BuyBob spends icUSD ($1-pegged) — flat ×100, same as BuyIcp.
+            (state::VolumeDirection::BuyBob, _, _) => Some(pool_config.trade_size_usd * 100),
+            // SellBob spends BOB (NOT $1-pegged) — size via the reference price.
+            (state::VolumeDirection::SellBob, _, Some(p)) if p > 0 => {
+                let icusd_target_native = pool_config.trade_size_usd * 100;
+                Some((icusd_target_native as u128 * 100_000_000u128 / p as u128) as u64)
+            }
             _ => None,
         };
 
