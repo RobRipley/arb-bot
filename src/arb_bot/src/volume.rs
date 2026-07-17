@@ -572,16 +572,129 @@ pub async fn run_volume_cycle() -> Vec<String> {
     outcomes
 }
 
+/// icUSD/BOB rebalance: a DIRECT one-hop unwind through the icUSD/BOB pool
+/// itself (BOB<->icUSD via `icpswap_swap` on `config.icpswap_icusd_bob_pool`)
+/// — deliberately NOT the ICP/Rumi multi-hop route the ICP-paired pools use
+/// (`run_rebalance`'s other arms), since BOB has no relationship to ICP or
+/// the Rumi 3pool. BOB is valued via the reference price (`ref_icusd_per_bob`)
+/// rather than the pool's own (thin, manipulable) quote — same rationale as
+/// `execute_volume_trade`/`run_volume_cycle`.
+async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::VolumePoolConfig, drift_threshold: u64) {
+    if !pool_config.enabled {
+        return;
+    }
+
+    let bob_bal = swaps::icrc1_balance_of_subaccount(config.bob_ledger, VOLUME_SUBACCOUNT)
+        .await.unwrap_or(0);
+    // icUSD is a normal ICRC ledger — check the subaccount (unlike 3USD).
+    let icusd_bal = swaps::icrc1_balance_of_subaccount(config.icusd_ledger, VOLUME_SUBACCOUNT)
+        .await.unwrap_or(0);
+
+    let ref_price = match ref_icusd_per_bob(config).await {
+        Ok(p) if p > 0 => p,
+        Ok(_) => { state::log_activity("volume", "rebalance IcusdBob: zero reference price"); return; }
+        Err(e) => { state::log_activity("volume", &format!("rebalance IcusdBob: reference price failed: {}", e)); return; }
+    };
+
+    let bob_as_icusd = (bob_bal as u128 * ref_price as u128 / 100_000_000u128) as u64;
+    let total = bob_as_icusd + icusd_bal;
+    if total == 0 {
+        return;
+    }
+    let bob_pct = bob_as_icusd * 100 / total;
+
+    // BOB is token0 in the pool iff icUSD is NOT (the two-token pool has
+    // exactly one token0/token1 split).
+    let bob_is_token0 = !config.icpswap_icusd_bob_icusd_is_token0;
+
+    if bob_pct > (50 + drift_threshold) {
+        // Too much BOB — sell some for icUSD to bring back toward 50/50.
+        let target_bob_icusd = total / 2;
+        let excess_icusd_equiv = bob_as_icusd.saturating_sub(target_bob_icusd);
+        let excess_bob = (excess_icusd_equiv as u128 * 100_000_000u128 / ref_price as u128) as u64;
+        if excess_bob <= config.bob_ledger_fee * 2 {
+            return;
+        }
+        match swaps::transfer_from_subaccount(config.bob_ledger, excess_bob, VOLUME_SUBACCOUNT).await {
+            Ok(_) => {},
+            Err(e) => {
+                state::log_activity("volume", &format!("rebalance IcusdBob: BOB transfer failed: {:?}", e));
+                return;
+            }
+        }
+        match swaps::icpswap_swap(
+            config.icpswap_icusd_bob_pool,
+            excess_bob - config.bob_ledger_fee,
+            bob_is_token0, // selling BOB: zero_for_one = BOB is token0
+            0,
+            config.bob_ledger_fee,
+            ICUSD_FEE,
+        ).await {
+            Ok(icusd_out) => {
+                let _ = swaps::transfer_to_subaccount(config.icusd_ledger, icusd_out.saturating_sub(ICUSD_FEE), VOLUME_SUBACCOUNT).await;
+                state::log_activity("volume", &format!("rebalance: sold {} BOB via icUSD/BOB pool for {} icUSD", excess_bob, icusd_out));
+            },
+            Err(e) => {
+                state::log_activity("volume", &format!("rebalance IcusdBob: swap failed: {:?}", e));
+                let recovery = excess_bob.saturating_sub(config.bob_ledger_fee * 2);
+                if recovery > 0 {
+                    let _ = swaps::transfer_to_subaccount(config.bob_ledger, recovery, VOLUME_SUBACCOUNT).await;
+                }
+            }
+        }
+    } else if bob_pct < 50u64.saturating_sub(drift_threshold) {
+        // Too much icUSD — buy BOB to bring back toward 50/50.
+        let target_icusd = total / 2;
+        let excess_icusd = icusd_bal.saturating_sub(target_icusd);
+        if excess_icusd <= ICUSD_FEE * 3 {
+            return;
+        }
+        match swaps::transfer_from_subaccount(config.icusd_ledger, excess_icusd, VOLUME_SUBACCOUNT).await {
+            Ok(_) => {},
+            Err(e) => {
+                state::log_activity("volume", &format!("rebalance IcusdBob: icUSD transfer failed: {:?}", e));
+                return;
+            }
+        }
+        match swaps::icpswap_swap(
+            config.icpswap_icusd_bob_pool,
+            excess_icusd - ICUSD_FEE,
+            !bob_is_token0, // selling icUSD: zero_for_one = icUSD is token0
+            0,
+            ICUSD_FEE,
+            config.bob_ledger_fee,
+        ).await {
+            Ok(bob_out) => {
+                let _ = swaps::transfer_to_subaccount(config.bob_ledger, bob_out.saturating_sub(config.bob_ledger_fee), VOLUME_SUBACCOUNT).await;
+                state::log_activity("volume", &format!("rebalance: bought {} BOB with icUSD via icUSD/BOB pool", bob_out));
+            },
+            Err(e) => {
+                state::log_activity("volume", &format!("rebalance IcusdBob: swap failed: {:?}", e));
+                let recovery = excess_icusd.saturating_sub(ICUSD_FEE * 2);
+                if recovery > 0 {
+                    let _ = swaps::transfer_to_subaccount(config.icusd_ledger, recovery, VOLUME_SUBACCOUNT).await;
+                }
+            }
+        }
+    }
+}
+
 pub async fn run_rebalance(config: &state::BotConfig) {
     let volume = state::read_state(|s| s.volume.clone());
     let drift_threshold = volume.rebalance_drift_pct;
 
-    for pool in [VolumePool::IcusdIcp, VolumePool::ThreeUsdIcp] {
+    for pool in [VolumePool::IcusdIcp, VolumePool::ThreeUsdIcp, VolumePool::IcusdBob] {
+        // icUSD/BOB is a separate one-hop unwind through its own pool — not
+        // the ICP/Rumi multi-hop route the arms below implement.
+        if matches!(pool, VolumePool::IcusdBob) {
+            rebalance_icusd_bob(config, &volume.icusd_bob, drift_threshold).await;
+            continue;
+        }
+
         let pool_config = match &pool {
             VolumePool::IcusdIcp => &volume.icusd_icp,
             VolumePool::ThreeUsdIcp => &volume.three_usd_icp,
-            // Wired in task V3 (separate one-hop unwind branch).
-            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+            VolumePool::IcusdBob => unreachable!("handled above"),
         };
         if !pool_config.enabled {
             continue;
@@ -590,8 +703,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
         let (stable_ledger, _stable_fee) = match &pool {
             VolumePool::IcusdIcp => (config.icusd_ledger, ICUSD_FEE),
             VolumePool::ThreeUsdIcp => (config.three_usd_ledger, THREE_USD_FEE),
-            // Wired in task V3.
-            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+            VolumePool::IcusdBob => unreachable!("handled above"),
         };
 
         let icp_bal = swaps::icrc1_balance_of_subaccount(config.icp_ledger, VOLUME_SUBACCOUNT)
@@ -606,8 +718,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
         let (icpswap_pool, icp_is_token0) = match &pool {
             VolumePool::IcusdIcp => (config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0),
             VolumePool::ThreeUsdIcp => (config.icpswap_3usd_pool, config.icpswap_3usd_icp_is_token0),
-            // Wired in task V3.
-            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+            VolumePool::IcusdBob => unreachable!("handled above"),
         };
         let price = match prices::fetch_icpswap_price(icpswap_pool, icp_is_token0).await {
             Ok(p) => p,
@@ -654,8 +765,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                                     }
                                 }
                             }
-                            // Wired in task V3.
-                            VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+                            VolumePool::IcusdBob => unreachable!("handled above"),
                         }
                         state::log_activity("volume", &format!("rebalance: sold {} ICP via Rumi for {:?}", excess_icp, pool));
                     },
@@ -672,8 +782,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
             let min_amount = match &pool {
                 VolumePool::IcusdIcp => ICUSD_FEE * 3,
                 VolumePool::ThreeUsdIcp => THREE_USD_FEE * 3,
-                // Wired in task V3.
-                VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+                VolumePool::IcusdBob => unreachable!("handled above"),
             };
             if excess_stable > min_amount {
                 match &pool {
@@ -727,8 +836,7 @@ pub async fn run_rebalance(config: &state::BotConfig) {
                             Err(e) => state::log_activity("volume", &format!("rebalance: transfer failed: {:?}", e)),
                         }
                     },
-                    // Wired in task V3.
-                    VolumePool::IcusdBob => unreachable!("IcusdBob not yet wired into run_rebalance"),
+                    VolumePool::IcusdBob => unreachable!("handled above"),
                 }
             }
         }
