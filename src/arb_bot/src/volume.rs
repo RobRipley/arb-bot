@@ -11,6 +11,15 @@ const THREE_USD_FEE: u64 = 0; // 3USD has no transfer fee
 const NANOS_PER_DAY: u64 = 86_400_000_000_000;
 const RUMI_POOL_ID: &str = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
 
+/// Maximum allowed deviation (bps) between the icUSD/BOB pool's own spot
+/// price and the multi-venue reference (`ref_icusd_per_bob`) before the
+/// volume bot refuses to size/execute an icUSD/BOB trade this cycle. Both
+/// quote sources are individually manipulable (the icUSD/BOB pool is thin;
+/// the reference's BOB/ICP leg is a single ICPSwap pool too) — requiring
+/// them to agree defeats single-pool manipulation of EITHER side, since an
+/// attacker would need to move both independently-sourced prices in lockstep.
+const VOLUME_BOB_MAX_DEVIATION_BPS: u64 = 200;
+
 /// The 3USD ledger doesn't support ICRC-1 subaccounts — it ignores the
 /// subaccount field and always operates on the owner's total balance.
 /// Transfers to/from a subaccount fail with "cannot transfer to self".
@@ -65,6 +74,53 @@ pub(crate) async fn ref_icusd_per_bob(config: &state::BotConfig) -> Result<u64, 
     Ok((ref_icp_per_bob as u128 * usd_per_icp as u128 / 1_000_000) as u64)
 }
 
+/// The icUSD/BOB pool's OWN spot quote, in the same units as
+/// `ref_icusd_per_bob`: 8-dec icUSD received per 1 BOB sold.
+///
+/// Units proof: `fetch_icpswap_price` hardcodes `amountIn = "100000000"`
+/// raw units of whichever token `zero_for_one` sells. BOB is an 8-decimal
+/// ledger (see `BOB_PROBE` above and `bob_ledger_fee`'s "0.01 BOB" comment
+/// in state.rs), so 100_000_000 raw units is exactly 1 BOB. Passing
+/// `zero_for_one = !icusd_is_token0` sells BOB (BOB is token0 iff icUSD is
+/// NOT token0 — the pool has exactly two tokens) and receives icUSD out;
+/// icUSD is also 8-decimal (`ICUSD_FEE` = "0.001 icUSD (8 dec)"). So the
+/// result is 8-dec icUSD per 1 BOB — identical units to
+/// `ref_icusd_per_bob`'s "8-dec icUSD per 1 BOB" (see `mark_bob_usd`'s
+/// doc comment in arb.rs). This mirrors `find_optimal_bob`'s `pool_res`
+/// quote (`fetch_icpswap_quote_for_amount(icusd_bob_pool, BOB_PROBE,
+/// !icusd_is_token0)`), just via the fixed-1e8-input `fetch_icpswap_price`
+/// entry point instead.
+async fn pool_icusd_per_bob(config: &state::BotConfig) -> Result<u64, String> {
+    prices::fetch_icpswap_price(
+        config.icpswap_icusd_bob_pool,
+        !config.icpswap_icusd_bob_icusd_is_token0,
+    ).await.map_err(|e| format!("icUSD/BOB pool price fetch failed: {}", e))
+}
+
+/// Cross-checks the icUSD/BOB pool's own spot price against the multi-venue
+/// reference. Returns `(ref_price, pool_price)` — both 8-dec icUSD per 1
+/// BOB — only when they agree within `VOLUME_BOB_MAX_DEVIATION_BPS`. Any
+/// quote failure, a zero price, or an excessive deviation is surfaced as
+/// `Err` with a human-readable reason so the caller can skip the cycle and
+/// cede to strategy S, which has its own spread-based profitability check
+/// rather than blindly sizing off a single (possibly manipulated) quote.
+async fn checked_bob_prices(config: &state::BotConfig) -> Result<(u64, u64), String> {
+    let ref_price = ref_icusd_per_bob(config).await?;
+    let pool_price = pool_icusd_per_bob(config).await?;
+    if ref_price == 0 || pool_price == 0 {
+        return Err("zero price (reference or pool)".to_string());
+    }
+    let diff = if pool_price > ref_price { pool_price - ref_price } else { ref_price - pool_price };
+    let deviation_bps = diff * 10_000 / ref_price;
+    if deviation_bps > VOLUME_BOB_MAX_DEVIATION_BPS {
+        return Err(format!(
+            "icUSD/BOB pool price deviates {}bps from reference; deferring to arb strategy S",
+            deviation_bps
+        ));
+    }
+    Ok((ref_price, pool_price))
+}
+
 fn is_pool_idle(current_price: u64, last_price: Option<u64>, threshold_bps: u64) -> bool {
     match last_price {
         None => true,
@@ -86,6 +142,12 @@ async fn execute_volume_trade(
     direction: &VolumeDirection,
     trade_size_usd: u64,
     config: &state::BotConfig,
+    // icUSD/BOB pool's own spot price (8-dec icUSD per 1 BOB) — only
+    // meaningful for `VolumePool::IcusdBob`. The caller has already run the
+    // deviation guard (`checked_bob_prices`) before calling this, so this is
+    // a guard-checked price, not a fresh unguarded fetch. Ignored (pass 0)
+    // for the ICP-paired pools.
+    bob_pool_price: u64,
 ) -> Result<(u64, u64, u64, u64), String> {
     // Returns: (amount_in, amount_out, price_before, price_after)
     //
@@ -159,17 +221,40 @@ async fn execute_volume_trade(
             (config.icusd_ledger, amount, zfo, ICUSD_FEE, other_fee)
         },
         VolumeDirection::SellBob => {
-            // Spend BOB (NOT $1-pegged) — size via the reference price,
-            // mirroring SellIcp's price-dependent sizing.
-            let bob_amount = if price_before > 0 {
+            // Spend BOB (NOT $1-pegged) — size via the pool's OWN spot
+            // price (`bob_pool_price`), not the reference: the caller has
+            // already guard-checked pool_price against the reference
+            // (`checked_bob_prices`), so sizing off the pool actually being
+            // executed against is now trustworthy, and matches what the
+            // pool will actually quote at execution time.
+            let bob_amount = if bob_pool_price > 0 {
                 let trade_native = trade_size_usd * 100; // icUSD-equivalent target, 8 dec
-                (trade_native as u128 * 100_000_000u128 / price_before as u128) as u64
+                (trade_native as u128 * 100_000_000u128 / bob_pool_price as u128) as u64
             } else {
-                return Err("Zero reference price".to_string());
+                return Err("Zero pool price".to_string());
             };
             let zfo = !base_is_token0;
             (other_ledger, bob_amount, zfo, other_fee, ICUSD_FEE)
         },
+    };
+
+    // min_amount_out for the icUSD/BOB leg, derived from bob_pool_price
+    // (the same guard-checked pool price used for sizing above) and
+    // slippage_bps — closes the min_amount_out=0 gap that let a malicious
+    // pool return an arbitrarily bad amount_out. The ICP-paired pools are
+    // deliberately untouched: this always evaluates to 0 for them.
+    let min_amount_out: u64 = if matches!(pool, VolumePool::IcusdBob) && bob_pool_price > 0 {
+        let slippage = config.slippage_bps.min(10_000);
+        let expected_out: u64 = match direction {
+            // icUSD in → BOB out: amount_in_native is the icUSD amount (8 dec).
+            VolumeDirection::BuyBob => (amount_in_native as u128 * 100_000_000u128 / bob_pool_price as u128) as u64,
+            // BOB in → icUSD out: amount_in_native is the BOB amount (8 dec).
+            VolumeDirection::SellBob => (amount_in_native as u128 * bob_pool_price as u128 / 100_000_000u128) as u64,
+            VolumeDirection::BuyIcp | VolumeDirection::SellIcp => 0,
+        };
+        (expected_out as u128 * (10_000 - slippage) as u128 / 10_000) as u64
+    } else {
+        0
     };
 
     // Step 1: Transfer tokens from volume subaccount to default account
@@ -186,7 +271,7 @@ async fn execute_volume_trade(
         icpswap_pool,
         amount_in_native - token_in_fee,
         zero_for_one,
-        0, // min_amount_out = 0 for volume trades
+        min_amount_out, // 0 for the ICP-paired pools (unchanged); slippage-derived for IcusdBob
         token_in_fee,
         token_out_fee,
     ).await {
@@ -224,9 +309,15 @@ async fn execute_volume_trade(
         for attempt in 0..3 {
             match swaps::transfer_to_subaccount(token_out, transfer_amount, VOLUME_SUBACCOUNT).await {
                 Ok(_) => {
-                    // Clear any previously stranded amount on success
+                    // Clear any previously stranded amount on success. Only
+                    // BuyIcp (receives ICP) and BuyBob (receives BOB) are
+                    // tracked — SellIcp/SellBob receive icUSD/3USD/icUSD,
+                    // none of which the arb drain (ICP or BOB) ever sweeps,
+                    // so there's nothing on those legs to protect.
                     if matches!(direction, VolumeDirection::BuyIcp) {
                         state::mutate_state(|s| { s.volume_stranded_icp = 0; });
+                    } else if matches!(direction, VolumeDirection::BuyBob) {
+                        state::mutate_state(|s| { s.volume_stranded_bob = 0; });
                     }
                     transferred = true;
                     break;
@@ -239,9 +330,11 @@ async fn execute_volume_trade(
             }
         }
         if !transferred {
-            // Mark the ICP as stranded so the arb drain doesn't eat it
+            // Mark the ICP/BOB as stranded so the arb drain doesn't eat it
             if matches!(direction, VolumeDirection::BuyIcp) {
                 state::mutate_state(|s| { s.volume_stranded_icp = transfer_amount; });
+            } else if matches!(direction, VolumeDirection::BuyBob) {
+                state::mutate_state(|s| { s.volume_stranded_bob = transfer_amount; });
             }
             return Err(format!("Transfer to subaccount failed after 3 attempts (funds protected from drain)"));
         }
@@ -310,6 +403,27 @@ pub async fn run_volume_cycle() -> Vec<String> {
         }
     }
 
+    // Recover any BOB stranded in the default account from a prior failure
+    // (mirrors the ICP recovery block above, including its don't-proceed-
+    // on-failure semantics — a stranded BOB recovery failure blocks the
+    // whole cycle, not just the icUSD/BOB pool).
+    let stranded_bob = state::read_state(|s| s.volume_stranded_bob);
+    if stranded_bob > 0 {
+        match swaps::transfer_to_subaccount(bot_config.bob_ledger, stranded_bob, VOLUME_SUBACCOUNT).await {
+            Ok(_) => {
+                state::mutate_state(|s| { s.volume_stranded_bob = 0; });
+                state::log_activity("volume", &format!("Recovered {} stranded BOB to subaccount", stranded_bob));
+                outcomes.push(format!("recovered {} stranded BOB", stranded_bob));
+            }
+            Err(e) => {
+                let msg = format!("Stranded BOB recovery failed (will retry): {:?}", e);
+                state::log_activity("volume", &msg);
+                // Don't proceed with trades while BOB is stranded
+                return vec![format!("blocked: {}", msg)];
+            }
+        }
+    }
+
     let now = ic_cdk::api::time();
 
     let should_reset_daily = now.saturating_sub(volume_config.daily_spend_reset_ts) >= NANOS_PER_DAY;
@@ -337,6 +451,16 @@ pub async fn run_volume_cycle() -> Vec<String> {
             continue;
         }
 
+        // The icUSD/BOB pool ships inert: `icusd_bob.enabled` alone isn't
+        // sufficient — the pool principal itself defaults anonymous until an
+        // admin sets it (see VolumePoolConfig::default() / BotState::default()).
+        // Trading against Principal::anonymous() would panic/fail downstream,
+        // so gate on it explicitly, mirroring setup_approvals' same check.
+        if matches!(pool, VolumePool::IcusdBob) && bot_config.icpswap_icusd_bob_pool == candid::Principal::anonymous() {
+            outcomes.push(format!("{:?}: skipped (pool not configured)", pool));
+            continue;
+        }
+
         // Check per-pool daily cost cap
         if pool_state.daily_cost_usd >= pool_config.daily_cost_cap_usd as i64 {
             outcomes.push(format!(
@@ -349,8 +473,11 @@ pub async fn run_volume_cycle() -> Vec<String> {
         // For the ICP-paired pools, "current_price" is the pool's own 1-ICP
         // quote. For icUSD/BOB it is the external reference (ref_icusd_per_bob)
         // instead — BOB is NOT $1-pegged and its own thin pool is manipulable,
-        // so idle-check + sizing anchor to the multi-venue reference (also
-        // what get_bot_health surfaces as "current_price" for this pool).
+        // so idle-check anchors to the multi-venue reference (also what
+        // get_bot_health surfaces as "current_price" for this pool). Actual
+        // trade sizing/execution for icUSD/BOB uses `bob_pool_price` below
+        // (the pool's own guard-checked quote), set only inside the IcusdBob arm.
+        let mut bob_pool_price: u64 = 0;
         let current_price = match &pool {
             VolumePool::IcusdIcp | VolumePool::ThreeUsdIcp => {
                 let (icpswap_pool, icp_is_token0) = state::read_state(|s| match &pool {
@@ -368,10 +495,18 @@ pub async fn run_volume_cycle() -> Vec<String> {
                     }
                 }
             }
-            VolumePool::IcusdBob => match ref_icusd_per_bob(&bot_config).await {
-                Ok(p) => p,
+            // Cross-pool deviation guard (FIX 2): the pool's own spot price
+            // must agree with the multi-venue reference within
+            // VOLUME_BOB_MAX_DEVIATION_BPS before this cycle sizes/executes
+            // anything against it — see `checked_bob_prices` for the
+            // manipulation rationale.
+            VolumePool::IcusdBob => match checked_bob_prices(&bot_config).await {
+                Ok((ref_price, pool_price)) => {
+                    bob_pool_price = pool_price;
+                    ref_price
+                }
                 Err(e) => {
-                    let msg = format!("{:?}: skipped (reference price fetch failed: {})", pool, e);
+                    let msg = format!("{:?}: skipped ({})", pool, e);
                     state::log_activity("volume", &msg);
                     outcomes.push(msg);
                     continue;
@@ -437,14 +572,15 @@ pub async fn run_volume_cycle() -> Vec<String> {
             }
             // BuyBob spends icUSD ($1-pegged) — flat ×100, same as BuyIcp.
             (VolumeDirection::BuyBob, _) => trade_size * 100,
-            // SellBob spends BOB (NOT $1-pegged) — size via the reference
-            // price (`current_price` is `ref_icusd_per_bob` for this pool).
+            // SellBob spends BOB (NOT $1-pegged) — size via the pool's own
+            // guard-checked price (`bob_pool_price`), matching what
+            // execute_volume_trade will actually size the swap with (FIX 2).
             (VolumeDirection::SellBob, _) => {
-                if current_price > 0 {
+                if bob_pool_price > 0 {
                     let icusd_target_native = trade_size * 100;
-                    (icusd_target_native as u128 * 100_000_000u128 / current_price as u128) as u64
+                    (icusd_target_native as u128 * 100_000_000u128 / bob_pool_price as u128) as u64
                 } else {
-                    outcomes.push(format!("{:?}: skipped (zero reference price)", pool));
+                    outcomes.push(format!("{:?}: skipped (zero pool price)", pool));
                     continue;
                 }
             }
@@ -463,7 +599,7 @@ pub async fn run_volume_cycle() -> Vec<String> {
             continue;
         }
 
-        match execute_volume_trade(pool.clone(), &pool_state.next_direction, trade_size, &bot_config).await {
+        match execute_volume_trade(pool.clone(), &pool_state.next_direction, trade_size, &bot_config, bob_pool_price).await {
             Ok((amount_in, amount_out, price_before, price_after)) => {
                 let (in_usd, out_usd) = match (&pool_state.next_direction, &pool) {
                     (VolumeDirection::BuyIcp, VolumePool::IcusdIcp) => {
@@ -576,11 +712,18 @@ pub async fn run_volume_cycle() -> Vec<String> {
 /// itself (BOB<->icUSD via `icpswap_swap` on `config.icpswap_icusd_bob_pool`)
 /// — deliberately NOT the ICP/Rumi multi-hop route the ICP-paired pools use
 /// (`run_rebalance`'s other arms), since BOB has no relationship to ICP or
-/// the Rumi 3pool. BOB is valued via the reference price (`ref_icusd_per_bob`)
-/// rather than the pool's own (thin, manipulable) quote — same rationale as
-/// `execute_volume_trade`/`run_volume_cycle`.
+/// the Rumi 3pool. The 50/50 drift valuation is marked at the reference price
+/// (`ref_icusd_per_bob`, same rationale as `execute_volume_trade`), but the
+/// actual BOB leg that gets swapped is sized off the pool's own guard-checked
+/// spot price (`pool_price`) once `checked_bob_prices` has proven it's sane
+/// (FIX 2) — trustworthy sizing against the pool actually being executed.
 async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::VolumePoolConfig, drift_threshold: u64) {
     if !pool_config.enabled {
+        return;
+    }
+    // Ships inert: the pool principal defaults anonymous until an admin
+    // sets it, even if `enabled` were somehow flipped first.
+    if config.icpswap_icusd_bob_pool == candid::Principal::anonymous() {
         return;
     }
 
@@ -590,11 +733,13 @@ async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::Vol
     let icusd_bal = swaps::icrc1_balance_of_subaccount(config.icusd_ledger, VOLUME_SUBACCOUNT)
         .await.unwrap_or(0);
 
-    let ref_price = match ref_icusd_per_bob(config).await {
-        Ok(p) if p > 0 => p,
-        Ok(_) => { state::log_activity("volume", "rebalance IcusdBob: zero reference price"); return; }
-        Err(e) => { state::log_activity("volume", &format!("rebalance IcusdBob: reference price failed: {}", e)); return; }
+    // Cross-pool deviation guard (FIX 2) — see `checked_bob_prices`. Defers
+    // to strategy S on failure/deviation exactly like run_volume_cycle does.
+    let (ref_price, pool_price) = match checked_bob_prices(config).await {
+        Ok(p) => p,
+        Err(e) => { state::log_activity("volume", &format!("rebalance IcusdBob: {}", e)); return; }
     };
+    let slippage = config.slippage_bps.min(10_000);
 
     let bob_as_icusd = (bob_bal as u128 * ref_price as u128 / 100_000_000u128) as u64;
     let total = bob_as_icusd + icusd_bal;
@@ -611,7 +756,9 @@ async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::Vol
         // Too much BOB — sell some for icUSD to bring back toward 50/50.
         let target_bob_icusd = total / 2;
         let excess_icusd_equiv = bob_as_icusd.saturating_sub(target_bob_icusd);
-        let excess_bob = (excess_icusd_equiv as u128 * 100_000_000u128 / ref_price as u128) as u64;
+        // Size the BOB leg off the pool's own (guard-checked) price, not the
+        // reference — matches what the pool will actually quote (FIX 2).
+        let excess_bob = (excess_icusd_equiv as u128 * 100_000_000u128 / pool_price as u128) as u64;
         if excess_bob <= config.bob_ledger_fee * 2 {
             return;
         }
@@ -622,11 +769,16 @@ async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::Vol
                 return;
             }
         }
+        let sell_amount = excess_bob - config.bob_ledger_fee;
+        // Expected icUSD out at pool_price, minus slippage tolerance —
+        // closes the min_amount_out=0 gap (FIX 2).
+        let expected_icusd = (sell_amount as u128 * pool_price as u128 / 100_000_000u128) as u64;
+        let min_out = (expected_icusd as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         match swaps::icpswap_swap(
             config.icpswap_icusd_bob_pool,
-            excess_bob - config.bob_ledger_fee,
+            sell_amount,
             bob_is_token0, // selling BOB: zero_for_one = BOB is token0
-            0,
+            min_out,
             config.bob_ledger_fee,
             ICUSD_FEE,
         ).await {
@@ -656,11 +808,15 @@ async fn rebalance_icusd_bob(config: &state::BotConfig, pool_config: &state::Vol
                 return;
             }
         }
+        let sell_amount = excess_icusd - ICUSD_FEE;
+        // Expected BOB out at pool_price, minus slippage tolerance (FIX 2).
+        let expected_bob = (sell_amount as u128 * 100_000_000u128 / pool_price as u128) as u64;
+        let min_out = (expected_bob as u128 * (10_000 - slippage) as u128 / 10_000) as u64;
         match swaps::icpswap_swap(
             config.icpswap_icusd_bob_pool,
-            excess_icusd - ICUSD_FEE,
+            sell_amount,
             !bob_is_token0, // selling icUSD: zero_for_one = icUSD is token0
-            0,
+            min_out,
             ICUSD_FEE,
             config.bob_ledger_fee,
         ).await {

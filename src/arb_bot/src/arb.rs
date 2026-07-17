@@ -3613,7 +3613,12 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
     }
 
     let bob_balance = fetch_balance(config.bob_ledger).await?;
-    if bob_balance <= config.bob_ledger_fee * 10 {
+    // Exclude any BOB stranded by the volume bot's icUSD/BOB path (a failed
+    // transfer-to-subaccount after a BuyBob leg) — that belongs to it, not
+    // to this drain. Mirrors drain_residual_icp's volume_stranded handling.
+    let volume_stranded = state::read_state(|s| s.volume_stranded_bob);
+    let drainable_balance = bob_balance.saturating_sub(volume_stranded);
+    if drainable_balance <= config.bob_ledger_fee * 10 {
         // Dust — not worth a swap. If a pending exit is still marked, the BOB
         // it tracked is gone (nothing left to recover): clear it so it can't
         // hold the drain-relevance gate open forever.
@@ -3625,7 +3630,7 @@ async fn drain_residual_bob(config: &state::BotConfig) -> Result<(), String> {
 
     let slippage = slippage_bps_clamped(config);
     // Leave one transfer fee of headroom for the pool deposit.
-    let drain_amount = bob_balance.saturating_sub(config.bob_ledger_fee);
+    let drain_amount = drainable_balance.saturating_sub(config.bob_ledger_fee);
 
     state::log_activity("drain", &format!(
         "Draining {} residual BOB (balance: {})", drain_amount, bob_balance

@@ -616,6 +616,12 @@ pub struct BotState {
     /// transfer-to-subaccount failure.  The arb drain must not touch this.
     #[serde(default)]
     pub volume_stranded_icp: u64,
+    /// BOB amount stranded in the default account after a volume bot
+    /// icUSD/BOB transfer-to-subaccount failure (BuyBob leg only — SellBob
+    /// receives icUSD, which `drain_residual_bob` never touches). Mirrors
+    /// `volume_stranded_icp`; `drain_residual_bob` must not sweep this.
+    #[serde(default)]
+    pub volume_stranded_bob: u64,
 }
 
 impl Default for BotState {
@@ -672,6 +678,7 @@ impl Default for BotState {
             pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
+            volume_stranded_bob: 0,
         }
     }
 }
@@ -1093,6 +1100,7 @@ pub fn load_from_stable_memory() {
             pending_bob_exit: None,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
+            volume_stranded_bob: 0,
         };
 
         // Touching any thread_local stable structure below triggers

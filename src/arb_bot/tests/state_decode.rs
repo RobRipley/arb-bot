@@ -153,3 +153,18 @@ fn old_state_without_icusd_bob_volume_fields_decodes_with_defaults() {
     assert_eq!(decoded.volume.icusd_bob_state.next_direction, VolumeDirection::BuyBob);
     assert_eq!(decoded.volume.icusd_bob_state.trade_count, 0);
 }
+
+/// Same guard for `volume_stranded_bob` (top-level BotState field, added
+/// alongside the icUSD/BOB hardening pass): a blob persisted before it
+/// existed must still decode, with the balance defaulting to 0 (nothing
+/// stranded) so `drain_residual_bob` doesn't withhold BOB from a fresh
+/// upgrade that never had this field.
+#[test]
+fn old_state_without_volume_stranded_bob_decodes_with_default() {
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let obj = v.as_object_mut().expect("state object");
+    assert!(obj.remove("volume_stranded_bob").is_some());
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode pre-volume_stranded_bob state");
+    assert_eq!(decoded.volume_stranded_bob, 0);
+}
