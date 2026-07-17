@@ -448,7 +448,7 @@ async fn setup_approvals() -> String {
     }
 
     // Volume bot subaccount approvals
-    let volume_approvals = vec![
+    let mut volume_approvals = vec![
         ("Vol: icUSD→ICPSwap-icUSD", config.icusd_ledger, config.icpswap_icusd_pool),
         ("Vol: ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool),
         ("Vol: 3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool),
@@ -457,6 +457,11 @@ async fn setup_approvals() -> String {
         ("Vol: 3USD→RumiAMM", config.three_usd_ledger, config.rumi_amm),
         ("Vol: icUSD→3pool", config.icusd_ledger, config.rumi_3pool),
     ];
+    // Volume bot icUSD/BOB approvals (if the icUSD/BOB pool is configured)
+    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
+        volume_approvals.push(("Vol: icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
+        volume_approvals.push(("Vol: BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
+    }
     for (label, token, spender) in volume_approvals {
         match swaps::approve_infinite_subaccount(token, spender, swaps::VOLUME_SUBACCOUNT).await {
             Ok(_) => ok.push(format!("{}: OK", label)),
