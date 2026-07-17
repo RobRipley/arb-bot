@@ -4285,8 +4285,8 @@
           ['Min Required', minRequired != null
             ? (Number(minRequired) / Math.pow(10, inputDec)).toFixed(inputDec === 8 ? 4 : 2) + ' ' + inputSym
             : '—'],
-          ['Last Price', lastPrice != null ? (Number(lastPrice) / 1e6).toFixed(6) : '—'],
-          ['Current Price', currentPrice != null ? (Number(currentPrice) / 1e6).toFixed(6) : '—'],
+          ['Last Price', lastPrice != null ? (Number(lastPrice) / 1e8).toFixed(6) : '—'],
+          ['Current Price', currentPrice != null ? (Number(currentPrice) / 1e8).toFixed(6) : '—'],
         ];
 
         const el = document.createElement('div');
