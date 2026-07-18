@@ -182,6 +182,12 @@
       font-size: 12px;
       color: var(--text-secondary);
     }
+    /* Labels with a title="" tooltip get a dotted underline + help cursor so
+       the affordance is visible without hovering. */
+    .stat-label.hint {
+      cursor: help;
+      border-bottom: 1px dotted var(--text-muted);
+    }
     .stat-value {
       font-family: var(--font-data);
       font-size: 13px;
@@ -342,6 +348,11 @@
       border-color: var(--accent);
       box-shadow: 0 0 0 2px var(--accent-dim);
     }
+    /* Config form: visible "edited since last hydration" state */
+    select.cfg-dirty, input.cfg-dirty {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-dim);
+    }
     label {
       font-family: var(--font-ui);
       font-size: 11px;
@@ -466,6 +477,31 @@
     .spread-gauge-center { position: absolute; left: 50%; top: -3px; width: 1px; height: 12px; background: var(--text-muted); }
     .spread-gauge-threshold { position: absolute; top: -4px; width: 1px; height: 14px; background: var(--text-tertiary); }
     .spread-action { font-family: var(--font-ui); font-size: 10px; color: var(--text-tertiary); margin-top: var(--sp-1); text-align: center; min-height: 14px; letter-spacing: 0.04em; }
+    /* Paused-strategy rows (rumi_amm_paused): no fake bps, just a status badge */
+    .paused-badge {
+      font-family: var(--font-data);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      color: var(--warning);
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      padding: 2px 8px;
+    }
+    /* Strategy S dry-run indicator: S still evaluates every cycle (real gauge,
+       real pool-vs-ref numbers) even when bob_execution_enabled is false — this
+       badge sits next to the bps value, it never replaces it. */
+    .dryrun-badge {
+      font-family: var(--font-data);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--info);
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      padding: 1px 6px;
+    }
+    .spread-row.row-paused .spread-pool { color: var(--text-tertiary); }
     .chart-tabs, .chart-ranges { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 
     /* ── Activity Entries ── */
@@ -640,6 +676,36 @@
       font-weight: 700;
       font-size: 12px;
     }
+    /* Global wedge banner — sits under the topbar, visible on every view */
+    .wedge-banner {
+      margin-bottom: var(--sp-4);
+    }
+    .wedge-banner .warning-body {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--sp-4);
+      flex-wrap: wrap;
+      padding: var(--sp-4) var(--sp-5);
+    }
+    .wedge-banner-msg {
+      font-family: var(--font-data);
+      font-size: 12px;
+      color: var(--text-primary);
+    }
+    .wedge-banner-actions { display: flex; align-items: center; gap: var(--sp-3); }
+    .wedge-banner-link { color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 600; }
+    .wedge-banner-dismiss {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-tertiary);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+      padding: 4px 8px;
+    }
+    .wedge-banner-dismiss:hover { color: var(--text-primary); border-color: var(--border-emphasis); }
     .pending-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -859,10 +925,14 @@
       .data-table-wrap { overflow-x: auto; }
       #chart-container { height: 350px !important; }
       .hero-strip-content { flex-direction: column; gap: var(--sp-4); }
-      .hero-right { flex-direction: row; gap: var(--sp-6); }
+      .hero-right { flex-direction: row; flex-wrap: wrap; gap: var(--sp-4) var(--sp-6); }
       .deck-grid { grid-template-columns: repeat(2, 1fr); }
       .pending-grid { grid-template-columns: repeat(2, 1fr); }
       .gate-grid { grid-template-columns: 1fr; }
+      /* STRATEGY PRICES tiles + strategy-legend chips: desktop keeps its fixed
+         column counts (unchanged look at wide widths); below 900px both switch
+         to auto-fit so nothing clips at narrow viewports (e.g. 375px). */
+      .strategy-legend { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
     }
     /* Venue/token logos (inlined data-URIs) */
     .venue-logo { display:inline-block; width:14px; height:14px; vertical-align:-3px; margin-right:4px; background-size:cover; background-position:center; background-repeat:no-repeat; border-radius:50%; flex-shrink:0; }
@@ -900,6 +970,24 @@
         <button class="btn btn-sm btn-ghost" id="auth-btn">Login with II</button>
       </div>
     </div>
+
+    <!-- Global wedge banner — shown on every view when the bot health report
+         indicates a stuck state (pending exit / pending BOB exit / stranded
+         volume ICP). Requires an admin login (health is auth-gated). -->
+    <div class="card warning-card wedge-banner" id="wedge-banner" style="display:none">
+      <div class="warning-rail"></div>
+      <div class="warning-body">
+        <div class="warning-header" style="margin-bottom:0">
+          <span class="warning-icon">!</span>
+          <span class="wedge-banner-msg" id="wedge-banner-msg"></span>
+        </div>
+        <div class="wedge-banner-actions">
+          <span class="wedge-banner-link" onclick="switchView('health')">View Health &rarr;</span>
+          <button type="button" class="wedge-banner-dismiss" onclick="dismissWedgeBanner()" title="Dismiss">&times;</button>
+        </div>
+      </div>
+    </div>
+
     <section class="view active" id="view-overview">
       <!-- Hero P&L Strip -->
       <div class="card hero-strip">
@@ -909,8 +997,8 @@
             <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
           </div>
           <div class="hero-right">
-            <div class="hero-stat"><span class="stat-label">Fees Paid</span><span class="stat-value" id="hero-fees"><span class="skeleton skeleton-text"></span></span></div>
-            <div class="hero-stat"><span class="stat-label">Drain Recovery</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label hint" title="Cumulative ICRC-1 ledger transfer fees across all legs. DEX swap fees are already reflected in trade prices, not counted separately.">Fees Paid</span><span class="stat-value" id="hero-fees"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label hint" title="USD recovered by draining accumulated ICP (above the inventory ceiling, or stranded ICP during leg recovery) back into stables. Included in Net P&amp;L.">Drain Recovery</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
           </div>
@@ -919,7 +1007,10 @@
 
       <!-- Spread Thermometer -->
       <div class="card" style="margin-top:var(--sp-4)">
-        <div class="card-header">SPREAD</div>
+        <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+          <span>SPREAD</span>
+          <button type="button" class="chip chip-sm" id="spread-paused-toggle" style="display:none" onclick="togglePausedRows()"></button>
+        </div>
         <div class="spread-row" id="spread-a-row">
           <div class="spread-pair">
             <span class="spread-pool spread-pool-left">Rumi 3USD / ICP</span>
@@ -1116,13 +1207,13 @@
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--sp-2)">
             <span id="spread-s-prices" style="font-size:11px;color:var(--text-tertiary)"></span>
-            <span id="spread-s-dryrun" style="display:none;background:rgba(240,160,91,0.15);color:#f0a05b;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.05em">DRY-RUN</span>
+            <span id="spread-s-dryrun" class="dryrun-badge" style="display:none">DRY-RUN</span>
           </div>
         </div>
       </div>
 
       <!-- Live Prices + Balances -->
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
+      <div class="overview-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
         <div class="card">
           <div class="card-header">STRATEGY PRICES</div>
           <div class="price-sources">
@@ -1195,6 +1286,7 @@
             <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="vol-bal-bob">--</span></div>
             <div class="divider"></div>
             <div class="stat-row"><span class="stat-label" style="font-weight:600">Total ≈</span><span class="stat-value" id="vol-bal-total">--</span></div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:var(--sp-1)">* 3USD ledger has no subaccounts — shown balance is the shared main-account balance.</div>
           </div>
         </div>
       </div>
@@ -1251,6 +1343,7 @@
           <button class="chip chip-sm" data-range="0" onclick="switchRange(0)">All</button>
         </div>
       </div>
+      <div id="chart-paused-note" style="display:none;font-size:11px;color:var(--text-muted);margin-bottom:var(--sp-2)">5 Rumi strategies paused — series hidden</div>
       <div class="card" style="padding:var(--sp-3)">
         <div id="chart-container" style="height:500px;width:100%"></div>
       </div>
@@ -1258,7 +1351,7 @@
       <div id="chart-empty" style="display:none;text-align:center;padding:var(--sp-10);color:var(--text-tertiary)">
         <div style="font-size:24px;margin-bottom:var(--sp-3)">📊</div>
         <div style="font-size:14px;font-weight:500;color:var(--text-secondary);margin-bottom:var(--sp-2)">Collecting data...</div>
-        <div style="font-size:12px">The bot records prices, balances, and spreads every 3 minutes.<br>Charts will appear as data accumulates.</div>
+        <div style="font-size:12px" id="chart-empty-copy">The bot records prices, balances, and spreads every cycle.<br>Charts will appear as data accumulates.</div>
       </div>
     </section>
     <section class="view" id="view-trades">
@@ -1405,6 +1498,35 @@
         <p class="card-subtitle">Each card shows the first gate that would block this pool in the next cycle. If <span style="color:var(--accent)">READY</span>, the pool will trade.</p>
         <div class="gate-grid" id="gate-grid">
           <div class="gate-placeholder">Click Refresh to load bot health.</div>
+        </div>
+      </div>
+
+      <!-- Incident toolkit: escape hatches for stuck state -->
+      <div class="card">
+        <div class="card-header">INCIDENT TOOLKIT</div>
+        <p class="card-subtitle">Escape hatches for stuck state. These act immediately on mainnet — read the confirmation before clicking.</p>
+
+        <div style="display:flex;flex-direction:column;gap:var(--sp-4)">
+          <div>
+            <label>Clear Cycle Lock</label>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Force-releases a wedged arb-cycle lock. Only use if a cycle has been "in progress" for far longer than the interval.</div>
+            <button class="btn btn-sm" onclick="doClearCycleLock(this)">Clear Cycle Lock</button>
+          </div>
+
+          <div style="border-top:1px solid var(--border);padding-top:var(--sp-3)">
+            <label>Recover PartyDEX Balance</label>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Sweeps base + quote funds stranded inside a PartyDEX pool's internal balance back to the bot's main account. Enter the pool principal (the configured PartyDEX ckUSDC or ckUSDT pool).</div>
+            <div style="display:flex;gap:var(--sp-2)">
+              <input type="text" id="incident-partydex-pool" placeholder="Pool principal" style="flex:1">
+              <button class="btn btn-sm" onclick="doRecoverPartydexBalance(this)">Recover</button>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--border);padding-top:var(--sp-3)">
+            <label>Backfill Trade Legs</label>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:var(--sp-2)">Appends historical trade legs. The argument is a vector of records — too complex for a form; run via dfx instead. Click to copy a starting template (fill in real values before running).</div>
+            <code style="display:block;font-size:11px;font-family:var(--font-data);background:var(--surface-input);border:1px solid var(--border);border-radius:var(--radius-md);padding:10px 12px;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent, 'Command copied')" title="Click to copy" id="incident-backfill-cmd"></code>
+          </div>
         </div>
       </div>
 
@@ -1717,6 +1839,7 @@
         <div class="stat-row"><span class="stat-label">3USD</span><span class="stat-value" id="vp-bal-3usd">--</span></div>
         <div class="stat-row"><span class="stat-label">BOB</span><span class="stat-value" id="vp-bal-bob">--</span></div>
         <div class="stat-row" style="border-top:1px solid var(--border);padding-top:var(--sp-2);margin-top:var(--sp-1)"><span class="stat-label" style="font-weight:600">Total (USD)</span><span class="stat-value" style="font-weight:600;color:var(--accent)" id="vp-bal-total">--</span></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:var(--sp-1)">* 3USD ledger has no subaccounts — shown balance is the shared main-account balance.</div>
       </div>
     </div>
 
@@ -2137,6 +2260,8 @@
         dry_run_strategy_q: I.Func([], [DryRunResult], []),
         dry_run_strategy_r: I.Func([], [DryRunResult], []),
         withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
+        recover_partydex_balance: I.Func([I.Principal], [I.Variant({ Ok: I.Tuple(I.Nat64, I.Nat64), Err: I.Text })], []),
+        backfill_trade_legs: I.Func([I.Vec(TradeLeg)], [], []),
         pool_deposit: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
         pool_redeem: I.Func([I.Nat8, I.Nat64, I.Nat64], [], []),
         pool_quote_deposit: I.Func([I.Nat8, I.Nat64], [PoolQuoteResult], []),
@@ -2370,6 +2495,7 @@
       const navItem = document.querySelector(`.nav-item[data-view="${name}"]`);
       if (navItem) navItem.classList.add('active');
       document.getElementById('view-' + name)?.classList.add('active');
+      document.querySelector('main.content').scrollTop = 0;
       clearInterval(chartsRefreshInterval);
       chartsRefreshInterval = null;
       if (name === 'charts') {
@@ -2385,7 +2511,7 @@
         volSwapUpdateBalances();
       }
       if (name === 'health') {
-        loadHealth();
+        fetchHealth();
       }
     }
     window.switchView = switchView;
@@ -2467,6 +2593,83 @@
       document.getElementById('bal-total').textContent = '$' + total.toFixed(2);
     }
 
+    // ═══════ Admin: Config Form Hydration + Dirty Tracking ═══════
+    //
+    // cfg-* inputs used to be write-only (placeholders only, never showing the
+    // live value). Now get_config hydrates them — but never while the user is
+    // actively editing (focused) or has typed since the last hydration
+    // (data-dirty). Units here must mirror saveConfig's parsing exactly.
+    const CFG_FIELD_MAP = {
+      'cfg-min-spread':          { get: c => bi(c.min_spread_bps),                          fmt: v => String(v) },
+      'cfg-max-trade':           { get: c => bi(c.max_trade_size_usd) / 1e6,                 fmt: v => v.toFixed(2) },
+      'cfg-min-profit':          { get: c => bi(c.min_profit_usd) / 1e6,                     fmt: v => v.toFixed(2) },
+      'cfg-arb-interval':        { get: c => bi(c.arb_interval_secs),                        fmt: v => String(v) },
+      'cfg-partydex-ckusdc-fee': { get: c => bi(c.partydex_ckusdc_fee_pips),                 fmt: v => String(v) },
+      'cfg-partydex-ckusdt-fee': { get: c => bi(c.partydex_ckusdt_fee_pips),                 fmt: v => String(v) },
+      'cfg-icp-floor':           { get: c => bi(c.icp_inventory_floor_e8s) / 1e8,            fmt: v => v.toFixed(2) },
+      'cfg-icp-ceiling':         { get: c => bi(c.icp_inventory_ceiling_e8s) / 1e8,          fmt: v => v.toFixed(2) },
+      'cfg-bob-max-trade':       { get: c => bi(c.bob_max_trade_size_usd) / 1e6,              fmt: v => v.toFixed(2) },
+      'cfg-bob-min-spread':      { get: c => bi(c.bob_min_spread_bps),                        fmt: v => String(v) },
+      'cfg-bob-icp-pool':        { get: c => c.icpswap_bob_icp_pool.toText(),                 isText: true },
+      'cfg-icusd-bob-pool':      { get: c => c.icpswap_icusd_bob_pool.toText(),               isText: true },
+    };
+    const CFG_UNSET_PRINCIPAL = '2vxsx-fae';
+
+    function markCfgDirty(el) {
+      el.dataset.dirty = '1';
+      el.classList.add('cfg-dirty');
+    }
+    function clearCfgDirty(el) {
+      delete el.dataset.dirty;
+      el.classList.remove('cfg-dirty');
+    }
+
+    // Shared by any form that needs "don't clobber what the user is mid-typing"
+    // protection (Admin config form, Volume config forms). Checkboxes track
+    // dirty on 'change' (there's no partial-typing state to protect mid-input);
+    // everything else tracks on 'input'.
+    function bindDirtyTracking(ids) {
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el || el._dirtyTrackingBound) return;
+        el._dirtyTrackingBound = true;
+        const evt = (el.type === 'checkbox') ? 'change' : 'input';
+        el.addEventListener(evt, () => markCfgDirty(el));
+      });
+    }
+
+    function initCfgDirtyTracking() {
+      bindDirtyTracking(Object.keys(CFG_FIELD_MAP));
+    }
+
+    function hydrateConfigForm(config) {
+      if (!config) return;
+      initCfgDirtyTracking();
+      Object.entries(CFG_FIELD_MAP).forEach(([id, spec]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        // Never clobber an input the user is actively editing or has edited
+        // since the last hydration/save.
+        if (el.dataset.dirty || document.activeElement === el) return;
+        let raw;
+        try { raw = spec.get(config); } catch (e) { return; }
+        if (spec.isText) {
+          el.value = (raw === CFG_UNSET_PRINCIPAL) ? '' : raw;
+        } else {
+          el.value = spec.fmt(raw);
+        }
+        clearCfgDirty(el);
+      });
+    }
+
+    function updateChartEmptyCopy(config) {
+      const el = document.getElementById('chart-empty-copy');
+      if (!el) return;
+      const secs = config ? bi(config.arb_interval_secs) : null;
+      const cadence = (secs && secs > 0) ? `every ${Math.max(1, Math.round(secs / 60))} minute${Math.round(secs / 60) === 1 ? '' : 's'}` : 'each cycle';
+      el.innerHTML = `The bot records prices, balances, and spreads ${cadence}.<br>Charts will appear as data accumulates.`;
+    }
+
     async function loadConfig() {
       try {
         const config = await anonymousActor.get_config();
@@ -2476,6 +2679,8 @@
         dot.className = 'status-dot ' + (config.paused ? 'paused' : 'running');
         label.textContent = config.paused ? 'Paused' : 'Running';
         displayConfig();
+        hydrateConfigForm(config);
+        updateChartEmptyCopy(config);
       } catch (e) { console.error('loadConfig:', e); }
     }
 
@@ -2550,14 +2755,19 @@
         // Update spread thermometers (live get_prices only covers A and B; C and D
         // come from the snapshot loader since get_prices doesn't query those pools)
         const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
-        updateSpreadGauge(
-          document.getElementById('spread-a-fill'),
-          document.getElementById('spread-a-value'),
-          document.getElementById('spread-a-thresh-l'),
-          document.getElementById('spread-a-thresh-r'),
-          bi(p.spread_bps), minSpread,
-          document.getElementById('spread-a-action')
-        );
+        // Row A trades against the Rumi 3USD/ICP pool — when rumi_amm_paused,
+        // loadOverviewFromSnapshot has already put up a PAUSED badge; don't
+        // clobber it with a live (but meaningless) number.
+        if (!(currentConfig && currentConfig.rumi_amm_paused)) {
+          updateSpreadGauge(
+            document.getElementById('spread-a-fill'),
+            document.getElementById('spread-a-value'),
+            document.getElementById('spread-a-thresh-l'),
+            document.getElementById('spread-a-thresh-r'),
+            bi(p.spread_bps), minSpread,
+            document.getElementById('spread-a-action')
+          );
+        }
         const icusdPrice = bi(p.icpswap_icusd_icp_price);
         if (icusdPrice > 0) {
           updateSpreadGauge(
@@ -2714,6 +2924,50 @@
       } catch (e) { console.error('loadRecentVolumeTrades:', e); }
     }
 
+    // ═══════ Paused-strategy rows (rumi_amm_paused) ═══════
+    //
+    // Rows a/c/d/q/r trade against the Rumi 3USD/ICP pool; when that venue is
+    // paused they show a muted PAUSED badge instead of a live (and misleading)
+    // spread reading. A toggle chip in the SPREAD card header lets the user
+    // show/hide the paused rows entirely; the choice persists in localStorage.
+    const PAUSED_STRATEGY_LETTERS = ['a', 'c', 'd', 'q', 'r'];
+
+    function pausedRowsVisible() {
+      return localStorage.getItem('rumi_dash_show_paused') === 'true';
+    }
+
+    window.togglePausedRows = function() {
+      localStorage.setItem('rumi_dash_show_paused', pausedRowsVisible() ? 'false' : 'true');
+      applyPausedRowsState(!!(currentConfig && currentConfig.rumi_amm_paused));
+    };
+
+    function applyPausedRowsState(rumiPaused) {
+      const chip = document.getElementById('spread-paused-toggle');
+      const visible = pausedRowsVisible();
+      if (chip) {
+        chip.style.display = rumiPaused ? '' : 'none';
+        chip.textContent = (visible ? 'Hide ' : 'Show ') + PAUSED_STRATEGY_LETTERS.length + ' paused';
+      }
+      PAUSED_STRATEGY_LETTERS.forEach(function(t) {
+        const row = document.getElementById('spread-' + t + '-row');
+        if (!row) return;
+        row.classList.toggle('row-paused', rumiPaused);
+        const valueEl = row.querySelector('.spread-value');
+        const trackEl = row.querySelector('.spread-gauge-track');
+        const actionEl = row.querySelector('.spread-action');
+        if (rumiPaused) {
+          if (valueEl) valueEl.innerHTML = '<span class="paused-badge">PAUSED</span>';
+          if (trackEl) trackEl.style.display = 'none';
+          if (actionEl) actionEl.style.display = 'none';
+          row.style.display = visible ? '' : 'none';
+        } else {
+          if (trackEl) trackEl.style.display = '';
+          if (actionEl) actionEl.style.display = '';
+          row.style.display = '';
+        }
+      });
+    }
+
     async function loadOverviewFromSnapshot() {
       try {
         const snaps = await anonymousActor.get_snapshots(BigInt(0), BigInt(1));
@@ -2721,10 +2975,7 @@
         const s = snaps[0];
 
         const rumiPaused = !!(currentConfig && currentConfig.rumi_amm_paused);
-        ['a','c','d','q','r'].forEach(function(t){
-          const row = document.getElementById('spread-' + t + '-row');
-          if (row) row.style.display = rumiPaused ? 'none' : '';
-        });
+        applyPausedRowsState(rumiPaused);
 
         const vp = bi(s.virtual_price) / 1e18;
         const rumiUsd = bi(s.rumi_icp_price_usd) / 1e6;
@@ -2756,14 +3007,19 @@
         window._latestPrices = { vp, icpswap: icpswapCkusdc };
 
         const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
-        updateSpreadGauge(
-          document.getElementById('spread-a-fill'),
-          document.getElementById('spread-a-value'),
-          document.getElementById('spread-a-thresh-l'),
-          document.getElementById('spread-a-thresh-r'),
-          bi(s.spread_a_bps), minSpread,
-          document.getElementById('spread-a-action')
-        );
+        // Strategies A, C, D trade against the Rumi 3USD/ICP pool — skip live
+        // gauge updates while it's paused so the PAUSED badge (set above by
+        // applyPausedRowsState) isn't immediately overwritten with a number.
+        if (!rumiPaused) {
+          updateSpreadGauge(
+            document.getElementById('spread-a-fill'),
+            document.getElementById('spread-a-value'),
+            document.getElementById('spread-a-thresh-l'),
+            document.getElementById('spread-a-thresh-r'),
+            bi(s.spread_a_bps), minSpread,
+            document.getElementById('spread-a-action')
+          );
+        }
         if (icusdPrice > 0) {
           updateSpreadGauge(
             document.getElementById('spread-b-fill'),
@@ -2776,30 +3032,32 @@
         } else {
           document.getElementById('spread-b-value').textContent = 'N/A';
         }
-        if (ckusdtPrice > 0) {
-          updateSpreadGauge(
-            document.getElementById('spread-c-fill'),
-            document.getElementById('spread-c-value'),
-            document.getElementById('spread-c-thresh-l'),
-            document.getElementById('spread-c-thresh-r'),
-            bi(s.spread_c_bps), minSpread,
-            document.getElementById('spread-c-action')
-          );
-        } else {
-          document.getElementById('spread-c-value').textContent = 'N/A';
-        }
-        // Strategy D: Rumi 3pool vs ICPSwap icUSD pool
-        if (icusdPrice > 0) {
-          updateSpreadGauge(
-            document.getElementById('spread-d-fill'),
-            document.getElementById('spread-d-value'),
-            document.getElementById('spread-d-thresh-l'),
-            document.getElementById('spread-d-thresh-r'),
-            bi(s.spread_d_bps !== undefined ? s.spread_d_bps : 0), minSpread,
-            document.getElementById('spread-d-action')
-          );
-        } else {
-          document.getElementById('spread-d-value').textContent = 'N/A';
+        if (!rumiPaused) {
+          if (ckusdtPrice > 0) {
+            updateSpreadGauge(
+              document.getElementById('spread-c-fill'),
+              document.getElementById('spread-c-value'),
+              document.getElementById('spread-c-thresh-l'),
+              document.getElementById('spread-c-thresh-r'),
+              bi(s.spread_c_bps), minSpread,
+              document.getElementById('spread-c-action')
+            );
+          } else {
+            document.getElementById('spread-c-value').textContent = 'N/A';
+          }
+          // Strategy D: Rumi 3pool vs ICPSwap icUSD pool
+          if (icusdPrice > 0) {
+            updateSpreadGauge(
+              document.getElementById('spread-d-fill'),
+              document.getElementById('spread-d-value'),
+              document.getElementById('spread-d-thresh-l'),
+              document.getElementById('spread-d-thresh-r'),
+              bi(s.spread_d_bps !== undefined ? s.spread_d_bps : 0), minSpread,
+              document.getElementById('spread-d-action')
+            );
+          } else {
+            document.getElementById('spread-d-value').textContent = 'N/A';
+          }
         }
         // Strategy F: ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP
         if (icusdPrice > 0 && ckusdtPrice > 0) {
@@ -2898,31 +3156,35 @@
         } else {
           document.getElementById('spread-p-value').textContent = 'N/A';
         }
-        // Strategy Q: Rumi 3USD/ICP vs PartyDEX ckUSDC
-        if (hasPartydexCkusdc) {
-          updateSpreadGauge(
-            document.getElementById('spread-q-fill'),
-            document.getElementById('spread-q-value'),
-            document.getElementById('spread-q-thresh-l'),
-            document.getElementById('spread-q-thresh-r'),
-            bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0), minSpread,
-            document.getElementById('spread-q-action')
-          );
-        } else {
-          document.getElementById('spread-q-value').textContent = 'N/A';
-        }
-        // Strategy R: Rumi 3USD/ICP vs PartyDEX ckUSDT
-        if (hasPartydexCkusdt) {
-          updateSpreadGauge(
-            document.getElementById('spread-r-fill'),
-            document.getElementById('spread-r-value'),
-            document.getElementById('spread-r-thresh-l'),
-            document.getElementById('spread-r-thresh-r'),
-            bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0), minSpread,
-            document.getElementById('spread-r-action')
-          );
-        } else {
-          document.getElementById('spread-r-value').textContent = 'N/A';
+        // Strategies Q and R trade against the Rumi 3USD/ICP pool — same
+        // pause guard as A/C/D above.
+        if (!rumiPaused) {
+          // Strategy Q: Rumi 3USD/ICP vs PartyDEX ckUSDC
+          if (hasPartydexCkusdc) {
+            updateSpreadGauge(
+              document.getElementById('spread-q-fill'),
+              document.getElementById('spread-q-value'),
+              document.getElementById('spread-q-thresh-l'),
+              document.getElementById('spread-q-thresh-r'),
+              bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0), minSpread,
+              document.getElementById('spread-q-action')
+            );
+          } else {
+            document.getElementById('spread-q-value').textContent = 'N/A';
+          }
+          // Strategy R: Rumi 3USD/ICP vs PartyDEX ckUSDT
+          if (hasPartydexCkusdt) {
+            updateSpreadGauge(
+              document.getElementById('spread-r-fill'),
+              document.getElementById('spread-r-value'),
+              document.getElementById('spread-r-thresh-l'),
+              document.getElementById('spread-r-thresh-r'),
+              bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0), minSpread,
+              document.getElementById('spread-r-action')
+            );
+          } else {
+            document.getElementById('spread-r-value').textContent = 'N/A';
+          }
         }
         // Strategy S: ICPSwap icUSD/BOB pool vs (BOB/ICP × USD/ICP) reference.
         // Gated on BOTH BOB pools being configured (has_bob in arb.rs); uses
@@ -3074,6 +3336,12 @@
 
     // ═══════ Load All ═══════
 
+    // Ticks once per loadAll() call (every 30s, see init()). Health is polled
+    // on every 2nd tick (~60s) regardless of the active view, so the wedge
+    // banner and the cached latestHealthReport stay fresh even when the user
+    // never opens the Health view.
+    let loadAllTickCount = 0;
+
     async function loadAll() {
       await loadConfig();
       loadSummary();
@@ -3089,6 +3357,10 @@
       if (authenticatedActor && currentConfig) {
         loadMyBalances(currentConfig);
         displayConfig();
+      }
+      loadAllTickCount++;
+      if (authenticatedActor && loadAllTickCount % 2 === 0) {
+        fetchHealth(); // de-dupes against any concurrent view-open/manual refresh
       }
       document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }
@@ -3183,6 +3455,11 @@
         chartInstance.remove();
         chartInstance = null;
       }
+      // Every render*Chart function calls destroyChart() first, so this is the
+      // one place to reset the paused-series note; renderSpreadChart is the
+      // only one that re-shows it when applicable.
+      const note = document.getElementById('chart-paused-note');
+      if (note) note.style.display = 'none';
     }
 
     function filterByRange(snapshots, rangeSeconds) {
@@ -3199,7 +3476,17 @@
 
       chartInstance = createBaseChart('chart-container');
 
-      const seriesA = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
+      // A/C/D/Q/R skip their arb cycle entirely while the Rumi AMM is paused
+      // (see rumi_amm_paused gate in arb.rs) and snapshots record a flat 0 for
+      // them the whole time — that's not a real spread, so hide those series
+      // (line + price-axis label) rather than bury the live series under dead
+      // 0.00 lines. Only A, Q, and R are actually plotted on this chart today;
+      // C/D have no chart series to hide.
+      const rumiPaused = !!(currentConfig && currentConfig.rumi_amm_paused);
+      const pausedNote = document.getElementById('chart-paused-note');
+      if (pausedNote) pausedNote.style.display = rumiPaused ? 'block' : 'none';
+
+      const seriesA = rumiPaused ? null : chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
       const seriesB = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'Strategy B' });
       const seriesF = chartInstance.addLineSeries({ color: '#f06292', lineWidth: 2, title: 'Strategy F' });
       const seriesK = chartInstance.addLineSeries({ color: '#26c6da', lineWidth: 2, title: 'Strategy K' });
@@ -3208,10 +3495,9 @@
       const seriesN = chartInstance.addLineSeries({ color: '#66bb6a', lineWidth: 2, title: 'Strategy N' });
       const seriesO = chartInstance.addLineSeries({ color: '#ef5350', lineWidth: 2, title: 'Strategy O' });
       const seriesP = chartInstance.addLineSeries({ color: '#5c6bc0', lineWidth: 2, title: 'Strategy P' });
-      const seriesQ = chartInstance.addLineSeries({ color: '#8d6e63', lineWidth: 2, title: 'Strategy Q' });
-      const seriesR = chartInstance.addLineSeries({ color: '#78909c', lineWidth: 2, title: 'Strategy R' });
+      const seriesQ = rumiPaused ? null : chartInstance.addLineSeries({ color: '#8d6e63', lineWidth: 2, title: 'Strategy Q' });
+      const seriesR = rumiPaused ? null : chartInstance.addLineSeries({ color: '#78909c', lineWidth: 2, title: 'Strategy R' });
 
-      const dataA = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) }));
       const dataB = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_b_bps) }));
       const dataF = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_f_bps !== undefined ? s.spread_f_bps : 0) }));
       const dataK = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_k_bps !== undefined ? s.spread_k_bps : 0) }));
@@ -3220,10 +3506,8 @@
       const dataN = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_n_bps !== undefined ? s.spread_n_bps : 0) }));
       const dataO = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_o_bps !== undefined ? s.spread_o_bps : 0) }));
       const dataP = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_p_bps !== undefined ? s.spread_p_bps : 0) }));
-      const dataQ = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0) }));
-      const dataR = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0) }));
 
-      seriesA.setData(dataA);
+      if (seriesA) seriesA.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) })));
       seriesB.setData(dataB);
       seriesF.setData(dataF);
       seriesK.setData(dataK);
@@ -3232,8 +3516,8 @@
       seriesN.setData(dataN);
       seriesO.setData(dataO);
       seriesP.setData(dataP);
-      seriesQ.setData(dataQ);
-      seriesR.setData(dataR);
+      if (seriesQ) seriesQ.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0) })));
+      if (seriesR) seriesR.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0) })));
 
       const markersA = snapshots.filter(s => s.traded && s.strategy_used === 'A')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#00d4aa', shape: 'circle', size: 1 }));
@@ -3257,7 +3541,7 @@
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#8d6e63', shape: 'circle', size: 1 }));
       const markersR = snapshots.filter(s => s.traded && s.strategy_used === 'R')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#78909c', shape: 'circle', size: 1 }));
-      if (markersA.length) seriesA.setMarkers(markersA);
+      if (seriesA && markersA.length) seriesA.setMarkers(markersA);
       if (markersB.length) seriesB.setMarkers(markersB);
       if (markersF.length) seriesF.setMarkers(markersF);
       if (markersK.length) seriesK.setMarkers(markersK);
@@ -3266,12 +3550,14 @@
       if (markersN.length) seriesN.setMarkers(markersN);
       if (markersO.length) seriesO.setMarkers(markersO);
       if (markersP.length) seriesP.setMarkers(markersP);
-      if (markersQ.length) seriesQ.setMarkers(markersQ);
-      if (markersR.length) seriesR.setMarkers(markersR);
+      if (seriesQ && markersQ.length) seriesQ.setMarkers(markersQ);
+      if (seriesR && markersR.length) seriesR.setMarkers(markersR);
 
+      // Anchor the threshold price lines on seriesB (always present) instead
+      // of seriesA, which may be null while the Rumi AMM is paused.
       const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
-      seriesA.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
-      seriesA.createPriceLine({ price: -minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '-threshold' });
+      seriesB.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
+      seriesB.createPriceLine({ price: -minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '-threshold' });
 
       chartInstance.timeScale().fitContent();
       updateChartFooter(snapshots.length);
@@ -3650,20 +3936,25 @@
           if (res.Err) throw new Error(res.Err);
         }
         showToast('Config updated', 'success');
-        await loadConfig();
-        displayConfig();
-        document.getElementById('cfg-min-spread').value = '';
-        document.getElementById('cfg-max-trade').value = '';
-        document.getElementById('cfg-min-profit').value = '';
-        document.getElementById('cfg-arb-interval').value = '';
-        document.getElementById('cfg-partydex-ckusdc-fee').value = '';
-        document.getElementById('cfg-partydex-ckusdt-fee').value = '';
-        document.getElementById('cfg-icp-floor').value = '';
-        document.getElementById('cfg-icp-ceiling').value = '';
-        document.getElementById('cfg-bob-max-trade').value = '';
-        document.getElementById('cfg-bob-min-spread').value = '';
-        document.getElementById('cfg-bob-icp-pool').value = '';
-        document.getElementById('cfg-icusd-bob-pool').value = '';
+        // Clear the dirty flag only on the fields that were actually part of
+        // this save — any other field the user is mid-editing (but hasn't
+        // submitted) keeps its typed value; hydrateConfigForm below will
+        // still skip it. The cleared fields pick up the new live truth.
+        const savedFieldIds = [];
+        if (!isNaN(minSpread)) savedFieldIds.push('cfg-min-spread');
+        if (!isNaN(maxTradeRaw)) savedFieldIds.push('cfg-max-trade');
+        if (!isNaN(minProfitRaw)) savedFieldIds.push('cfg-min-profit');
+        if (!isNaN(arbIntervalRaw)) savedFieldIds.push('cfg-arb-interval');
+        if (!isNaN(partydexCkusdcFee)) savedFieldIds.push('cfg-partydex-ckusdc-fee');
+        if (!isNaN(partydexCkusdtFee)) savedFieldIds.push('cfg-partydex-ckusdt-fee');
+        if (!isNaN(icpFloorRaw)) savedFieldIds.push('cfg-icp-floor');
+        if (!isNaN(icpCeilingRaw)) savedFieldIds.push('cfg-icp-ceiling');
+        if (!isNaN(bobMaxTradeRaw)) savedFieldIds.push('cfg-bob-max-trade');
+        if (!isNaN(bobMinSpreadRaw)) savedFieldIds.push('cfg-bob-min-spread');
+        if (bobIcpPoolRaw) savedFieldIds.push('cfg-bob-icp-pool');
+        if (icusdBobPoolRaw) savedFieldIds.push('cfg-icusd-bob-pool');
+        savedFieldIds.forEach(id => { const el = document.getElementById(id); if (el) clearCfgDirty(el); });
+        await loadConfig(); // re-fetches get_config and re-hydrates the form with live truth
       } catch (e) { showToast('Save failed: ' + e.message, 'error'); }
       finally { btnDone(btn); }
     };
@@ -4010,6 +4301,35 @@
     function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
     function volFmtSignedUsd6(v) { return (Number(v) / 1_000_000).toFixed(4); }
 
+    // ═══════ Volume: Config Form Dirty Tracking ═══════
+    //
+    // Same problem the Admin config form had: loadVolumeData() re-hydrates all
+    // three pool forms (+ global settings) every poll AND after every save, so
+    // saving pool X used to wipe half-typed edits in pool Y's form. Same fix:
+    // per-field dirty tracking, hydration skips focused/dirty fields, and each
+    // save only clears dirty on the fields it actually saved.
+    const VOL_DIRTY_FIELD_IDS = [
+      'vol-icusd-enabled', 'vol-icusd-trade-size', 'vol-icusd-variance', 'vol-icusd-idle-threshold', 'vol-icusd-daily-cap',
+      'vol-3usd-enabled', 'vol-3usd-trade-size', 'vol-3usd-variance', 'vol-3usd-idle-threshold', 'vol-3usd-daily-cap',
+      'vol-icusdbob-enabled', 'vol-icusdbob-trade-size', 'vol-icusdbob-variance', 'vol-icusdbob-idle-threshold', 'vol-icusdbob-daily-cap',
+      'vol-global-interval', 'vol-global-drift',
+    ];
+    function initVolDirtyTracking() {
+      bindDirtyTracking(VOL_DIRTY_FIELD_IDS);
+    }
+    // Sets one field's live value unless it's focused or dirty; clears dirty
+    // on fields it does update (mirrors hydrateConfigForm's contract).
+    function hydrateVolField(id, value) {
+      const el = document.getElementById(id);
+      if (!el || el.dataset.dirty || document.activeElement === el) return;
+      if (el.type === 'checkbox') el.checked = value;
+      else el.value = value;
+      clearCfgDirty(el);
+    }
+    function clearVolDirty(ids) {
+      ids.forEach(id => { const el = document.getElementById(id); if (el) clearCfgDirty(el); });
+    }
+
     async function loadVolumeData() {
       try {
         const actor = authenticatedActor || anonymousActor;
@@ -4049,26 +4369,31 @@
         document.getElementById('vol-total-trades').textContent = stats.total_trade_count.toString();
         document.getElementById('vol-interval').textContent = stats.interval_secs.toString() + 's';
 
-        // Populate config forms
-        document.getElementById('vol-icusd-enabled').checked = ic.config.enabled;
-        document.getElementById('vol-icusd-trade-size').value = volFmtUsd6(ic.config.trade_size_usd);
-        document.getElementById('vol-icusd-variance').value = ic.config.trade_variance_pct.toString();
-        document.getElementById('vol-icusd-idle-threshold').value = ic.config.idle_threshold_bps.toString();
-        document.getElementById('vol-icusd-daily-cap').value = volFmtUsd6(ic.config.daily_cost_cap_usd);
+        // Populate config forms — skip any field the user is focused on or has
+        // edited since the last hydration/save (see VOL_DIRTY_FIELD_IDS above).
+        initVolDirtyTracking();
+        hydrateVolField('vol-icusd-enabled', ic.config.enabled);
+        hydrateVolField('vol-icusd-trade-size', volFmtUsd6(ic.config.trade_size_usd));
+        hydrateVolField('vol-icusd-variance', ic.config.trade_variance_pct.toString());
+        hydrateVolField('vol-icusd-idle-threshold', ic.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-icusd-daily-cap', volFmtUsd6(ic.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-3usd-enabled').checked = tu.config.enabled;
-        document.getElementById('vol-3usd-trade-size').value = volFmtUsd6(tu.config.trade_size_usd);
-        document.getElementById('vol-3usd-variance').value = tu.config.trade_variance_pct.toString();
-        document.getElementById('vol-3usd-idle-threshold').value = tu.config.idle_threshold_bps.toString();
-        document.getElementById('vol-3usd-daily-cap').value = volFmtUsd6(tu.config.daily_cost_cap_usd);
+        hydrateVolField('vol-3usd-enabled', tu.config.enabled);
+        hydrateVolField('vol-3usd-trade-size', volFmtUsd6(tu.config.trade_size_usd));
+        hydrateVolField('vol-3usd-variance', tu.config.trade_variance_pct.toString());
+        hydrateVolField('vol-3usd-idle-threshold', tu.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-3usd-daily-cap', volFmtUsd6(tu.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-icusdbob-enabled').checked = ib.config.enabled;
-        document.getElementById('vol-icusdbob-trade-size').value = volFmtUsd6(ib.config.trade_size_usd);
-        document.getElementById('vol-icusdbob-variance').value = ib.config.trade_variance_pct.toString();
-        document.getElementById('vol-icusdbob-idle-threshold').value = ib.config.idle_threshold_bps.toString();
-        document.getElementById('vol-icusdbob-daily-cap').value = volFmtUsd6(ib.config.daily_cost_cap_usd);
+        hydrateVolField('vol-icusdbob-enabled', ib.config.enabled);
+        hydrateVolField('vol-icusdbob-trade-size', volFmtUsd6(ib.config.trade_size_usd));
+        hydrateVolField('vol-icusdbob-variance', ib.config.trade_variance_pct.toString());
+        hydrateVolField('vol-icusdbob-idle-threshold', ib.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-icusdbob-daily-cap', volFmtUsd6(ib.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
+        // vol-global-drift (rebalance_drift_pct) isn't exposed by get_volume_stats
+        // today, so it's write-only like before — dirty tracking still applies
+        // so a save clears it cleanly, but there's no live value to hydrate.
+        hydrateVolField('vol-global-interval', stats.interval_secs.toString());
 
         // Trades table (newest first)
         const tbody = document.getElementById('vol-trades-body');
@@ -4115,6 +4440,10 @@
           return;
         }
         showToast('Config saved for ' + poolKey, 'success');
+        // Clear dirty only on THIS pool's 5 fields — a different pool's form
+        // the user is mid-editing keeps its typed value; loadVolumeData below
+        // re-hydrates the cleared fields with live truth.
+        clearVolDirty(['enabled', 'trade-size', 'variance', 'idle-threshold', 'daily-cap'].map(s => prefix + '-' + s));
         loadVolumeData();
       } catch (e) {
         showToast('Failed to save config: ' + e.message, 'error');
@@ -4168,20 +4497,163 @@
       return h + 'h ' + m + 'm';
     }
 
+    // ═══════ Health: shared fetch (view-open + periodic poll + manual refresh) ═══════
+    //
+    // latestHealthReport is read by the wedge banner and by anything else that
+    // wants "the last known health state" without issuing its own call.
+    // healthRequestPromise dedupes concurrent callers (button click while a
+    // background poll is already in flight, etc.) onto a single in-flight call.
+    let latestHealthReport = null;
+    let healthRequestPromise = null;
+
+    function setHealthLoadingUI(loading) {
+      // Only show a loading state before the first successful load — once we
+      // have real data, a background refresh shouldn't make the deck flicker
+      // back to placeholders.
+      if (!loading || latestHealthReport) return;
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.textContent = 'loading…';
+        el.style.color = 'var(--text-muted)';
+      });
+      const grid = document.getElementById('gate-grid');
+      if (grid && !grid.dataset.loaded) {
+        grid.innerHTML = '<div class="gate-placeholder">Loading…</div>';
+      }
+    }
+
+    function fetchHealth() {
+      if (!authenticatedActor) return Promise.resolve(null);
+      if (healthRequestPromise) return healthRequestPromise; // de-dupe overlapping calls
+      setHealthLoadingUI(true);
+      healthRequestPromise = (async () => {
+        try {
+          const report = await authenticatedActor.get_bot_health();
+          latestHealthReport = report;
+          renderHealth(report);
+          updateWedgeBanner(report);
+          return report;
+        } catch (e) {
+          showToast('Health load failed: ' + e.message, 'error');
+          return null;
+        } finally {
+          healthRequestPromise = null;
+        }
+      })();
+      return healthRequestPromise;
+    }
+
     window.loadHealth = async function(btn) {
       if (!requireAuth()) return;
       if (btn) btnLoading(btn, '↻ Loading');
       try {
-        const report = await authenticatedActor.get_bot_health();
-        renderHealth(report);
-      } catch (e) {
-        showToast('Health load failed: ' + e.message, 'error');
+        await fetchHealth();
       } finally {
         if (btn) btnDone(btn);
       }
     };
 
+    // ═══════ Global wedge banner ═══════
+    //
+    // Shown on every view when the latest health report indicates a stuck
+    // state. Dismissing hides it until the underlying condition set changes
+    // (a fresh problem, or a changed mix of problems, un-dismisses it).
+    let wedgeDismissedKey = null;
+
+    function wedgeConditions(report) {
+      if (!report) return [];
+      const out = [];
+      if (optVal(report.pending_exit)) out.push('pending_exit');
+      if (optVal(report.pending_bob_exit)) out.push('pending_bob_exit');
+      if (bi(report.volume_stranded_icp) > 0) out.push('volume_stranded_icp');
+      return out;
+    }
+
+    function wedgeMessage(conditions, report) {
+      const parts = [];
+      if (conditions.includes('pending_exit')) {
+        parts.push('Arb Leg 2 pending exit is stuck');
+      }
+      if (conditions.includes('pending_bob_exit')) {
+        parts.push('Strategy S BOB exit is stuck');
+      }
+      if (conditions.includes('volume_stranded_icp')) {
+        const icp = (Number(report.volume_stranded_icp) / 1e8).toFixed(4);
+        parts.push(icp + ' ICP stranded in the volume bot');
+      }
+      return parts.join(' — ');
+    }
+
+    function updateWedgeBanner(report) {
+      const banner = document.getElementById('wedge-banner');
+      if (!banner) return;
+      const conditions = wedgeConditions(report);
+      if (conditions.length === 0) {
+        banner.style.display = 'none';
+        wedgeDismissedKey = null;
+        return;
+      }
+      const key = conditions.join(',');
+      if (wedgeDismissedKey === key) return; // user already dismissed this exact condition set
+      document.getElementById('wedge-banner-msg').textContent = wedgeMessage(conditions, report);
+      banner.style.display = '';
+    }
+
+    window.dismissWedgeBanner = function() {
+      wedgeDismissedKey = wedgeConditions(latestHealthReport).join(',');
+      const banner = document.getElementById('wedge-banner');
+      if (banner) banner.style.display = 'none';
+    };
+
+    // ═══════ Incident Toolkit ═══════
+
+    window.doClearCycleLock = async function(btn) {
+      if (!requireAuth()) return;
+      if (!confirm("Clears a stuck arb-cycle lock. Only use if a cycle has been \"in progress\" for far longer than the interval.")) return;
+      btnLoading(btn, 'Clearing...');
+      try {
+        await authenticatedActor.clear_cycle_lock();
+        showToast('Cycle lock cleared', 'success');
+        fetchHealth();
+      } catch (e) {
+        showToast('Clear cycle lock failed: ' + (e.message || e), 'error');
+      } finally { btnDone(btn); }
+    };
+
+    window.doRecoverPartydexBalance = async function(btn) {
+      if (!requireAuth()) return;
+      const raw = document.getElementById('incident-partydex-pool').value.trim();
+      if (!raw) { showToast('Enter a pool principal', 'error'); return; }
+      let pool;
+      try { pool = Principal.fromText(raw); } catch (e) { showToast('Invalid principal', 'error'); return; }
+      if (!confirm('Sweep base + quote balances out of this PartyDEX pool back to the bot\'s main account?\n' + raw)) return;
+      btnLoading(btn, 'Recovering...');
+      try {
+        const res = await authenticatedActor.recover_partydex_balance(pool);
+        if (res.Err) throw new Error(res.Err);
+        const [base, quote] = res.Ok;
+        showToast(`Recovered ${fmtTok(base, 8)} base / ${fmtTok(quote, 6)} quote`, 'success');
+        fetchHealth();
+      } catch (e) {
+        showToast('Recover failed: ' + (e.message || e), 'error');
+      } finally { btnDone(btn); }
+    };
+
+    function updateIncidentBackfillCmd() {
+      const el = document.getElementById('incident-backfill-cmd');
+      if (!el || !canisterId) return;
+      el.textContent = `dfx canister call ${canisterId} backfill_trade_legs '(vec { record { timestamp = 0:nat64; leg_type = variant { Leg1 }; dex = "Rumi"; sold_token = "ICP"; sold_amount = 0:nat64; bought_token = "3USD"; bought_amount = 0:nat64; sold_usd_value = 0:int64; bought_usd_value = 0:int64; fees_usd = 0:int64 } })' --network ic`;
+    }
+
     function renderHealth(report) {
+      // Clear any "loading…" styling left over from setHealthLoadingUI — real
+      // data is about to replace those text nodes below.
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.color = '';
+      });
+
       // Deck — arb engine
       const arbDot = document.getElementById('deck-arb-dot');
       const arbTxt = document.getElementById('deck-arb-text');
@@ -4259,6 +4731,7 @@
       // Gate cards
       const grid = document.getElementById('gate-grid');
       grid.innerHTML = '';
+      grid.dataset.loaded = '1'; // real data now — loading-state helper stops touching this grid
       if (!report.pools || report.pools.length === 0) {
         grid.innerHTML = '<div class="gate-placeholder">No pools reported.</div>';
         return;
@@ -4381,6 +4854,7 @@
       try {
         await authenticatedActor.set_volume_global(interval, drift);
         showToast('Global settings saved', 'success');
+        clearVolDirty(['vol-global-interval', 'vol-global-drift']);
         loadVolumeData();
       } catch (e) {
         showToast('Failed to save global settings: ' + e.message, 'error');
@@ -4583,6 +5057,7 @@
 
     async function init() {
       try {
+        updateIncidentBackfillCmd();
         await createAnonymousActor();
         await restoreSession();
         await loadAll();
