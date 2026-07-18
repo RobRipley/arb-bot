@@ -4711,7 +4711,9 @@
       const conditions = [];
       if (pub.has_pending_exit) conditions.push('pending_exit');
       if (pub.has_pending_bob_exit) conditions.push('pending_bob_exit');
-      if (pub.has_stranded_volume_funds) conditions.push('volume_stranded_icp');
+      // Distinct label from the admin path's 'volume_stranded_icp'/'volume_stranded_bob'
+      // — has_stranded_volume_funds is an ICP-or-BOB OR, not ICP specifically.
+      if (pub.has_stranded_volume_funds) conditions.push('volume_stranded');
       showWedgeBanner(conditions, 'Bot may be stuck — log in for details.');
     }
 
