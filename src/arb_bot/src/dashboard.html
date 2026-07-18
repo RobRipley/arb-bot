@@ -182,6 +182,12 @@
       font-size: 12px;
       color: var(--text-secondary);
     }
+    /* Labels with a title="" tooltip get a dotted underline + help cursor so
+       the affordance is visible without hovering. */
+    .stat-label.hint {
+      cursor: help;
+      border-bottom: 1px dotted var(--text-muted);
+    }
     .stat-value {
       font-family: var(--font-data);
       font-size: 13px;
@@ -481,6 +487,19 @@
       background: var(--surface-2);
       border-radius: var(--radius-sm);
       padding: 2px 8px;
+    }
+    /* Strategy S dry-run indicator: S still evaluates every cycle (real gauge,
+       real pool-vs-ref numbers) even when bob_execution_enabled is false — this
+       badge sits next to the bps value, it never replaces it. */
+    .dryrun-badge {
+      font-family: var(--font-data);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      color: var(--info);
+      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      padding: 1px 6px;
     }
     .spread-row.row-paused .spread-pool { color: var(--text-tertiary); }
     .chart-tabs, .chart-ranges { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
@@ -906,10 +925,14 @@
       .data-table-wrap { overflow-x: auto; }
       #chart-container { height: 350px !important; }
       .hero-strip-content { flex-direction: column; gap: var(--sp-4); }
-      .hero-right { flex-direction: row; gap: var(--sp-6); }
+      .hero-right { flex-direction: row; flex-wrap: wrap; gap: var(--sp-4) var(--sp-6); }
       .deck-grid { grid-template-columns: repeat(2, 1fr); }
       .pending-grid { grid-template-columns: repeat(2, 1fr); }
       .gate-grid { grid-template-columns: 1fr; }
+      /* STRATEGY PRICES tiles + strategy-legend chips: desktop keeps its fixed
+         column counts (unchanged look at wide widths); below 900px both switch
+         to auto-fit so nothing clips at narrow viewports (e.g. 375px). */
+      .strategy-legend { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
     }
     /* Venue/token logos (inlined data-URIs) */
     .venue-logo { display:inline-block; width:14px; height:14px; vertical-align:-3px; margin-right:4px; background-size:cover; background-position:center; background-repeat:no-repeat; border-radius:50%; flex-shrink:0; }
@@ -975,8 +998,8 @@
             <div class="hero-number" id="hero-pnl"><span class="skeleton skeleton-lg"></span></div>
           </div>
           <div class="hero-right">
-            <div class="hero-stat"><span class="stat-label">Fees Paid</span><span class="stat-value" id="hero-fees"><span class="skeleton skeleton-text"></span></span></div>
-            <div class="hero-stat"><span class="stat-label">Drain Recovery</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label hint" title="Cumulative ICRC-1 ledger transfer fees across all legs. DEX swap fees are already reflected in trade prices, not counted separately.">Fees Paid</span><span class="stat-value" id="hero-fees"><span class="skeleton skeleton-text"></span></span></div>
+            <div class="hero-stat"><span class="stat-label hint" title="USD recovered by draining accumulated ICP (above the inventory ceiling, or stranded ICP during leg recovery) back into stables. Included in Net P&amp;L.">Drain Recovery</span><span class="stat-value" id="hero-recovered"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Trades</span><span class="stat-value" id="hero-trades"><span class="skeleton skeleton-text"></span></span></div>
             <div class="hero-stat"><span class="stat-label">Volume</span><span class="stat-value" id="hero-volume"><span class="skeleton skeleton-text"></span></span></div>
           </div>
@@ -1185,13 +1208,13 @@
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center;gap:var(--sp-2)">
             <span id="spread-s-prices" style="font-size:11px;color:var(--text-tertiary)"></span>
-            <span id="spread-s-dryrun" style="display:none;background:rgba(240,160,91,0.15);color:#f0a05b;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600;letter-spacing:0.05em">DRY-RUN</span>
+            <span id="spread-s-dryrun" class="dryrun-badge" style="display:none">DRY-RUN</span>
           </div>
         </div>
       </div>
 
       <!-- Live Prices + Balances -->
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
+      <div class="overview-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-4);margin-top:var(--sp-4)">
         <div class="card">
           <div class="card-header">STRATEGY PRICES</div>
           <div class="price-sources">
@@ -1321,6 +1344,7 @@
           <button class="chip chip-sm" data-range="0" onclick="switchRange(0)">All</button>
         </div>
       </div>
+      <div id="chart-paused-note" style="display:none;font-size:11px;color:var(--text-muted);margin-bottom:var(--sp-2)">5 Rumi strategies paused — series hidden</div>
       <div class="card" style="padding:var(--sp-3)">
         <div id="chart-container" style="height:500px;width:100%"></div>
       </div>
@@ -2609,13 +2633,22 @@
       el.classList.remove('cfg-dirty');
     }
 
-    function initCfgDirtyTracking() {
-      Object.keys(CFG_FIELD_MAP).forEach(id => {
+    // Shared by any form that needs "don't clobber what the user is mid-typing"
+    // protection (Admin config form, Volume config forms). Checkboxes track
+    // dirty on 'change' (there's no partial-typing state to protect mid-input);
+    // everything else tracks on 'input'.
+    function bindDirtyTracking(ids) {
+      ids.forEach(id => {
         const el = document.getElementById(id);
         if (!el || el._dirtyTrackingBound) return;
         el._dirtyTrackingBound = true;
-        el.addEventListener('input', () => markCfgDirty(el));
+        const evt = (el.type === 'checkbox') ? 'change' : 'input';
+        el.addEventListener(evt, () => markCfgDirty(el));
       });
+    }
+
+    function initCfgDirtyTracking() {
+      bindDirtyTracking(Object.keys(CFG_FIELD_MAP));
     }
 
     function hydrateConfigForm(config) {
@@ -3434,6 +3467,11 @@
         chartInstance.remove();
         chartInstance = null;
       }
+      // Every render*Chart function calls destroyChart() first, so this is the
+      // one place to reset the paused-series note; renderSpreadChart is the
+      // only one that re-shows it when applicable.
+      const note = document.getElementById('chart-paused-note');
+      if (note) note.style.display = 'none';
     }
 
     function filterByRange(snapshots, rangeSeconds) {
@@ -3450,7 +3488,17 @@
 
       chartInstance = createBaseChart('chart-container');
 
-      const seriesA = chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
+      // A/C/D/Q/R skip their arb cycle entirely while the Rumi AMM is paused
+      // (see rumi_amm_paused gate in arb.rs) and snapshots record a flat 0 for
+      // them the whole time — that's not a real spread, so hide those series
+      // (line + price-axis label) rather than bury the live series under dead
+      // 0.00 lines. Only A, Q, and R are actually plotted on this chart today;
+      // C/D have no chart series to hide.
+      const rumiPaused = !!(currentConfig && currentConfig.rumi_amm_paused);
+      const pausedNote = document.getElementById('chart-paused-note');
+      if (pausedNote) pausedNote.style.display = rumiPaused ? 'block' : 'none';
+
+      const seriesA = rumiPaused ? null : chartInstance.addLineSeries({ color: '#00d4aa', lineWidth: 2, title: 'Strategy A' });
       const seriesB = chartInstance.addLineSeries({ color: '#5b8af0', lineWidth: 2, title: 'Strategy B' });
       const seriesF = chartInstance.addLineSeries({ color: '#f06292', lineWidth: 2, title: 'Strategy F' });
       const seriesK = chartInstance.addLineSeries({ color: '#26c6da', lineWidth: 2, title: 'Strategy K' });
@@ -3459,10 +3507,9 @@
       const seriesN = chartInstance.addLineSeries({ color: '#66bb6a', lineWidth: 2, title: 'Strategy N' });
       const seriesO = chartInstance.addLineSeries({ color: '#ef5350', lineWidth: 2, title: 'Strategy O' });
       const seriesP = chartInstance.addLineSeries({ color: '#5c6bc0', lineWidth: 2, title: 'Strategy P' });
-      const seriesQ = chartInstance.addLineSeries({ color: '#8d6e63', lineWidth: 2, title: 'Strategy Q' });
-      const seriesR = chartInstance.addLineSeries({ color: '#78909c', lineWidth: 2, title: 'Strategy R' });
+      const seriesQ = rumiPaused ? null : chartInstance.addLineSeries({ color: '#8d6e63', lineWidth: 2, title: 'Strategy Q' });
+      const seriesR = rumiPaused ? null : chartInstance.addLineSeries({ color: '#78909c', lineWidth: 2, title: 'Strategy R' });
 
-      const dataA = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) }));
       const dataB = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_b_bps) }));
       const dataF = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_f_bps !== undefined ? s.spread_f_bps : 0) }));
       const dataK = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_k_bps !== undefined ? s.spread_k_bps : 0) }));
@@ -3471,10 +3518,8 @@
       const dataN = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_n_bps !== undefined ? s.spread_n_bps : 0) }));
       const dataO = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_o_bps !== undefined ? s.spread_o_bps : 0) }));
       const dataP = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_p_bps !== undefined ? s.spread_p_bps : 0) }));
-      const dataQ = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0) }));
-      const dataR = snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0) }));
 
-      seriesA.setData(dataA);
+      if (seriesA) seriesA.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_a_bps) })));
       seriesB.setData(dataB);
       seriesF.setData(dataF);
       seriesK.setData(dataK);
@@ -3483,8 +3528,8 @@
       seriesN.setData(dataN);
       seriesO.setData(dataO);
       seriesP.setData(dataP);
-      seriesQ.setData(dataQ);
-      seriesR.setData(dataR);
+      if (seriesQ) seriesQ.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_q_bps !== undefined ? s.spread_q_bps : 0) })));
+      if (seriesR) seriesR.setData(snapshots.map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), value: bi(s.spread_r_bps !== undefined ? s.spread_r_bps : 0) })));
 
       const markersA = snapshots.filter(s => s.traded && s.strategy_used === 'A')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#00d4aa', shape: 'circle', size: 1 }));
@@ -3508,7 +3553,7 @@
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#8d6e63', shape: 'circle', size: 1 }));
       const markersR = snapshots.filter(s => s.traded && s.strategy_used === 'R')
         .map(s => ({ time: Math.floor(bi(s.timestamp) / 1e9), position: 'aboveBar', color: '#78909c', shape: 'circle', size: 1 }));
-      if (markersA.length) seriesA.setMarkers(markersA);
+      if (seriesA && markersA.length) seriesA.setMarkers(markersA);
       if (markersB.length) seriesB.setMarkers(markersB);
       if (markersF.length) seriesF.setMarkers(markersF);
       if (markersK.length) seriesK.setMarkers(markersK);
@@ -3517,12 +3562,14 @@
       if (markersN.length) seriesN.setMarkers(markersN);
       if (markersO.length) seriesO.setMarkers(markersO);
       if (markersP.length) seriesP.setMarkers(markersP);
-      if (markersQ.length) seriesQ.setMarkers(markersQ);
-      if (markersR.length) seriesR.setMarkers(markersR);
+      if (seriesQ && markersQ.length) seriesQ.setMarkers(markersQ);
+      if (seriesR && markersR.length) seriesR.setMarkers(markersR);
 
+      // Anchor the threshold price lines on seriesB (always present) instead
+      // of seriesA, which may be null while the Rumi AMM is paused.
       const minSpread = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
-      seriesA.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
-      seriesA.createPriceLine({ price: -minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '-threshold' });
+      seriesB.createPriceLine({ price: minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '+threshold' });
+      seriesB.createPriceLine({ price: -minSpread, color: 'rgba(255,255,255,0.15)', lineWidth: 1, lineStyle: 2, title: '-threshold' });
 
       chartInstance.timeScale().fitContent();
       updateChartFooter(snapshots.length);
@@ -4266,6 +4313,35 @@
     function volFmtUsd6(v) { return (Number(v) / 1_000_000).toFixed(2); }
     function volFmtSignedUsd6(v) { return (Number(v) / 1_000_000).toFixed(4); }
 
+    // ═══════ Volume: Config Form Dirty Tracking ═══════
+    //
+    // Same problem the Admin config form had: loadVolumeData() re-hydrates all
+    // three pool forms (+ global settings) every poll AND after every save, so
+    // saving pool X used to wipe half-typed edits in pool Y's form. Same fix:
+    // per-field dirty tracking, hydration skips focused/dirty fields, and each
+    // save only clears dirty on the fields it actually saved.
+    const VOL_DIRTY_FIELD_IDS = [
+      'vol-icusd-enabled', 'vol-icusd-trade-size', 'vol-icusd-variance', 'vol-icusd-idle-threshold', 'vol-icusd-daily-cap',
+      'vol-3usd-enabled', 'vol-3usd-trade-size', 'vol-3usd-variance', 'vol-3usd-idle-threshold', 'vol-3usd-daily-cap',
+      'vol-icusdbob-enabled', 'vol-icusdbob-trade-size', 'vol-icusdbob-variance', 'vol-icusdbob-idle-threshold', 'vol-icusdbob-daily-cap',
+      'vol-global-interval', 'vol-global-drift',
+    ];
+    function initVolDirtyTracking() {
+      bindDirtyTracking(VOL_DIRTY_FIELD_IDS);
+    }
+    // Sets one field's live value unless it's focused or dirty; clears dirty
+    // on fields it does update (mirrors hydrateConfigForm's contract).
+    function hydrateVolField(id, value) {
+      const el = document.getElementById(id);
+      if (!el || el.dataset.dirty || document.activeElement === el) return;
+      if (el.type === 'checkbox') el.checked = value;
+      else el.value = value;
+      clearCfgDirty(el);
+    }
+    function clearVolDirty(ids) {
+      ids.forEach(id => { const el = document.getElementById(id); if (el) clearCfgDirty(el); });
+    }
+
     async function loadVolumeData() {
       try {
         const actor = authenticatedActor || anonymousActor;
@@ -4305,26 +4381,31 @@
         document.getElementById('vol-total-trades').textContent = stats.total_trade_count.toString();
         document.getElementById('vol-interval').textContent = stats.interval_secs.toString() + 's';
 
-        // Populate config forms
-        document.getElementById('vol-icusd-enabled').checked = ic.config.enabled;
-        document.getElementById('vol-icusd-trade-size').value = volFmtUsd6(ic.config.trade_size_usd);
-        document.getElementById('vol-icusd-variance').value = ic.config.trade_variance_pct.toString();
-        document.getElementById('vol-icusd-idle-threshold').value = ic.config.idle_threshold_bps.toString();
-        document.getElementById('vol-icusd-daily-cap').value = volFmtUsd6(ic.config.daily_cost_cap_usd);
+        // Populate config forms — skip any field the user is focused on or has
+        // edited since the last hydration/save (see VOL_DIRTY_FIELD_IDS above).
+        initVolDirtyTracking();
+        hydrateVolField('vol-icusd-enabled', ic.config.enabled);
+        hydrateVolField('vol-icusd-trade-size', volFmtUsd6(ic.config.trade_size_usd));
+        hydrateVolField('vol-icusd-variance', ic.config.trade_variance_pct.toString());
+        hydrateVolField('vol-icusd-idle-threshold', ic.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-icusd-daily-cap', volFmtUsd6(ic.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-3usd-enabled').checked = tu.config.enabled;
-        document.getElementById('vol-3usd-trade-size').value = volFmtUsd6(tu.config.trade_size_usd);
-        document.getElementById('vol-3usd-variance').value = tu.config.trade_variance_pct.toString();
-        document.getElementById('vol-3usd-idle-threshold').value = tu.config.idle_threshold_bps.toString();
-        document.getElementById('vol-3usd-daily-cap').value = volFmtUsd6(tu.config.daily_cost_cap_usd);
+        hydrateVolField('vol-3usd-enabled', tu.config.enabled);
+        hydrateVolField('vol-3usd-trade-size', volFmtUsd6(tu.config.trade_size_usd));
+        hydrateVolField('vol-3usd-variance', tu.config.trade_variance_pct.toString());
+        hydrateVolField('vol-3usd-idle-threshold', tu.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-3usd-daily-cap', volFmtUsd6(tu.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-icusdbob-enabled').checked = ib.config.enabled;
-        document.getElementById('vol-icusdbob-trade-size').value = volFmtUsd6(ib.config.trade_size_usd);
-        document.getElementById('vol-icusdbob-variance').value = ib.config.trade_variance_pct.toString();
-        document.getElementById('vol-icusdbob-idle-threshold').value = ib.config.idle_threshold_bps.toString();
-        document.getElementById('vol-icusdbob-daily-cap').value = volFmtUsd6(ib.config.daily_cost_cap_usd);
+        hydrateVolField('vol-icusdbob-enabled', ib.config.enabled);
+        hydrateVolField('vol-icusdbob-trade-size', volFmtUsd6(ib.config.trade_size_usd));
+        hydrateVolField('vol-icusdbob-variance', ib.config.trade_variance_pct.toString());
+        hydrateVolField('vol-icusdbob-idle-threshold', ib.config.idle_threshold_bps.toString());
+        hydrateVolField('vol-icusdbob-daily-cap', volFmtUsd6(ib.config.daily_cost_cap_usd));
 
-        document.getElementById('vol-global-interval').value = stats.interval_secs.toString();
+        // vol-global-drift (rebalance_drift_pct) isn't exposed by get_volume_stats
+        // today, so it's write-only like before — dirty tracking still applies
+        // so a save clears it cleanly, but there's no live value to hydrate.
+        hydrateVolField('vol-global-interval', stats.interval_secs.toString());
 
         // Trades table (newest first)
         const tbody = document.getElementById('vol-trades-body');
@@ -4371,6 +4452,10 @@
           return;
         }
         showToast('Config saved for ' + poolKey, 'success');
+        // Clear dirty only on THIS pool's 5 fields — a different pool's form
+        // the user is mid-editing keeps its typed value; loadVolumeData below
+        // re-hydrates the cleared fields with live truth.
+        clearVolDirty(['enabled', 'trade-size', 'variance', 'idle-threshold', 'daily-cap'].map(s => prefix + '-' + s));
         loadVolumeData();
       } catch (e) {
         showToast('Failed to save config: ' + e.message, 'error');
@@ -4825,6 +4910,7 @@
       try {
         await authenticatedActor.set_volume_global(interval, drift);
         showToast('Global settings saved', 'success');
+        clearVolDirty(['vol-global-interval', 'vol-global-drift']);
         loadVolumeData();
       } catch (e) {
         showToast('Failed to save global settings: ' + e.message, 'error');
