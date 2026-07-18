@@ -1960,13 +1960,14 @@ fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
 async fn get_bot_health() -> state::BotHealthReport {
     require_admin();
 
-    let (bot_config, volume_config, pending_exit, pending_bob_exit, arb_paused, stranded) = state::read_state(|s| (
+    let (bot_config, volume_config, pending_exit, pending_bob_exit, arb_paused, stranded, stranded_bob) = state::read_state(|s| (
         s.config.clone(),
         s.volume.clone(),
         s.pending_exit.clone(),
         s.pending_bob_exit.clone(),
         s.config.paused,
         s.volume_stranded_icp,
+        s.volume_stranded_bob,
     ));
 
     let arb_in_progress = arb::is_cycle_in_progress();
@@ -2072,10 +2073,12 @@ async fn get_bot_health() -> state::BotHealthReport {
 
     state::BotHealthReport {
         arb_cycle_in_progress: arb_in_progress,
+        arb_cycle_started_at_ns: arb::cycle_started_at_ns(),
         volume_cycle_in_progress: volume_in_progress,
         volume_paused: volume_config.volume_paused,
         arb_paused,
         volume_stranded_icp: stranded,
+        volume_stranded_bob: stranded_bob,
         pending_exit,
         pending_bob_exit,
         balance_bob,

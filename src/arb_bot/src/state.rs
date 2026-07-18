@@ -512,10 +512,17 @@ pub struct PoolHealth {
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct BotHealthReport {
     pub arb_cycle_in_progress: bool,
+    /// When the in-progress arb cycle acquired the lock (ns since epoch).
+    /// None when idle. Lets the UI flag a cycle wedged far past the interval.
+    #[serde(default)]
+    pub arb_cycle_started_at_ns: Option<u64>,
     pub volume_cycle_in_progress: bool,
     pub volume_paused: bool,
     pub arb_paused: bool,
     pub volume_stranded_icp: u64,
+    /// BOB stranded on the volume subaccount (8 dec) — see `volume_stranded_bob` state.
+    #[serde(default)]
+    pub volume_stranded_bob: u64,
     pub pending_exit: Option<PendingExit>,
     /// Strategy S: BOB acquired by a leg 1 whose leg 2 hasn't completed.
     #[serde(default)]
