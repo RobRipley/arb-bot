@@ -950,7 +950,8 @@
 
     <!-- Global wedge banner — shown on every view when the bot health report
          indicates a stuck state (pending exit / pending BOB exit / stranded
-         volume ICP). Requires an admin login (health is auth-gated). -->
+         volume funds). Admins get details from get_bot_health; logged-out
+         visitors get a generic message from the anonymous get_public_health. -->
     <div class="card warning-card wedge-banner" id="wedge-banner" style="display:none">
       <div class="warning-rail"></div>
       <div class="warning-body">
@@ -2146,6 +2147,13 @@
         slippage_bps: I.Nat64,
         pools: I.Vec(PoolHealth),
       });
+      const PublicHealth = I.Record({
+        has_pending_exit: I.Bool,
+        has_pending_bob_exit: I.Bool,
+        has_stranded_volume_funds: I.Bool,
+        arb_paused: I.Bool,
+        volume_paused: I.Bool,
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -2265,6 +2273,7 @@
         set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
+        get_public_health: I.Func([], [PublicHealth], ['query']),
       });
     };
 
@@ -3328,6 +3337,9 @@
       loadAllTickCount++;
       if (authenticatedActor && loadAllTickCount % 2 === 0) {
         fetchHealth(); // de-dupes against any concurrent view-open/manual refresh
+      }
+      if (!authenticatedActor) {
+        fetchPublicHealth(); // logged-out wedge banner (flags-only anonymous query)
       }
       document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }
@@ -4474,7 +4486,11 @@
     // Shown on every view when the latest health report indicates a stuck
     // state. Dismissing hides it until the underlying condition set changes
     // (a fresh problem, or a changed mix of problems, un-dismisses it).
+    // Logged-out visitors get the same banner from the anonymous
+    // get_public_health query, with a generic message (flags only — the
+    // admin-gated report has the details).
     let wedgeDismissedKey = null;
+    let currentWedgeKey = null; // condition set currently shown (or last shown)
 
     function wedgeConditions(report) {
       if (!report) return [];
@@ -4500,23 +4516,63 @@
       return parts.join(' — ');
     }
 
-    function updateWedgeBanner(report) {
+    function showWedgeBanner(conditions, message) {
       const banner = document.getElementById('wedge-banner');
       if (!banner) return;
-      const conditions = wedgeConditions(report);
       if (conditions.length === 0) {
         banner.style.display = 'none';
         wedgeDismissedKey = null;
+        currentWedgeKey = null;
         return;
       }
       const key = conditions.join(',');
+      currentWedgeKey = key;
       if (wedgeDismissedKey === key) return; // user already dismissed this exact condition set
-      document.getElementById('wedge-banner-msg').textContent = wedgeMessage(conditions, report);
+      document.getElementById('wedge-banner-msg').textContent = message;
+      // The Health view is auth-gated — hide its link on the logged-out variant.
+      const healthLink = banner.querySelector('.wedge-banner-link');
+      if (healthLink) healthLink.style.display = authenticatedActor ? '' : 'none';
       banner.style.display = '';
     }
 
+    function updateWedgeBanner(report) {
+      const conditions = wedgeConditions(report);
+      showWedgeBanner(conditions, wedgeMessage(conditions, report));
+    }
+
+    // Logged-out fallback: same banner, driven by the anonymous flags-only
+    // query. No amounts or details to show, so the message stays generic.
+    function updateWedgeBannerPublic(pub) {
+      const conditions = [];
+      if (pub.has_pending_exit) conditions.push('pending_exit');
+      if (pub.has_pending_bob_exit) conditions.push('pending_bob_exit');
+      if (pub.has_stranded_volume_funds) conditions.push('volume_stranded_icp');
+      showWedgeBanner(conditions, 'Bot may be stuck — log in for details.');
+    }
+
+    let publicHealthRequestPromise = null;
+
+    function fetchPublicHealth() {
+      if (authenticatedActor || !anonymousActor) return Promise.resolve(null);
+      if (publicHealthRequestPromise) return publicHealthRequestPromise;
+      publicHealthRequestPromise = (async () => {
+        try {
+          const pub = await anonymousActor.get_public_health();
+          updateWedgeBannerPublic(pub);
+          return pub;
+        } catch (e) {
+          // Silent: anonymous background poll — a toast every 30s would be noise.
+          console.error('public health poll failed:', e);
+          return null;
+        } finally {
+          publicHealthRequestPromise = null;
+        }
+      })();
+      return publicHealthRequestPromise;
+    }
+
     window.dismissWedgeBanner = function() {
-      wedgeDismissedKey = wedgeConditions(latestHealthReport).join(',');
+      wedgeDismissedKey = currentWedgeKey;
       const banner = document.getElementById('wedge-banner');
       if (banner) banner.style.display = 'none';
     };

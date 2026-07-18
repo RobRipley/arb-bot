@@ -527,6 +527,18 @@ pub struct BotHealthReport {
     pub pools: Vec<PoolHealth>,
 }
 
+/// Anonymous-safe subset of `BotHealthReport`: bare stuck-state flags only —
+/// no balances, no principals, no config. Returned by `get_public_health`.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct PublicHealth {
+    pub has_pending_exit: bool,
+    pub has_pending_bob_exit: bool,
+    /// True if either stranded pot (ICP or BOB) is non-zero.
+    pub has_stranded_volume_funds: bool,
+    pub arb_paused: bool,
+    pub volume_paused: bool,
+}
+
 /// Records the intended exit pool after a successful Leg 1, so the drain
 /// can prefer it (and avoid draining back into the entry pool).
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]

@@ -2084,6 +2084,19 @@ async fn get_bot_health() -> state::BotHealthReport {
     }
 }
 
+/// Anonymous-safe stuck-state flags for the logged-out dashboard wedge
+/// banner. Booleans only — details require the admin-gated `get_bot_health`.
+#[query]
+fn get_public_health() -> state::PublicHealth {
+    state::read_state(|s| state::PublicHealth {
+        has_pending_exit: s.pending_exit.is_some(),
+        has_pending_bob_exit: s.pending_bob_exit.is_some(),
+        has_stranded_volume_funds: s.volume_stranded_icp > 0 || s.volume_stranded_bob > 0,
+        arb_paused: s.config.paused,
+        volume_paused: s.volume.volume_paused,
+    })
+}
+
 #[update]
 async fn trigger_volume_rebalance() {
     require_admin();

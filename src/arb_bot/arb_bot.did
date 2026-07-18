@@ -94,6 +94,14 @@ type BotHealthReport = record {
   pools: vec PoolHealth;
 };
 
+type PublicHealth = record {
+  has_pending_exit: bool;
+  has_pending_bob_exit: bool;
+  has_stranded_volume_funds: bool;
+  arb_paused: bool;
+  volume_paused: bool;
+};
+
 type Direction = variant {
   RumiToIcpswap;
   IcpswapToRumi;
@@ -395,6 +403,7 @@ service : (InitArgs) -> {
   set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
   set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
   get_bot_health: () -> (BotHealthReport);
+  get_public_health: () -> (PublicHealth) query;
   trigger_volume_rebalance: () -> ();
   volume_swap: (bool, nat64, nat64) -> ();
   get_volume_stats: () -> (VolumeStats) query;
