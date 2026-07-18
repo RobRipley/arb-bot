@@ -309,8 +309,17 @@ async fn execute_volume_trade(
         VolumeDirection::BuyBob => other_fee,
         VolumeDirection::SellBob => ICUSD_FEE,
     };
-    if amount_out > out_fee && !is_3usd(token_out, config) {
-        let transfer_amount = amount_out - out_fee;
+    // Two fees, not one: `amount_out` is ICPSwap's raw swap output, but
+    // depositFromAndSwap's own internal transfer-out already costs one
+    // ledger fee before the tokens land in our default account (same "pool
+    // withdraw" cost documented for Leg1→Leg2 chaining in arb.rs, e.g.
+    // `usable_icp = icp_out.saturating_sub(ICP_FEE * 2)`). The second fee
+    // covers this transfer_to_subaccount call itself. Reserving only one
+    // fee here (as this used to) overstates the real balance by exactly
+    // one ledger fee, which permanently wedges recovery once stranded —
+    // see the BOB stranded-balance incident this fixed.
+    if amount_out > out_fee * 2 && !is_3usd(token_out, config) {
+        let transfer_amount = amount_out - out_fee * 2;
         let mut transferred = false;
         for attempt in 0..3 {
             match swaps::transfer_to_subaccount(token_out, transfer_amount, VOLUME_SUBACCOUNT).await {
@@ -391,14 +400,26 @@ pub async fn run_volume_cycle() -> Vec<String> {
 
     let mut outcomes: Vec<String> = Vec::new();
 
-    // Recover any ICP stranded in the default account from a prior failure
+    // Recover any ICP stranded in the default account from a prior failure.
+    // Cap the transfer at what the ledger can actually support (live balance
+    // minus one fee) instead of blindly trusting the recorded amount — a
+    // `stranded` value that overstates the real balance (e.g. from the
+    // now-fixed output-fee accounting bug) must not wedge the cycle forever
+    // chasing e8s that were never actually credited to the account.
     let stranded = state::read_state(|s| s.volume_stranded_icp);
     if stranded > 0 {
-        match swaps::transfer_to_subaccount(bot_config.icp_ledger, stranded, VOLUME_SUBACCOUNT).await {
+        let live_balance = swaps::icrc1_balance_of_default(bot_config.icp_ledger).await.unwrap_or(0);
+        let recover_amount = stranded.min(live_balance.saturating_sub(ICP_FEE));
+        if recover_amount == 0 {
+            let msg = format!("Stranded ICP recovery failed (will retry): balance {} too low to cover fee", live_balance);
+            state::log_activity("volume", &msg);
+            return vec![format!("blocked: {}", msg)];
+        }
+        match swaps::transfer_to_subaccount(bot_config.icp_ledger, recover_amount, VOLUME_SUBACCOUNT).await {
             Ok(_) => {
                 state::mutate_state(|s| { s.volume_stranded_icp = 0; });
-                state::log_activity("volume", &format!("Recovered {} stranded ICP to subaccount", stranded));
-                outcomes.push(format!("recovered {} stranded ICP", stranded));
+                state::log_activity("volume", &format!("Recovered {} stranded ICP to subaccount", recover_amount));
+                outcomes.push(format!("recovered {} stranded ICP", recover_amount));
             }
             Err(e) => {
                 let msg = format!("Stranded ICP recovery failed (will retry): {:?}", e);
@@ -412,14 +433,21 @@ pub async fn run_volume_cycle() -> Vec<String> {
     // Recover any BOB stranded in the default account from a prior failure
     // (mirrors the ICP recovery block above, including its don't-proceed-
     // on-failure semantics — a stranded BOB recovery failure blocks the
-    // whole cycle, not just the icUSD/BOB pool).
+    // whole cycle, not just the icUSD/BOB pool — and its live-balance cap).
     let stranded_bob = state::read_state(|s| s.volume_stranded_bob);
     if stranded_bob > 0 {
-        match swaps::transfer_to_subaccount(bot_config.bob_ledger, stranded_bob, VOLUME_SUBACCOUNT).await {
+        let live_balance_bob = swaps::icrc1_balance_of_default(bot_config.bob_ledger).await.unwrap_or(0);
+        let recover_amount_bob = stranded_bob.min(live_balance_bob.saturating_sub(bot_config.bob_ledger_fee));
+        if recover_amount_bob == 0 {
+            let msg = format!("Stranded BOB recovery failed (will retry): balance {} too low to cover fee", live_balance_bob);
+            state::log_activity("volume", &msg);
+            return vec![format!("blocked: {}", msg)];
+        }
+        match swaps::transfer_to_subaccount(bot_config.bob_ledger, recover_amount_bob, VOLUME_SUBACCOUNT).await {
             Ok(_) => {
                 state::mutate_state(|s| { s.volume_stranded_bob = 0; });
-                state::log_activity("volume", &format!("Recovered {} stranded BOB to subaccount", stranded_bob));
-                outcomes.push(format!("recovered {} stranded BOB", stranded_bob));
+                state::log_activity("volume", &format!("Recovered {} stranded BOB to subaccount", recover_amount_bob));
+                outcomes.push(format!("recovered {} stranded BOB", recover_amount_bob));
             }
             Err(e) => {
                 let msg = format!("Stranded BOB recovery failed (will retry): {:?}", e);
