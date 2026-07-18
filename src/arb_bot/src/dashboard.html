@@ -1450,6 +1450,10 @@
             <div class="deck-stat-value" id="deck-stranded">—</div>
           </div>
           <div class="deck-stat">
+            <div class="deck-stat-label">Stranded BOB</div>
+            <div class="deck-stat-value" id="deck-stranded-bob">—</div>
+          </div>
+          <div class="deck-stat">
             <div class="deck-stat-label">Slippage Tolerance</div>
             <div class="deck-stat-value" id="deck-slip">—</div>
           </div>
@@ -4513,7 +4517,7 @@
       // have real data, a background refresh shouldn't make the deck flicker
       // back to placeholders.
       if (!loading || latestHealthReport) return;
-      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-stranded-bob', 'deck-slip', 'deck-bob'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         el.textContent = 'loading…';
@@ -4672,7 +4676,7 @@
     function renderHealth(report) {
       // Clear any "loading…" styling left over from setHealthLoadingUI — real
       // data is about to replace those text nodes below.
-      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-stranded-bob', 'deck-slip', 'deck-bob'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.color = '';
       });
@@ -4680,12 +4684,24 @@
       // Deck — arb engine
       const arbDot = document.getElementById('deck-arb-dot');
       const arbTxt = document.getElementById('deck-arb-text');
+      arbTxt.style.fontWeight = '';
       if (report.arb_paused) {
         arbDot.className = 'pulse-dot paused';
         arbTxt.textContent = 'Paused';
       } else if (report.arb_cycle_in_progress) {
         arbDot.className = 'pulse-dot busy';
-        arbTxt.textContent = 'Cycling';
+        const stuckSecs = arbCycleStuckSecs(report);
+        if (stuckSecs != null) {
+          // Cycle has run past 3× the configured interval — flag it instead
+          // of just saying "Cycling" forever (this is how the ~15h BOB wedge
+          // went unnoticed until someone thought to query the ledger by hand).
+          const intervalSecs = currentConfig ? bi(currentConfig.arb_interval_secs) : '?';
+          arbTxt.textContent = `Cycling — running ${Math.floor(stuckSecs / 60)}m ${stuckSecs % 60}s (normal interval ${intervalSecs}s)`;
+          arbTxt.style.color = 'var(--warning)';
+          arbTxt.style.fontWeight = '600';
+        } else {
+          arbTxt.textContent = 'Cycling';
+        }
       } else {
         arbDot.className = 'pulse-dot live';
         arbTxt.textContent = 'Idle';
@@ -4710,6 +4726,15 @@
         report.volume_stranded_icp > 0n
           ? (Number(report.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP'
           : '0.0000 ICP';
+
+      // Stranded BOB (volume subaccount) — mirrors Stranded ICP above. The
+      // fee-accounting wedge that cost ~15h of downtime showed up here first,
+      // as a nonzero balance the bot couldn't move; surfaced directly instead
+      // of requiring a manual ledger query to notice.
+      document.getElementById('deck-stranded-bob').textContent =
+        report.volume_stranded_bob > 0n
+          ? (Number(report.volume_stranded_bob) / 1e8).toFixed(4) + ' BOB'
+          : '0.0000 BOB';
 
       // BOB balance (Strategy S)
       document.getElementById('deck-bob').textContent =
