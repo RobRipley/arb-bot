@@ -83,15 +83,25 @@ type PoolHealth = record {
 
 type BotHealthReport = record {
   arb_cycle_in_progress: bool;
+  arb_cycle_started_at_ns: opt nat64;
   volume_cycle_in_progress: bool;
   volume_paused: bool;
   arb_paused: bool;
   volume_stranded_icp: nat64;
+  volume_stranded_bob: nat64;
   pending_exit: opt PendingExit;
   pending_bob_exit: opt PendingBobExit;
   balance_bob: nat64;
   slippage_bps: nat64;
   pools: vec PoolHealth;
+};
+
+type PublicHealth = record {
+  has_pending_exit: bool;
+  has_pending_bob_exit: bool;
+  has_stranded_volume_funds: bool;
+  arb_paused: bool;
+  volume_paused: bool;
 };
 
 type Direction = variant {
@@ -395,6 +405,7 @@ service : (InitArgs) -> {
   set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
   set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
   get_bot_health: () -> (BotHealthReport);
+  get_public_health: () -> (PublicHealth) query;
   trigger_volume_rebalance: () -> ();
   volume_swap: (bool, nat64, nat64) -> ();
   get_volume_stats: () -> (VolumeStats) query;

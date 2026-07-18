@@ -512,10 +512,17 @@ pub struct PoolHealth {
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct BotHealthReport {
     pub arb_cycle_in_progress: bool,
+    /// When the in-progress arb cycle acquired the lock (ns since epoch).
+    /// None when idle. Lets the UI flag a cycle wedged far past the interval.
+    #[serde(default)]
+    pub arb_cycle_started_at_ns: Option<u64>,
     pub volume_cycle_in_progress: bool,
     pub volume_paused: bool,
     pub arb_paused: bool,
     pub volume_stranded_icp: u64,
+    /// BOB stranded on the volume subaccount (8 dec) — see `volume_stranded_bob` state.
+    #[serde(default)]
+    pub volume_stranded_bob: u64,
     pub pending_exit: Option<PendingExit>,
     /// Strategy S: BOB acquired by a leg 1 whose leg 2 hasn't completed.
     #[serde(default)]
@@ -525,6 +532,18 @@ pub struct BotHealthReport {
     pub balance_bob: u64,
     pub slippage_bps: u64,
     pub pools: Vec<PoolHealth>,
+}
+
+/// Anonymous-safe subset of `BotHealthReport`: bare stuck-state flags only —
+/// no balances, no principals, no config. Returned by `get_public_health`.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
+pub struct PublicHealth {
+    pub has_pending_exit: bool,
+    pub has_pending_bob_exit: bool,
+    /// True if either stranded pot (ICP or BOB) is non-zero.
+    pub has_stranded_volume_funds: bool,
+    pub arb_paused: bool,
+    pub volume_paused: bool,
 }
 
 /// Records the intended exit pool after a successful Leg 1, so the drain

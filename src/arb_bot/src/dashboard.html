@@ -973,7 +973,8 @@
 
     <!-- Global wedge banner — shown on every view when the bot health report
          indicates a stuck state (pending exit / pending BOB exit / stranded
-         volume ICP). Requires an admin login (health is auth-gated). -->
+         volume funds). Admins get details from get_bot_health; logged-out
+         visitors get a generic message from the anonymous get_public_health. -->
     <div class="card warning-card wedge-banner" id="wedge-banner" style="display:none">
       <div class="warning-rail"></div>
       <div class="warning-body">
@@ -1450,6 +1451,10 @@
             <div class="deck-stat-value" id="deck-stranded">—</div>
           </div>
           <div class="deck-stat">
+            <div class="deck-stat-label">Stranded BOB</div>
+            <div class="deck-stat-value" id="deck-stranded-bob">—</div>
+          </div>
+          <div class="deck-stat">
             <div class="deck-stat-label">Slippage Tolerance</div>
             <div class="deck-stat-value" id="deck-slip">—</div>
           </div>
@@ -1802,6 +1807,20 @@
           <button class="btn btn-sm btn-block" onclick="doDeposit('icp')">Deposit ICP</button>
           <button class="btn btn-sm btn-block" onclick="doDeposit('bob')">Deposit BOB</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Row 4, Full Width: Admins -->
+    <div class="card admin-full">
+      <div class="card-header">Admins</div>
+      <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)">Admins have full control of the bot: config, withdrawals, and trade execution. Only the owner can add or remove admins. II principals are origin-scoped &mdash; a localhost session has a different principal than the live origin.</div>
+      <div id="admins-list" style="display:flex;flex-direction:column;gap:var(--sp-1);margin-bottom:var(--sp-4);font-size:12px">Loading...</div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:260px">
+          <label>Principal</label>
+          <input type="text" id="admin-principal" placeholder="Principal ID">
+        </div>
+        <button class="btn btn-primary" onclick="doAddAdmin(this)">Add Admin</button>
       </div>
     </div>
 
@@ -2160,15 +2179,24 @@
       });
       const BotHealthReport = I.Record({
         arb_cycle_in_progress: I.Bool,
+        arb_cycle_started_at_ns: I.Opt(I.Nat64),
         volume_cycle_in_progress: I.Bool,
         volume_paused: I.Bool,
         arb_paused: I.Bool,
         volume_stranded_icp: I.Nat64,
+        volume_stranded_bob: I.Nat64,
         pending_exit: I.Opt(PendingExit),
         pending_bob_exit: I.Opt(PendingBobExit),
         balance_bob: I.Nat64,
         slippage_bps: I.Nat64,
         pools: I.Vec(PoolHealth),
+      });
+      const PublicHealth = I.Record({
+        has_pending_exit: I.Bool,
+        has_pending_bob_exit: I.Bool,
+        has_stranded_volume_funds: I.Bool,
+        arb_paused: I.Bool,
+        volume_paused: I.Bool,
       });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
@@ -2289,6 +2317,7 @@
         set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
+        get_public_health: I.Func([], [PublicHealth], ['query']),
       });
     };
 
@@ -3362,6 +3391,9 @@
       if (authenticatedActor && loadAllTickCount % 2 === 0) {
         fetchHealth(); // de-dupes against any concurrent view-open/manual refresh
       }
+      if (!authenticatedActor) {
+        fetchPublicHealth(); // logged-out wedge banner (flags-only anonymous query)
+      }
       document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
     }
 
@@ -4082,7 +4114,46 @@
             ? 'Strategy S (icUSD/BOB): <span style="color:#34d399;font-weight:600">LIVE</span>'
             : 'Strategy S (icUSD/BOB): <span style="color:var(--warning);font-weight:600">DRY-RUN</span>';
       }
+      renderAdmins();
     }
+
+    // ═══════ Admin: Admins ═══════
+
+    function renderAdmins() {
+      const el = document.getElementById('admins-list');
+      if (!el || !currentConfig) return;
+      const row = (p, isOwner) => {
+        const t = p.toText();
+        const you = t === loggedInPrincipalText ? ' <span style="color:var(--accent);font-family:var(--font-ui)">(you)</span>' : '';
+        const right = isOwner
+          ? '<span style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--text-tertiary)">OWNER</span>'
+          : `<button class="btn btn-sm btn-danger" onclick="doRemoveAdmin(this, '${t}')">Remove</button>`;
+        return `<div class="stat-row" style="gap:var(--sp-3)">
+          <span style="font-family:var(--font-data);color:var(--text-secondary);word-break:break-all;cursor:pointer" title="Click to copy" onclick="copyToClipboard('${t}')">${t}${you}</span>
+          ${right}
+        </div>`;
+      };
+      el.innerHTML = row(currentConfig.owner, true) + currentConfig.admins.map(p => row(p, false)).join('');
+    }
+
+    window.doAddAdmin = async function(btn) {
+      if (!requireAuth()) return;
+      const input = document.getElementById('admin-principal');
+      const raw = input.value.trim();
+      let p;
+      try { p = Principal.fromText(raw); } catch { showToast('Invalid principal', 'error'); return; }
+      if (!confirm(`Add ${raw} as admin?\n\nThis grants FULL control of the bot: config, withdrawals, and trade execution.`)) return;
+      doAction(btn, async () => { await authenticatedActor.add_admin(p); input.value = ''; }, 'Admin added');
+    };
+
+    window.doRemoveAdmin = async function(btn, text) {
+      if (!requireAuth()) return;
+      const selfWarn = text === loggedInPrincipalText
+        ? '\n\nWARNING: this is YOUR logged-in principal — removing it locks this session out of the admin view.'
+        : '';
+      if (!confirm(`Remove admin ${text}?${selfWarn}`)) return;
+      doAction(btn, () => authenticatedActor.remove_admin(Principal.fromText(text)), 'Admin removed');
+    };
 
     // ═══════ Admin: Swap ═══════
 
@@ -4511,7 +4582,7 @@
       // have real data, a background refresh shouldn't make the deck flicker
       // back to placeholders.
       if (!loading || latestHealthReport) return;
-      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-stranded-bob', 'deck-slip', 'deck-bob'].forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
         el.textContent = 'loading…';
@@ -4559,7 +4630,11 @@
     // Shown on every view when the latest health report indicates a stuck
     // state. Dismissing hides it until the underlying condition set changes
     // (a fresh problem, or a changed mix of problems, un-dismisses it).
+    // Logged-out visitors get the same banner from the anonymous
+    // get_public_health query, with a generic message (flags only — the
+    // admin-gated report has the details).
     let wedgeDismissedKey = null;
+    let currentWedgeKey = null; // condition set currently shown (or last shown)
 
     function wedgeConditions(report) {
       if (!report) return [];
@@ -4567,7 +4642,20 @@
       if (optVal(report.pending_exit)) out.push('pending_exit');
       if (optVal(report.pending_bob_exit)) out.push('pending_bob_exit');
       if (bi(report.volume_stranded_icp) > 0) out.push('volume_stranded_icp');
+      if (bi(report.volume_stranded_bob) > 0) out.push('volume_stranded_bob');
+      if (arbCycleStuckSecs(report) != null) out.push('arb_cycle_stuck');
       return out;
+    }
+
+    // Seconds the current arb cycle has been running, but only once it exceeds
+    // 3× the configured interval (a normal cycle finishes well within one).
+    // Null when idle, not yet stuck, or config hasn't loaded.
+    function arbCycleStuckSecs(report) {
+      const startedNs = optVal(report.arb_cycle_started_at_ns);
+      if (!report.arb_cycle_in_progress || startedNs == null || !currentConfig) return null;
+      const ageSecs = Number((BigInt(Date.now()) * 1_000_000n - startedNs) / 1_000_000_000n);
+      const intervalSecs = bi(currentConfig.arb_interval_secs);
+      return ageSecs > 3 * intervalSecs ? ageSecs : null;
     }
 
     function wedgeMessage(conditions, report) {
@@ -4582,26 +4670,76 @@
         const icp = (Number(report.volume_stranded_icp) / 1e8).toFixed(4);
         parts.push(icp + ' ICP stranded in the volume bot');
       }
+      if (conditions.includes('volume_stranded_bob')) {
+        const bob = (Number(report.volume_stranded_bob) / 1e8).toFixed(4);
+        parts.push(bob + ' BOB stranded in the volume bot');
+      }
+      if (conditions.includes('arb_cycle_stuck')) {
+        const secs = arbCycleStuckSecs(report);
+        parts.push('Arb cycle stuck in progress for ' + Math.floor(secs / 60) + 'm (interval ' + bi(currentConfig.arb_interval_secs) + 's)');
+      }
       return parts.join(' — ');
     }
 
-    function updateWedgeBanner(report) {
+    function showWedgeBanner(conditions, message) {
       const banner = document.getElementById('wedge-banner');
       if (!banner) return;
-      const conditions = wedgeConditions(report);
       if (conditions.length === 0) {
         banner.style.display = 'none';
         wedgeDismissedKey = null;
+        currentWedgeKey = null;
         return;
       }
       const key = conditions.join(',');
+      currentWedgeKey = key;
       if (wedgeDismissedKey === key) return; // user already dismissed this exact condition set
-      document.getElementById('wedge-banner-msg').textContent = wedgeMessage(conditions, report);
+      document.getElementById('wedge-banner-msg').textContent = message;
+      // The Health view is auth-gated — hide its link on the logged-out variant.
+      const healthLink = banner.querySelector('.wedge-banner-link');
+      if (healthLink) healthLink.style.display = authenticatedActor ? '' : 'none';
       banner.style.display = '';
     }
 
+    function updateWedgeBanner(report) {
+      const conditions = wedgeConditions(report);
+      showWedgeBanner(conditions, wedgeMessage(conditions, report));
+    }
+
+    // Logged-out fallback: same banner, driven by the anonymous flags-only
+    // query. No amounts or details to show, so the message stays generic.
+    function updateWedgeBannerPublic(pub) {
+      const conditions = [];
+      if (pub.has_pending_exit) conditions.push('pending_exit');
+      if (pub.has_pending_bob_exit) conditions.push('pending_bob_exit');
+      // Distinct label from the admin path's 'volume_stranded_icp'/'volume_stranded_bob'
+      // — has_stranded_volume_funds is an ICP-or-BOB OR, not ICP specifically.
+      if (pub.has_stranded_volume_funds) conditions.push('volume_stranded');
+      showWedgeBanner(conditions, 'Bot may be stuck — log in for details.');
+    }
+
+    let publicHealthRequestPromise = null;
+
+    function fetchPublicHealth() {
+      if (authenticatedActor || !anonymousActor) return Promise.resolve(null);
+      if (publicHealthRequestPromise) return publicHealthRequestPromise;
+      publicHealthRequestPromise = (async () => {
+        try {
+          const pub = await anonymousActor.get_public_health();
+          updateWedgeBannerPublic(pub);
+          return pub;
+        } catch (e) {
+          // Silent: anonymous background poll — a toast every 30s would be noise.
+          console.error('public health poll failed:', e);
+          return null;
+        } finally {
+          publicHealthRequestPromise = null;
+        }
+      })();
+      return publicHealthRequestPromise;
+    }
+
     window.dismissWedgeBanner = function() {
-      wedgeDismissedKey = wedgeConditions(latestHealthReport).join(',');
+      wedgeDismissedKey = currentWedgeKey;
       const banner = document.getElementById('wedge-banner');
       if (banner) banner.style.display = 'none';
     };
@@ -4649,7 +4787,7 @@
     function renderHealth(report) {
       // Clear any "loading…" styling left over from setHealthLoadingUI — real
       // data is about to replace those text nodes below.
-      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-slip', 'deck-bob'].forEach(id => {
+      ['deck-arb-text', 'deck-vol-text', 'deck-stranded', 'deck-stranded-bob', 'deck-slip', 'deck-bob'].forEach(id => {
         const el = document.getElementById(id);
         if (el) el.style.color = '';
       });
@@ -4657,12 +4795,24 @@
       // Deck — arb engine
       const arbDot = document.getElementById('deck-arb-dot');
       const arbTxt = document.getElementById('deck-arb-text');
+      arbTxt.style.fontWeight = '';
       if (report.arb_paused) {
         arbDot.className = 'pulse-dot paused';
         arbTxt.textContent = 'Paused';
       } else if (report.arb_cycle_in_progress) {
         arbDot.className = 'pulse-dot busy';
-        arbTxt.textContent = 'Cycling';
+        const stuckSecs = arbCycleStuckSecs(report);
+        if (stuckSecs != null) {
+          // Cycle has run past 3× the configured interval — flag it instead
+          // of just saying "Cycling" forever (this is how the ~15h BOB wedge
+          // went unnoticed until someone thought to query the ledger by hand).
+          const intervalSecs = currentConfig ? bi(currentConfig.arb_interval_secs) : '?';
+          arbTxt.textContent = `Cycling — running ${Math.floor(stuckSecs / 60)}m ${stuckSecs % 60}s (normal interval ${intervalSecs}s)`;
+          arbTxt.style.color = 'var(--warning)';
+          arbTxt.style.fontWeight = '600';
+        } else {
+          arbTxt.textContent = 'Cycling';
+        }
       } else {
         arbDot.className = 'pulse-dot live';
         arbTxt.textContent = 'Idle';
@@ -4687,6 +4837,15 @@
         report.volume_stranded_icp > 0n
           ? (Number(report.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP'
           : '0.0000 ICP';
+
+      // Stranded BOB (volume subaccount) — mirrors Stranded ICP above. The
+      // fee-accounting wedge that cost ~15h of downtime showed up here first,
+      // as a nonzero balance the bot couldn't move; surfaced directly instead
+      // of requiring a manual ledger query to notice.
+      document.getElementById('deck-stranded-bob').textContent =
+        report.volume_stranded_bob > 0n
+          ? (Number(report.volume_stranded_bob) / 1e8).toFixed(4) + ' BOB'
+          : '0.0000 BOB';
 
       // BOB balance (Strategy S)
       document.getElementById('deck-bob').textContent =

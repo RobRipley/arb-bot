@@ -136,6 +136,9 @@ fn partydex_extra_fee_usd(
 
 thread_local! {
     static CYCLE_IN_PROGRESS: Cell<bool> = Cell::new(false);
+    /// When the in-progress cycle acquired the lock (ns since epoch). Lets the
+    /// dashboard flag a cycle stuck "in progress" far longer than the interval.
+    static CYCLE_STARTED_AT_NS: Cell<Option<u64>> = Cell::new(None);
     /// Per-cycle cache for balances and virtual price. Cleared at the start
     /// of each `run_arb_cycle`. Lets multiple strategies share inter-canister
     /// reads (3USD balance, ICP balance, virtual price) instead of refetching.
@@ -149,6 +152,10 @@ pub fn is_cycle_in_progress() -> bool {
     CYCLE_IN_PROGRESS.with(|c| c.get())
 }
 
+pub fn cycle_started_at_ns() -> Option<u64> {
+    CYCLE_STARTED_AT_NS.with(|c| c.get())
+}
+
 /// Admin escape hatch for a wedged cycle lock. `CYCLE_IN_PROGRESS` is normally
 /// released by a `Guard` Drop at the end of `run_arb_cycle` /
 /// `run_specific_strategy`, but a wasm trap unwinds without running Drop — so a
@@ -157,6 +164,7 @@ pub fn is_cycle_in_progress() -> bool {
 /// flag (and the per-cycle caches it guards) and reports the prior state.
 pub fn force_clear_cycle_lock() -> bool {
     let was_locked = CYCLE_IN_PROGRESS.with(|c| c.replace(false));
+    CYCLE_STARTED_AT_NS.with(|c| c.set(None));
     clear_cycle_cache();
     was_locked
 }
@@ -430,11 +438,13 @@ pub async fn run_arb_cycle() {
         if c.get() { true } else { c.set(true); false }
     });
     if already_running { return; }
+    CYCLE_STARTED_AT_NS.with(|c| c.set(Some(ic_cdk::api::time())));
 
     struct Guard;
     impl Drop for Guard {
         fn drop(&mut self) {
             CYCLE_IN_PROGRESS.with(|c| c.set(false));
+            CYCLE_STARTED_AT_NS.with(|c| c.set(None));
             clear_cycle_cache();
         }
     }
@@ -1212,11 +1222,13 @@ pub async fn run_specific_strategy(strategy_tag: &str) {
         state::log_activity("arb_skip", &format!("[{}] Cycle already in progress", strategy_tag));
         return;
     }
+    CYCLE_STARTED_AT_NS.with(|c| c.set(Some(ic_cdk::api::time())));
 
     struct Guard;
     impl Drop for Guard {
         fn drop(&mut self) {
             CYCLE_IN_PROGRESS.with(|c| c.set(false));
+            CYCLE_STARTED_AT_NS.with(|c| c.set(None));
             clear_cycle_cache();
         }
     }
