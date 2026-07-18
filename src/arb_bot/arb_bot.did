@@ -83,10 +83,12 @@ type PoolHealth = record {
 
 type BotHealthReport = record {
   arb_cycle_in_progress: bool;
+  arb_cycle_started_at_ns: opt nat64;
   volume_cycle_in_progress: bool;
   volume_paused: bool;
   arb_paused: bool;
   volume_stranded_icp: nat64;
+  volume_stranded_bob: nat64;
   pending_exit: opt PendingExit;
   pending_bob_exit: opt PendingBobExit;
   balance_bob: nat64;
