@@ -48,6 +48,10 @@ ICP neutral silver. Hue + monogram replaces per-token logo images (no more 95KB 
 2. **Registry & structure**: `VENUES`/`STRATEGIES` JS registry generates spread rows, legend,
    dry-run/force-exec grids, chart series, trade badges. Nav regroup: Overview (cockpit),
    Markets, Charts, Money, Ops, Volume. Trade→strategy attribution, leg pairing.
+   Registry entries declare a **quote axis**: dollar-stable venues share the USD-per-ICP
+   strip in STRATEGY PRICES; non-stable assets (BOB today, more coming) each get their own
+   generated row-group (spot vs pool vs synthetic ref). New asset = registry entry, never
+   a hand-added tile.
 3. **Craft & signature**: venue-pair chips, chart small multiples, inline-style purge,
    confirmations on money-moving actions, unified empty/loading/error states.
 
