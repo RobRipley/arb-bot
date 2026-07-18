@@ -1805,6 +1805,20 @@
       </div>
     </div>
 
+    <!-- Row 4, Full Width: Admins -->
+    <div class="card admin-full">
+      <div class="card-header">Admins</div>
+      <div style="font-size:11px;color:var(--text-tertiary);margin:-4px 0 var(--sp-3)">Admins have full control of the bot: config, withdrawals, and trade execution. Only the owner can add or remove admins. II principals are origin-scoped &mdash; a localhost session has a different principal than the live origin.</div>
+      <div id="admins-list" style="display:flex;flex-direction:column;gap:var(--sp-1);margin-bottom:var(--sp-4);font-size:12px">Loading...</div>
+      <div style="display:flex;gap:var(--sp-2);flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:260px">
+          <label>Principal</label>
+          <input type="text" id="admin-principal" placeholder="Principal ID">
+        </div>
+        <button class="btn btn-primary" onclick="doAddAdmin(this)">Add Admin</button>
+      </div>
+    </div>
+
   </div>
 </section>
     <section class="view" id="view-volume">
@@ -4082,7 +4096,46 @@
             ? 'Strategy S (icUSD/BOB): <span style="color:#34d399;font-weight:600">LIVE</span>'
             : 'Strategy S (icUSD/BOB): <span style="color:var(--warning);font-weight:600">DRY-RUN</span>';
       }
+      renderAdmins();
     }
+
+    // ═══════ Admin: Admins ═══════
+
+    function renderAdmins() {
+      const el = document.getElementById('admins-list');
+      if (!el || !currentConfig) return;
+      const row = (p, isOwner) => {
+        const t = p.toText();
+        const you = t === loggedInPrincipalText ? ' <span style="color:var(--accent);font-family:var(--font-ui)">(you)</span>' : '';
+        const right = isOwner
+          ? '<span style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--text-tertiary)">OWNER</span>'
+          : `<button class="btn btn-sm btn-danger" onclick="doRemoveAdmin(this, '${t}')">Remove</button>`;
+        return `<div class="stat-row" style="gap:var(--sp-3)">
+          <span style="font-family:var(--font-data);color:var(--text-secondary);word-break:break-all;cursor:pointer" title="Click to copy" onclick="copyToClipboard('${t}')">${t}${you}</span>
+          ${right}
+        </div>`;
+      };
+      el.innerHTML = row(currentConfig.owner, true) + currentConfig.admins.map(p => row(p, false)).join('');
+    }
+
+    window.doAddAdmin = async function(btn) {
+      if (!requireAuth()) return;
+      const input = document.getElementById('admin-principal');
+      const raw = input.value.trim();
+      let p;
+      try { p = Principal.fromText(raw); } catch { showToast('Invalid principal', 'error'); return; }
+      if (!confirm(`Add ${raw} as admin?\n\nThis grants FULL control of the bot: config, withdrawals, and trade execution.`)) return;
+      doAction(btn, async () => { await authenticatedActor.add_admin(p); input.value = ''; }, 'Admin added');
+    };
+
+    window.doRemoveAdmin = async function(btn, text) {
+      if (!requireAuth()) return;
+      const selfWarn = text === loggedInPrincipalText
+        ? '\n\nWARNING: this is YOUR logged-in principal — removing it locks this session out of the admin view.'
+        : '';
+      if (!confirm(`Remove admin ${text}?${selfWarn}`)) return;
+      doAction(btn, () => authenticatedActor.remove_admin(Principal.fromText(text)), 'Admin removed');
+    };
 
     // ═══════ Admin: Swap ═══════
 
