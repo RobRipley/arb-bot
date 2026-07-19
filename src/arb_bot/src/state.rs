@@ -47,6 +47,16 @@ fn default_icp_inventory_ceiling() -> u64 {
     2_000_000_000
 }
 
+/// BOB inventory band floor (e8s, 8 decimals) — 10 BOB.
+fn default_bob_inventory_floor() -> u64 {
+    1_000_000_000
+}
+
+/// BOB inventory band ceiling (e8s, 8 decimals) — 40 BOB.
+fn default_bob_inventory_ceiling() -> u64 {
+    4_000_000_000
+}
+
 /// BOB ledger — mainnet-verified principal (fee 1_000_000 e8s, 8 decimals).
 fn default_bob_ledger() -> Principal {
     Principal::from_text("7pail-xaaaa-aaaas-aabmq-cai").expect("valid principal")
@@ -151,6 +161,13 @@ pub struct BotConfig {
     pub icp_inventory_floor_e8s: u64,
     #[serde(default = "default_icp_inventory_ceiling")]
     pub icp_inventory_ceiling_e8s: u64,
+    /// BOB inventory band (e8s, 8 decimals). Mirrors `icp_inventory_floor_e8s`
+    /// / `icp_inventory_ceiling_e8s` in shape only — stored/settable/displayed;
+    /// not wired into any trading or drain logic.
+    #[serde(default = "default_bob_inventory_floor")]
+    pub bob_inventory_floor_e8s: u64,
+    #[serde(default = "default_bob_inventory_ceiling")]
+    pub bob_inventory_ceiling_e8s: u64,
     /// Strategy S: BOB ledger canister (mainnet-verified).
     #[serde(default = "default_bob_ledger")]
     pub bob_ledger: Principal,
@@ -677,6 +694,8 @@ impl Default for BotState {
                 partydex_ckusdt_fee_pips: default_partydex_fee_pips(),
                 icp_inventory_floor_e8s: default_icp_inventory_floor(),
                 icp_inventory_ceiling_e8s: default_icp_inventory_ceiling(),
+                bob_inventory_floor_e8s: default_bob_inventory_floor(),
+                bob_inventory_ceiling_e8s: default_bob_inventory_ceiling(),
                 bob_ledger: default_bob_ledger(),
                 bob_ledger_fee: default_bob_ledger_fee(),
                 icpswap_bob_icp_pool: default_icpswap_bob_icp_pool(),

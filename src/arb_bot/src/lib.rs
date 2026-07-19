@@ -1883,6 +1883,26 @@ fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
     Ok(())
 }
 
+/// Sets the BOB inventory band (e8s, 8 decimals). Mirrors
+/// `set_icp_inventory_band` exactly: stored/settable/displayed config only —
+/// not wired into any trading or drain logic.
+#[update]
+fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+    require_admin();
+    if floor_e8s < 100_000_000 {
+        return Err("floor must be >= 1 BOB".into());
+    }
+    if ceiling_e8s <= floor_e8s {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.bob_inventory_floor_e8s = floor_e8s;
+        s.config.bob_inventory_ceiling_e8s = ceiling_e8s;
+    });
+    state::log_activity("admin", &format!("bob inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
+    Ok(())
+}
+
 /// Sets both Strategy S pool principals in one call. Resets the resolved-
 /// ordering flag for any pool whose principal actually changes, so a
 /// re-pointed pool gets its token ordering re-probed on the next cycle

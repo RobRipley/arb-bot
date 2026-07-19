@@ -29,6 +29,8 @@ type BotConfig = record {
   partydex_ckusdt_fee_pips: nat32;
   icp_inventory_floor_e8s: nat64;
   icp_inventory_ceiling_e8s: nat64;
+  bob_inventory_floor_e8s: nat64;
+  bob_inventory_ceiling_e8s: nat64;
   bob_ledger: principal;
   bob_ledger_fee: nat64;
   icpswap_bob_icp_pool: principal;
@@ -401,6 +403,7 @@ service : (InitArgs) -> {
   set_slippage_bps: (nat64) -> (variant { Ok; Err: text });
   set_arb_interval_secs: (nat64) -> (variant { Ok; Err: text });
   set_icp_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
+  set_bob_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
   set_bob_pools: (principal, principal) -> (variant { Ok; Err: text });
   set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
   set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
