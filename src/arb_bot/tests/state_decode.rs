@@ -23,6 +23,23 @@ fn old_state_without_band_fields_decodes_with_defaults() {
     assert_eq!(decoded.config.icp_inventory_ceiling_e8s, 2_000_000_000, "ceiling default = 20 ICP");
 }
 
+/// Same guard for the BOB inventory band: a blob saved before these fields
+/// existed must decode with the documented 10 BOB / 40 BOB defaults.
+#[test]
+fn old_state_without_bob_band_fields_decodes_with_defaults() {
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let cfg = v
+        .get_mut("config")
+        .and_then(|c| c.as_object_mut())
+        .expect("config object");
+    assert!(cfg.remove("bob_inventory_floor_e8s").is_some());
+    assert!(cfg.remove("bob_inventory_ceiling_e8s").is_some());
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
+    assert_eq!(decoded.config.bob_inventory_floor_e8s, 1_000_000_000, "floor default = 10 BOB");
+    assert_eq!(decoded.config.bob_inventory_ceiling_e8s, 4_000_000_000, "ceiling default = 40 BOB");
+}
+
 /// Same guard for the nine Strategy S BotConfig fields: a pre-S blob must
 /// decode with the documented defaults — mainnet-verified principals for the
 /// BOB ledger and BOB/ICP pool, anonymous for the not-yet-existing icUSD/BOB

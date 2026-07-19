@@ -432,6 +432,8 @@
   .chart-legend { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-top: var(--sp-3); }
   .chart-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-secondary); cursor: pointer; user-select: none; }
   .chart-legend-item.off { opacity: 0.3; }
+  .series-chip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; border: 1px solid rgba(0,0,0,0.2); }
+  .series-chip-letter { font-family: var(--font-data); font-weight: 700; font-size: 9.5px; color: #08090c; text-shadow: 0 0 3px rgba(255,255,255,0.5); letter-spacing: -0.02em; }
   .chart-svg-wrap { position: relative; }
   .chart-axis-label { font-family: var(--font-data); font-size: 9.5px; fill: var(--text-muted); }
 
@@ -601,6 +603,7 @@
   .activity-cat { font-family: var(--font-data); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
 
   .pagination { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-3); font-size: 12px; color: var(--text-tertiary); }
+  .ledger-pagesize { display: flex; align-items: center; gap: 4px; margin-left: var(--sp-3); }
 
   .swap-panel-sm .swap-token-row .token-logo { width: 15px; height: 15px; }
   .fund-vol-grid { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: flex-end; }
@@ -684,7 +687,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_inventory_floor_e8s: IDL.Nat64, bob_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null, TopUp: IDL.Null });
@@ -885,6 +888,7 @@
         set_slippage_bps: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_arb_interval_secs: I.Func([I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_icp_inventory_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_bob_inventory_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_bob_pools: I.Func([I.Principal, I.Principal], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_bob_params: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
@@ -1048,6 +1052,75 @@
     const STRATEGY_BY_ID = Object.fromEntries(STRATEGIES.map(s => [s.id, s]));
     const RUMI_CROSS_IDS = STRATEGIES.filter(s => s.family === 'rumi-cross').map(s => s.id);
 
+    // ── Per-strategy chart color (bug fix: family small-multiples used to draw
+    // every series in one flat family hue, e.g. all 6 PartyDEX×ICPSwap series
+    // in the same purple — unreadable). Each strategy gets a distinct, stable
+    // color anchored to its family's venue hue: hue is fanned out across the
+    // family (wider fan for bigger families, e.g. the 6-series PartyDEX family
+    // spreads blue → purple → magenta) and lightness alternates so hue-adjacent
+    // neighbors also separate in value. Single-series families are untouched.
+    function hexToHsl(hex) {
+      const r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255;
+      const max = Math.max(r, g, b), min = Math.min(r, g, b);
+      let h = 0, s = 0; const l = (max + min) / 2;
+      if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+        else if (max === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+      }
+      return [h, s * 100, l * 100];
+    }
+    function hslToHex(h, s, l) {
+      h = ((h % 360) + 360) % 360; s = Math.max(0, Math.min(100, s)) / 100; l = Math.max(0, Math.min(100, l)) / 100;
+      const c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = l - c / 2;
+      let r, g, b;
+      if (h < 60) [r, g, b] = [c, x, 0];
+      else if (h < 120) [r, g, b] = [x, c, 0];
+      else if (h < 180) [r, g, b] = [0, c, x];
+      else if (h < 240) [r, g, b] = [0, x, c];
+      else if (h < 300) [r, g, b] = [x, 0, c];
+      else [r, g, b] = [c, 0, x];
+      const toHex = v => Math.round((v + m) * 255).toString(16).padStart(2, '0');
+      return '#' + toHex(r) + toHex(g) + toHex(b);
+    }
+    // Build `count` distinct-but-related colors anchored at baseHex's hue.
+    function familyColorRamp(baseHex, count) {
+      if (count <= 1) return [baseHex];
+      const [h, s, l] = hexToHsl(baseHex);
+      const sat = Math.max(55, Math.min(88, s));
+      const arc = Math.min(120, 20 * count); // wider fan for bigger families
+      const centerL = l * 0.4 + 58 * 0.6; // pull toward a readable middle so the ramp doesn't clip at the ends
+      const colors = [];
+      for (let i = 0; i < count; i++) {
+        const t = i / (count - 1);
+        const hueOffset = (t - 0.5) * arc;
+        const sign = i % 2 === 0 ? -1 : 1;
+        const lightOffset = sign * (4 + 4 * Math.floor(i / 2));
+        const lightness = Math.max(34, Math.min(80, centerL + lightOffset));
+        colors.push(hslToHex(h + hueOffset, sat, lightness));
+      }
+      return colors;
+    }
+    function venueHex(vKey) {
+      return hue(VENUES[vKey].hue.replace(/^var\(|\)$/g, ''));
+    }
+    // Assign each strategy's stable chartColor, grouped by family. Runs once at
+    // registry-load time; `hue()` (defined below) is a hoisted function
+    // declaration, so the forward reference here is safe.
+    function assignChartColors() {
+      const byFamily = {};
+      STRATEGIES.forEach(s => { (byFamily[s.family] = byFamily[s.family] || []).push(s); });
+      Object.keys(byFamily).forEach(fam => {
+        const famStrats = byFamily[fam];
+        const ramp = familyColorRamp(venueHex(famStrats[0].vA), famStrats.length);
+        famStrats.forEach((s, i) => { s.chartColor = ramp[i]; });
+      });
+    }
+    assignChartColors();
+
     // Cost-center rows (amendment 2): a volume pool has a cost, not a profit —
     // no P&L field anywhere. statsKey indexes VolumeStats; poolVariant is the
     // exact Candid variant sent to set_volume_config / fund/withdraw calls.
@@ -1071,6 +1144,15 @@
       </span>`;
     }
 
+    // Chart-legend swatch: exact-match to the strategy's chartColor so a
+    // legend chip and its series are never distinguishable-but-different.
+    function chartSeriesChip(s) {
+      const small = s.id.length > 1 ? 'font-size:8px' : '';
+      return `<span class="series-chip" style="background:${s.chartColor || venueHex(s.vA)}" title="${esc(s.id)} · ${esc(s.pair)}">
+        <span class="series-chip-letter" style="${small}">${esc(s.id)}</span>
+      </span>`;
+    }
+
     // ═══════ App state ═══════
 
     const state = {
@@ -1089,8 +1171,20 @@
     };
 
     let tradesPage = 0, activityPage = 0;
-    const PAGE_SIZE = 20;
     const ACTIVITY_PAGE_SIZE = 50;
+
+    // Ledger page size is a leg-*group* count (paired trade cycles as
+    // displayed), not a raw-leg count — see fetchLedgerGroups(). Persisted so
+    // a chosen density survives reload.
+    const LEDGER_PAGESIZE_KEY = 'rumi_dash_ledger_pagesize';
+    const LEDGER_PAGESIZE_OPTIONS = [10, 25, 50];
+    function loadLedgerPageSizePref() {
+      const stored = parseInt(localStorage.getItem(LEDGER_PAGESIZE_KEY), 10);
+      return LEDGER_PAGESIZE_OPTIONS.includes(stored) ? stored : 25;
+    }
+    let ledgerPageSize = loadLedgerPageSizePref();
+    let ledgerPageOffsets = [0]; // ledgerPageOffsets[i] = raw get_trade_legs offset where displayed page i begins
+    let ledgerHasMore = true; // whether another page exists past the current one
     let snapshotCache = [];
     let snapshotsLoaded = false;
     let chartsRefreshInterval = null;
@@ -1655,10 +1749,30 @@
       snapshotsLoaded = true;
     }
 
-    async function loadTrades() {
-      try {
-        return await anonymousActor.get_trade_legs(BigInt(tradesPage * PAGE_SIZE), BigInt(PAGE_SIZE));
-      } catch (e) { console.error('loadTrades:', e); return []; }
+    // Fetches raw legs starting at `offset` and pairs them (pairLegs, defined
+    // below — hoisted) until at least `pageSize` leg-groups are assembled or
+    // the ledger is exhausted. A leg-group can span more raw legs than a flat
+    // fixed-size fetch would guess (drains/top-ups/unpaired legs skew the
+    // ratio), so this grows the raw fetch rather than assume a fixed 2:1
+    // legs-per-group ratio — the previous bug compared a paired-group count
+    // against a raw-leg page size, which is why Next was permanently disabled
+    // (see fix note in loadLedgerPage).
+    async function fetchLedgerGroups(offset, pageSize) {
+      let rawLimit = pageSize * 3;
+      let legs = [], allGroups = [], isLastFetch = false;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          legs = await anonymousActor.get_trade_legs(BigInt(offset), BigInt(rawLimit));
+        } catch (e) { console.error('fetchLedgerGroups:', e); legs = []; break; }
+        allGroups = pairLegs(legs);
+        isLastFetch = legs.length < rawLimit;
+        if (allGroups.length >= pageSize || isLastFetch) break;
+        rawLimit *= 2;
+      }
+      const shown = allGroups.slice(0, pageSize);
+      const consumedLegs = shown.reduce((n, g) => n + g.legs.length, 0);
+      const hasMore = !isLastFetch || allGroups.length > shown.length;
+      return { shown, consumedLegs, hasMore };
     }
 
     async function loadActivity() {
@@ -2263,7 +2377,7 @@
         handleScroll: false, handleScale: false,
         width: container.clientWidth, height: 52,
       });
-      const series = chart.addLineSeries({ color: VENUES[s.vA].hue.startsWith('var') ? getComputedStyle(document.documentElement).getPropertyValue(s.vA === 'rumi' ? '--v-rumi' : s.vA === 'icpswap' ? '--v-icpswap' : s.vA === 'partydex' ? '--v-partydex' : '--v-bob').trim() : s.vA, lineWidth: 1.4, priceLineVisible: false, lastValueVisible: false });
+      const series = chart.addLineSeries({ color: s.chartColor || venueHex(s.vA), lineWidth: 1.4, priceLineVisible: false, lastValueVisible: false });
       series.setData(data);
       chart.timeScale().fitContent();
     }
@@ -2404,10 +2518,11 @@
       strats.forEach(s => {
         if (fam === 'rumi-cross' && rumiPaused && !state.chartOffSeries.has('__show_paused_' + fam)) return; // paused family: omit its series (as today)
         if (state.chartOffSeries.has(s.id)) return;
-        const series = chart.addLineSeries({ color: hue(s.vA === 'rumi' ? '--v-rumi' : s.vA === 'icpswap' ? '--v-icpswap' : s.vA === 'partydex' ? '--v-partydex' : '--v-bob'), lineWidth: 1.6, title: s.id, priceLineVisible: false, lastValueVisible: false });
+        const seriesColor = s.chartColor || venueHex(s.vA);
+        const series = chart.addLineSeries({ color: seriesColor, lineWidth: 1.6, title: s.id, priceLineVisible: false, lastValueVisible: false });
         series.setData(snaps.map(sn => ({ time: Math.floor(bi(sn.timestamp) / 1e9), value: bi(sn[s.spreadField] !== undefined ? sn[s.spreadField] : 0) })));
         const markers = snaps.filter(sn => sn.traded && sn.strategy_used === s.id)
-          .map(sn => ({ time: Math.floor(bi(sn.timestamp) / 1e9), position: 'aboveBar', color: hue('--v-' + s.vA === '--v-rumi' ? '--v-rumi' : '--v-icpswap'), shape: 'circle', size: 1 }));
+          .map(sn => ({ time: Math.floor(bi(sn.timestamp) / 1e9), position: 'aboveBar', color: seriesColor, shape: 'circle', size: 1 }));
         if (markers.length) series.setMarkers(markers);
       });
       const thr = currentConfig ? bi(currentConfig.min_spread_bps) : 50;
@@ -2546,7 +2661,7 @@
                 <div class="card-header">${FAMILIES[fam]}${fam === 'rumi-cross' && rumiPaused ? ' <span class="badge badge-paused" style="margin-left:6px">Rumi AMM paused — series omitted</span>' : ''}</div>
                 <div class="chart-svg-wrap" id="fam-chart-${fam}"></div>
                 <div class="chart-legend">
-                  ${strats.map(s => `<span class="chart-legend-item${state.chartOffSeries.has(s.id) ? ' off' : ''}" onclick="toggleChartSeries('${s.id}')">${vpChip(s.vA, s.vB, s.id)} ${esc(s.pair)}</span>`).join('')}
+                  ${strats.map(s => `<span class="chart-legend-item${state.chartOffSeries.has(s.id) ? ' off' : ''}" onclick="toggleChartSeries('${s.id}')">${chartSeriesChip(s)} ${esc(s.pair)}</span>`).join('')}
                 </div>
               </div>`;
             }).join('')}
@@ -3055,6 +3170,8 @@
       'cfg-partydex-ckusdt-fee': { get: c => bi(c.partydex_ckusdt_fee_pips),                 fmt: v => String(v) },
       'cfg-icp-floor':           { get: c => bi(c.icp_inventory_floor_e8s) / 1e8,            fmt: v => v.toFixed(2) },
       'cfg-icp-ceiling':         { get: c => bi(c.icp_inventory_ceiling_e8s) / 1e8,          fmt: v => v.toFixed(2) },
+      'cfg-bob-floor':           { get: c => bi(c.bob_inventory_floor_e8s) / 1e8,            fmt: v => v.toFixed(2) },
+      'cfg-bob-ceiling':         { get: c => bi(c.bob_inventory_ceiling_e8s) / 1e8,          fmt: v => v.toFixed(2) },
       'cfg-bob-max-trade':       { get: c => bi(c.bob_max_trade_size_usd) / 1e6,              fmt: v => v.toFixed(2) },
       'cfg-bob-min-spread':      { get: c => bi(c.bob_min_spread_bps),                        fmt: v => String(v) },
       'cfg-bob-icp-pool':        { get: c => c.icpswap_bob_icp_pool.toText(),                 isText: true },
@@ -3095,6 +3212,8 @@
       const partydexCkusdtFee = parseInt(document.getElementById('cfg-partydex-ckusdt-fee').value);
       const icpFloorRaw = parseFloat(document.getElementById('cfg-icp-floor').value);
       const icpCeilingRaw = parseFloat(document.getElementById('cfg-icp-ceiling').value);
+      const bobFloorRaw = parseFloat(document.getElementById('cfg-bob-floor').value);
+      const bobCeilingRaw = parseFloat(document.getElementById('cfg-bob-ceiling').value);
       const bobMaxTradeRaw = parseFloat(document.getElementById('cfg-bob-max-trade').value);
       const bobMinSpreadRaw = parseInt(document.getElementById('cfg-bob-min-spread').value);
       const bobIcpPoolRaw = document.getElementById('cfg-bob-icp-pool').value.trim();
@@ -3102,10 +3221,12 @@
 
       if (isNaN(minSpread) && isNaN(maxTradeRaw) && isNaN(minProfitRaw) && isNaN(arbIntervalRaw)
           && isNaN(partydexCkusdcFee) && isNaN(partydexCkusdtFee) && isNaN(icpFloorRaw) && isNaN(icpCeilingRaw)
-          && isNaN(bobMaxTradeRaw) && isNaN(bobMinSpreadRaw) && !bobIcpPoolRaw && !icusdBobPoolRaw) {
+          && isNaN(bobMaxTradeRaw) && isNaN(bobMinSpreadRaw) && !bobIcpPoolRaw && !icusdBobPoolRaw
+          && isNaN(bobFloorRaw) && isNaN(bobCeilingRaw)) {
         toast('Enter at least one value to update', 'error'); return;
       }
       if (isNaN(icpFloorRaw) !== isNaN(icpCeilingRaw)) { toast('ICP inventory floor and ceiling must be set together', 'error'); return; }
+      if (isNaN(bobFloorRaw) !== isNaN(bobCeilingRaw)) { toast('BOB inventory floor and ceiling must be set together', 'error'); return; }
       if (isNaN(bobMaxTradeRaw) !== isNaN(bobMinSpreadRaw)) { toast('BOB max trade size and min spread must be set together', 'error'); return; }
       if (!!bobIcpPoolRaw !== !!icusdBobPoolRaw) { toast('Both BOB pool principals must be set together', 'error'); return; }
 
@@ -3122,6 +3243,7 @@
         }
         if (!isNaN(arbIntervalRaw)) checkRes(await authenticatedActor.set_arb_interval_secs(BigInt(arbIntervalRaw)));
         if (!isNaN(icpFloorRaw) && !isNaN(icpCeilingRaw)) checkRes(await authenticatedActor.set_icp_inventory_band(BigInt(Math.round(icpFloorRaw * 1e8)), BigInt(Math.round(icpCeilingRaw * 1e8))));
+        if (!isNaN(bobFloorRaw) && !isNaN(bobCeilingRaw)) checkRes(await authenticatedActor.set_bob_inventory_band(BigInt(Math.round(bobFloorRaw * 1e8)), BigInt(Math.round(bobCeilingRaw * 1e8))));
         if (!isNaN(bobMaxTradeRaw) && !isNaN(bobMinSpreadRaw)) checkRes(await authenticatedActor.set_bob_params(BigInt(Math.round(bobMaxTradeRaw * 1e6)), BigInt(bobMinSpreadRaw)));
         if (bobIcpPoolRaw && icusdBobPoolRaw) checkRes(await authenticatedActor.set_bob_pools(Principal.fromText(bobIcpPoolRaw), Principal.fromText(icusdBobPoolRaw)));
         toast('Config updated', 'success');
@@ -3134,6 +3256,8 @@
         if (!isNaN(partydexCkusdtFee)) savedIds.push('cfg-partydex-ckusdt-fee');
         if (!isNaN(icpFloorRaw)) savedIds.push('cfg-icp-floor');
         if (!isNaN(icpCeilingRaw)) savedIds.push('cfg-icp-ceiling');
+        if (!isNaN(bobFloorRaw)) savedIds.push('cfg-bob-floor');
+        if (!isNaN(bobCeilingRaw)) savedIds.push('cfg-bob-ceiling');
         if (!isNaN(bobMaxTradeRaw)) savedIds.push('cfg-bob-max-trade');
         if (!isNaN(bobMinSpreadRaw)) savedIds.push('cfg-bob-min-spread');
         if (bobIcpPoolRaw) savedIds.push('cfg-bob-icp-pool');
@@ -3395,6 +3519,8 @@
               <div><label>Min profit (USD)</label><input type="number" id="cfg-min-profit" step="0.01"></div>
               <div><label>ICP inventory floor</label><input type="number" id="cfg-icp-floor" step="0.01"></div>
               <div><label>ICP inventory ceiling</label><input type="number" id="cfg-icp-ceiling" step="0.01"></div>
+              <div><label>BOB inventory floor</label><input type="number" id="cfg-bob-floor" step="0.01"></div>
+              <div><label>BOB inventory ceiling</label><input type="number" id="cfg-bob-ceiling" step="0.01"></div>
               <div><label>BOB max trade (USD)</label><input type="number" id="cfg-bob-max-trade" step="0.01"></div>
               <div><label>BOB min spread (bps)</label><input type="number" id="cfg-bob-min-spread"></div>
             </div>
@@ -3481,8 +3607,13 @@
 
     let ledgerCache = { entries: [], summaryCount: 0 };
     async function loadLedgerPage() {
-      const legs = await loadTrades(); // paginated get_trade_legs
-      ledgerCache.entries = pairLegs(legs).reverse(); // newest-first within this page
+      const tbody = document.getElementById('ledger-body');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading…</td></tr>';
+      const offset = ledgerPageOffsets[tradesPage] !== undefined ? ledgerPageOffsets[tradesPage] : 0;
+      const { shown, consumedLegs, hasMore } = await fetchLedgerGroups(offset, ledgerPageSize);
+      ledgerCache.entries = shown.slice().reverse(); // newest-first within this page
+      ledgerHasMore = hasMore;
+      if (hasMore) ledgerPageOffsets[tradesPage + 1] = offset + consumedLegs;
       renderLedgerTable();
     }
 
@@ -3498,11 +3629,25 @@
       if (countEl) countEl.textContent = window._lastSummary ? `${rows.length} shown of ${bi(window._lastSummary.total_legs)} legs all-time` : '';
       const prevBtn = document.getElementById('ledger-prev'), nextBtn = document.getElementById('ledger-next'), pageEl = document.getElementById('ledger-page');
       if (prevBtn) prevBtn.disabled = tradesPage === 0;
-      if (nextBtn) nextBtn.disabled = ledgerCache.entries.length === 0 || ledgerCache.entries.length < PAGE_SIZE;
+      if (nextBtn) nextBtn.disabled = !ledgerHasMore;
       if (pageEl) pageEl.textContent = `Page ${tradesPage + 1}`;
     }
     window.ledgerPrev = () => { if (tradesPage > 0) { tradesPage--; loadLedgerPage(); } };
-    window.ledgerNext = () => { tradesPage++; loadLedgerPage(); };
+    window.ledgerNext = () => { if (ledgerHasMore) { tradesPage++; loadLedgerPage(); } };
+    function ledgerPagesizeHtml() {
+      return LEDGER_PAGESIZE_OPTIONS.map(n => `<button class="chip chip-sm ${ledgerPageSize === n ? 'active' : ''}" onclick="setLedgerPageSize(${n})">${n}/page</button>`).join('');
+    }
+    window.setLedgerPageSize = function (size) {
+      size = parseInt(size, 10);
+      if (!LEDGER_PAGESIZE_OPTIONS.includes(size) || size === ledgerPageSize) return;
+      ledgerPageSize = size;
+      localStorage.setItem(LEDGER_PAGESIZE_KEY, String(size));
+      tradesPage = 0;
+      ledgerPageOffsets = [0];
+      const el = document.getElementById('ledger-pagesize');
+      if (el) el.innerHTML = ledgerPagesizeHtml();
+      loadLedgerPage();
+    };
     window.setLedgerFilter = function (id) { state.ledgerFilter = id; renderLedgerTable(); renderNav(); document.querySelectorAll('.ledger-filters .btn').forEach(b => {}); renderLedger(); };
     window.toggleLedgerLegend = function () { state.ledgerLegendOpen = !state.ledgerLegendOpen; renderLedger(); };
 
@@ -3550,6 +3695,7 @@
             <button class="btn btn-sm btn-ghost" id="ledger-prev" onclick="ledgerPrev()">◂ Prev</button>
             <span id="ledger-page">Page 1</span>
             <button class="btn btn-sm btn-ghost" id="ledger-next" onclick="ledgerNext()">Next ▸</button>
+            <span id="ledger-pagesize" class="ledger-pagesize">${ledgerPagesizeHtml()}</span>
             <span id="ledger-count" style="margin-left:auto"></span>
           </div>
         </div>
