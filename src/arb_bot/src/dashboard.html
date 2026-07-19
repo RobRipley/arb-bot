@@ -373,6 +373,30 @@
   .attn-empty-text { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
   .attn-empty-sub { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
 
+  /* ── Market-price badges (owner-requested return of the pre-redesign
+     STRATEGY PRICES card) — colored per venue/family via --badge-hue, which
+     always resolves to one of the existing --v-* venue vars. No raw hex
+     lives here. ── */
+  .price-badge-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); }
+  .price-badge {
+    display: flex; flex-direction: column; gap: 1px;
+    min-width: 122px; flex: 1 0 auto;
+    background: var(--surface-input); border: 1px solid var(--border);
+    border-top: 2px solid var(--badge-hue, var(--border-strong));
+    border-radius: var(--radius-md); padding: 8px 12px;
+  }
+  .price-badge-venue { display: flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--badge-hue, var(--text-tertiary)); }
+  .price-badge-token { font-size: 11.5px; color: var(--text-secondary); }
+  .price-badge-value { font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600; color: var(--text-primary); margin-top: 2px; }
+  .price-badge-sub { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; }
+  .price-badge-paused { opacity: 0.7; }
+  .price-badge-paused .price-badge-value { color: var(--warning); font-size: 12.5px; font-weight: 500; }
+  .price-badge-unconfigured { border-style: dashed; opacity: 0.7; }
+  .price-badge-unconfigured .price-badge-value { color: var(--text-tertiary); font-size: 12.5px; }
+  .price-axis-group { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px dashed var(--border-strong); }
+  .price-axis-label { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: var(--sp-2); }
+  .price-axis-label .price-axis-note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
+
   /* ═══════════════════ MARKETS ═══════════════════ */
 
   .market-family { margin-bottom: var(--sp-6); }
@@ -2047,6 +2071,92 @@
       return `${m}m ${s}s`;
     }
 
+    // ═══════ Market-price badges (Cockpit) ═══════
+    //
+    // Ported from the pre-redesign "STRATEGY PRICES" card (loadOverviewFromSnapshot
+    // in the old dashboard.html, ~git show 134af83^1). Same CycleSnapshot fields,
+    // same scaling — the owner's numbers must match what they're used to:
+    //   rumi_icp_price_usd        / 1e6  → Rumi 3USD/ICP, USD
+    //   icpswap_icp_price_ckusdc  / 1e6  → ICPSwap ckUSDC/ICP, USD
+    //   icpswap_icp_price_ckusdt  / 1e6  → ICPSwap ckUSDT/ICP, USD
+    //   icpswap_icp_price_icusd   / 1e8  → ICPSwap icUSD/ICP, USD
+    //   partydex_icp_price_ckusdc / 1e6  → PartyDEX ckUSDC/ICP, USD
+    //   partydex_icp_price_ckusdt / 1e6  → PartyDEX ckUSDT/ICP, USD
+    //   virtual_price             / 1e18 → Rumi 3pool virtual price (ratio, not USD)
+    //   bob_pool_price_icusd_per_bob / 1e8 → icUSD/BOB pool price
+    //   bob_ref_price_icusd_per_bob  / 1e8 → synthetic BOB/ICP × USD/ICP reference
+    // A zero/missing raw value, or a cold (`__cold`) cache snapshot that never
+    // carried these fields, always renders as "—" — never a stale or fabricated
+    // number. This card is USD-per-ICP throughout except the BOB sub-group,
+    // which is its own axis (icUSD per BOB) and must never share a row with it.
+    function priceBadge({ token, venueKey, hue, value, sub, state }) {
+      const cls = ['price-badge'];
+      if (state) cls.push('price-badge-' + state);
+      const valueHtml = state === 'paused' ? 'Paused' : (value == null ? '—' : esc(value));
+      const venueName = venueKey && VENUES[venueKey] ? VENUES[venueKey].name : '';
+      return `<div class="${cls.join(' ')}" style="--badge-hue:${hue}">
+        <div class="price-badge-venue">${venueKey ? venueLogo(venueKey) : ''}${esc(venueName)}</div>
+        <div class="price-badge-token">${esc(token)}</div>
+        <div class="price-badge-value">${valueHtml}</div>
+        ${sub ? `<div class="price-badge-sub">${esc(sub)}</div>` : ''}
+      </div>`;
+    }
+
+    function cockpitPriceBadgesHtml(c, cf, stale, bobConfigured) {
+      const snap = latestSnapshot;
+      const cold = !snap || snap.__cold;
+      const rumiPaused = !!(cf && cf.rumi_amm_paused);
+
+      const raw = (field) => (!cold && snap[field] != null) ? bi(snap[field]) : 0;
+      const usdBadgeValue = (field, scale) => { const v = raw(field); return v > 0 ? '$' + (v / scale).toFixed(4) : null; };
+
+      const ckusdc = usdBadgeValue('icpswap_icp_price_ckusdc', 1e6);
+      const ckusdt = usdBadgeValue('icpswap_icp_price_ckusdt', 1e6);
+      const icusd = usdBadgeValue('icpswap_icp_price_icusd', 1e8);
+      const pdCkusdc = usdBadgeValue('partydex_icp_price_ckusdc', 1e6);
+      const pdCkusdt = usdBadgeValue('partydex_icp_price_ckusdt', 1e6);
+      const rumiUsdRaw = raw('rumi_icp_price_usd');
+      const rumiUsd = rumiUsdRaw > 0 ? '$' + (rumiUsdRaw / 1e6).toFixed(4) : null;
+      const vpRaw = raw('virtual_price');
+      const vp = vpRaw > 0 ? (vpRaw / 1e18).toFixed(6) : null;
+
+      const bobPoolRaw = raw('bob_pool_price_icusd_per_bob');
+      const bobRefRaw = raw('bob_ref_price_icusd_per_bob');
+      const bobPool = bobPoolRaw > 0 ? (bobPoolRaw / 1e8).toFixed(4) : null;
+      const bobRef = bobRefRaw > 0 ? (bobRefRaw / 1e8).toFixed(4) : null;
+
+      const usdBadges = [
+        priceBadge({ token: 'ckUSDC', venueKey: 'icpswap', hue: 'var(--v-icpswap)', value: ckusdc }),
+        priceBadge({ token: 'ckUSDT', venueKey: 'icpswap', hue: 'var(--v-icpswap)', value: ckusdt }),
+        priceBadge({ token: 'icUSD', venueKey: 'icpswap', hue: 'var(--v-rumi)', value: icusd }),
+        priceBadge({ token: 'ckUSDC', venueKey: 'partydex', hue: 'var(--v-partydex)', value: pdCkusdc }),
+        priceBadge({ token: 'ckUSDT', venueKey: 'partydex', hue: 'var(--v-partydex)', value: pdCkusdt }),
+        rumiPaused
+          ? priceBadge({ token: '3USD', venueKey: 'rumi', hue: 'var(--v-rumi)', state: 'paused', sub: 'Paused · Rumi AMM' })
+          : priceBadge({ token: '3USD', venueKey: 'rumi', hue: 'var(--v-rumi)', value: rumiUsd }),
+      ];
+      if (!rumiPaused && vp != null) {
+        usdBadges.push(priceBadge({ token: '3pool VP', venueKey: 'rumi', hue: 'var(--v-rumi)', value: vp, sub: 'virtual price, not USD' }));
+      }
+
+      const bobUnconfigured = !bobConfigured;
+      const bobBadges = bobUnconfigured
+        ? priceBadge({ token: 'icUSD/BOB pools', venueKey: 'bob', hue: 'var(--v-bob)', state: 'unconfigured', sub: 'Unconfigured' })
+        + priceBadge({ token: 'Reference', venueKey: 'synth', hue: 'var(--v-bob)', state: 'unconfigured', sub: 'Unconfigured' })
+        : priceBadge({ token: 'icUSD/BOB pool', venueKey: 'icpswap', hue: 'var(--v-bob)', value: bobPool })
+        + priceBadge({ token: 'Synthetic reference', venueKey: 'synth', hue: 'var(--v-bob)', value: bobRef, sub: 'BOB/ICP × USD/ICP' });
+
+      return `
+        <div class="card" style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Market prices — USD per ICP${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
+          <div class="price-badge-row">${usdBadges.join('')}</div>
+          <div class="price-axis-group">
+            <div class="price-axis-label">icUSD per BOB <span class="price-axis-note">— not USD/ICP</span></div>
+            <div class="price-badge-row">${bobBadges}</div>
+          </div>
+        </div>`;
+    }
+
     function renderCockpit() {
       const el = document.getElementById('view-cockpit');
       const c = currentConfig;
@@ -2136,6 +2246,8 @@
             </div>
           </div>
         </div>
+
+        ${cockpitPriceBadgesHtml(c, cf, stale, bobConfigured)}
 
         <div class="card">
           <div class="card-header">Attention — needs you</div>
