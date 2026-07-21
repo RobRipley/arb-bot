@@ -348,6 +348,7 @@
   .hero-card { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: var(--sp-4); }
   .hero-number { font-family: var(--font-data); font-size: 42px; font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
   .hero-delta { font-family: var(--font-data); font-size: 13px; margin-top: 6px; }
+  .hero-split { font-family: var(--font-data); font-size: 11.5px; margin-top: 4px; color: var(--text-tertiary); }
   .hero-pockets { display: flex; gap: var(--sp-6); }
   .hero-pocket { text-align: right; }
   .hero-pocket-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); margin-bottom: 4px; }
@@ -1760,16 +1761,29 @@
       } catch (e) { console.error('loadOverviewFromSnapshot:', e); }
     }
 
-    async function loadSnapshots() {
-      snapshotCache = [];
+    // The paged IC queries anchor at the NEWEST record and walk backward, so
+    // successive batches step further into the past while each batch is itself
+    // oldest-first. Pushing them in fetch order therefore yields a chunk-
+    // reversed array (batch 2's timestamps all precede batch 1's), which breaks
+    // any consumer that assumes chronological order: cumulative sums, slice(-n)
+    // "most recent" windows, and lightweight-charts (which silently refuses to
+    // paint non-ascending time). Collect the batches, then reverse their order
+    // so the flattened result is strictly oldest → newest.
+    async function fetchAllPagedChronological(query, batchSize) {
+      const chunks = [];
       let offset = 0;
-      const batchSize = 2000;
       while (true) {
-        const batch = await anonymousActor.get_snapshots(BigInt(offset), BigInt(batchSize));
-        snapshotCache.push(...batch);
+        const batch = await query(BigInt(offset), BigInt(batchSize));
+        chunks.push(batch);
         if (batch.length < batchSize) break;
         offset += batchSize;
       }
+      return chunks.reverse().flat();
+    }
+
+    async function loadSnapshots() {
+      snapshotCache = await fetchAllPagedChronological(
+        (o, l) => anonymousActor.get_snapshots(o, l), 2000);
       snapshotsLoaded = true;
     }
 
@@ -1793,7 +1807,11 @@
         if (allGroups.length >= pageSize || isLastFetch) break;
         rawLimit *= 2;
       }
-      const shown = allGroups.slice(0, pageSize);
+      // get_trade_legs anchors at the NEWEST leg and walks backward, returning
+      // its window oldest-first — so the freshest groups sit at the END of
+      // allGroups. Taking from the front would silently drop the most recent
+      // trades (worse the larger the page size, since rawLimit over-fetches).
+      const shown = allGroups.slice(-pageSize);
       const consumedLegs = shown.reduce((n, g) => n + g.legs.length, 0);
       const hasMore = !isLastFetch || allGroups.length > shown.length;
       return { shown, consumedLegs, hasMore };
@@ -2026,7 +2044,13 @@
               vA: dexToVenue(leg.dex) || null, amount: bi(leg.bought_usd_value || leg.sold_usd_value) });
           }
         } else { // TopUp
-          entries.push({ legs: [leg], pnl: null, topUp: true, ts: leg.timestamp, vA: dexToVenue(leg.dex) || null });
+          // A TopUp prices both sides (stable sold → ICP bought), so its real
+          // cost — spread plus fee — is derivable and already flows into the
+          // all-time net_pnl sums. Showing it keeps row-level P&L reconcilable
+          // with the headline instead of rendering a blank.
+          const cost = bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd);
+          entries.push({ legs: [leg], pnl: cost, topUp: true, ts: leg.timestamp,
+            vA: dexToVenue(leg.dex) || null, amount: bi(leg.sold_usd_value) });
         }
       }
       if (pending) entries.push({ legs: [pending.leg1], pnl: null, unpaired: true, ts: pending.leg1.timestamp, vA: dexToVenue(pending.leg1.dex) || null });
@@ -2220,6 +2244,7 @@
               <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
               <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
               <div class="hero-delta text-ter">${s ? (bi(s.leg1_count) + bi(s.leg2_count)) + ' legs · ' + fmt$(s.total_usd_in) + ' volume' : ''}</div>
+              ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
             </div>
             <div class="hero-pockets">
               <div class="hero-pocket"><div class="hero-pocket-label">Arb main</div><div class="hero-pocket-value">$${pocketUsd(arbBal).toFixed(2)}</div></div>
@@ -2657,23 +2682,27 @@
     async function renderPnlChart() {
       const chart = mountChart('chart-container', 460);
       if (!chart) return;
-      let allLegs = [], offset = 0;
-      while (true) {
-        const batch = await anonymousActor.get_trade_legs(BigInt(offset), BigInt(2000));
-        allLegs.push(...batch);
-        if (batch.length < 2000) break;
-        offset += 2000;
-      }
+      // Chronological order is load-bearing here, not cosmetic: `cum` below is
+      // a running total accumulated in array order, so a chunk-reversed fetch
+      // computes every point against the wrong running balance (verified live
+      // against 2277 legs: first plotted point read $185.42 where the true
+      // cumulative was $2.19, and the curve terminated at $183.23 against a
+      // real all-time net of $203.66 — disagreeing with the cockpit hero).
+      const allLegs = await fetchAllPagedChronological(
+        (o, l) => anonymousActor.get_trade_legs(o, l), 2000);
       if (!allLegs.length) { showChartEmpty(); return; } hideChartEmpty();
       let cum = 0; const data = [];
       for (const leg of allLegs) {
         cum += (bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd));
         if ('Leg2' in leg.leg_type || 'Drain' in leg.leg_type) data.push({ time: Math.floor(bi(leg.timestamp) / 1e9), value: cum / 1e6 });
       }
-      // get_trade_legs isn't guaranteed strictly chronological end-to-end
-      // (verified live: later pages can carry earlier timestamps than
-      // earlier ones) — lightweight-charts requires strictly ascending,
-      // de-duplicated time values or the series silently fails to paint.
+      // Retained as a safety net, no longer as the primary ordering mechanism:
+      // the "later pages carry earlier timestamps" effect this once compensated
+      // for was the chunk-reversed fetch, now fixed at the source above. What
+      // remains is backfill_trade_legs, which appends historical legs at the
+      // end of the log and explicitly does not preserve chronology (state.rs).
+      // lightweight-charts needs strictly ascending, de-duplicated time values
+      // or the series silently fails to paint.
       data.sort((a, b) => a.time - b.time);
       const deduped = [];
       for (const pt of data) {
