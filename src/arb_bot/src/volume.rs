@@ -322,7 +322,43 @@ async fn execute_volume_trade(
         let transfer_amount = amount_out - out_fee * 2;
         let mut transferred = false;
         for attempt in 0..3 {
-            match swaps::transfer_to_subaccount(token_out, transfer_amount, VOLUME_SUBACCOUNT).await {
+            // Re-read the live default-account balance every attempt rather than
+            // transferring the precomputed amount blind. Two reasons:
+            //
+            // 1. depositFromAndSwap returns BEFORE its withdraw has actually
+            //    credited our default account. Attempt 1 regularly loses that
+            //    race and sees balance 0 (six occurrences 07-19→07-21, every one
+            //    of them immediately after an IcusdIcp trade and immediately
+            //    before an IcusdBob trade). The three attempts previously fired
+            //    back-to-back with no delay at all, so the whole retry budget
+            //    could burn inside ~6s; a slower-than-usual settle loses all
+            //    three, marks the funds stranded, and the stranded-recovery
+            //    block then gates the ENTIRE volume cycle (every pool, not just
+            //    this one) — the 07-17 wedge. This balance query is itself an
+            //    inter-canister round-trip, so it doubles as the backoff the
+            //    loop never had (ic-cdk has no sleep inside an async call).
+            //
+            // 2. It stops the transfer amount being a guess about someone else's
+            //    fee accounting — the exact class of error behind the original
+            //    one-fee-short bug. We send what is really there, not what we
+            //    computed should be there.
+            //
+            // Capped at `transfer_amount`, never the raw balance: this default
+            // account is SHARED with the main arb bot (Strategy B cycles icUSD /
+            // ICP / ckUSDC through it constantly). Sweeping the full balance
+            // would pull the arb bot's working inventory into the volume
+            // subaccount. Same min(entitled, live - fee) shape the stranded
+            // ICP/BOB recovery blocks in run_volume_cycle already use.
+            let live_balance = swaps::icrc1_balance_of_default(token_out).await.unwrap_or(0);
+            let send_amount = transfer_amount.min(live_balance.saturating_sub(out_fee));
+            if send_amount == 0 {
+                state::log_activity("volume", &format!(
+                    "Swap output not settled yet (attempt {}/3, default balance {}, awaiting {}); retrying",
+                    attempt + 1, live_balance, transfer_amount
+                ));
+                continue;
+            }
+            match swaps::transfer_to_subaccount(token_out, send_amount, VOLUME_SUBACCOUNT).await {
                 Ok(_) => {
                     // Clear any previously stranded amount on success. Only
                     // BuyIcp (receives ICP) and BuyBob (receives BOB) are
