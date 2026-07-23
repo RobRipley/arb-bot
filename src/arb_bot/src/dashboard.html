@@ -348,6 +348,7 @@
   .hero-card { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: var(--sp-4); }
   .hero-number { font-family: var(--font-data); font-size: 42px; font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
   .hero-delta { font-family: var(--font-data); font-size: 13px; margin-top: 6px; }
+  .hero-split { font-family: var(--font-data); font-size: 11.5px; margin-top: 4px; color: var(--text-tertiary); }
   .hero-pockets { display: flex; gap: var(--sp-6); }
   .hero-pocket { text-align: right; }
   .hero-pocket-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); margin-bottom: 4px; }
@@ -1148,6 +1149,24 @@
     // Cost-center rows (amendment 2): a volume pool has a cost, not a profit —
     // no P&L field anywhere. statsKey indexes VolumeStats; poolVariant is the
     // exact Candid variant sent to set_volume_config / fund/withdraw calls.
+    // Every category the canister actually passes to log_activity(), verified by
+    // sweeping `log_activity("...")` across src/*.rs. This list is the reason the
+    // filter can't silently go blind again: it was previously a hand-written
+    // <option> block that had drifted until 59% of live activity (volume 71,
+    // dry_run 47 of the last 200 records) fell into categories with no option,
+    // while offering an `error` option that nothing has ever written — log_error()
+    // appends to the separate ERRORS log, so selecting it always returned empty.
+    //
+    // renderActivityFilterOptions() unions this with the categories actually seen
+    // in loaded data, so a category added on the Rust side later self-heals into
+    // the dropdown the first time one appears rather than silently vanishing.
+    const ACTIVITY_CATEGORIES = [
+      'admin', 'approval', 'arb_skip', 'arb_start', 'drain', 'dry_run',
+      'pool_deposit', 'pool_exchange', 'pool_redeem', 'recover',
+      'swap', 'trade', 'volume', 'volume_swap', 'withdraw',
+    ];
+    const seenActivityCategories = new Set();
+
     const VOLUME_POOLS = [
       { id: 'vol-icusd-icp',   family: 'volume', vA: 'rumi',    vB: 'icp', pair: 'icUSD / ICP', venueKey: 'icpswap', venueName: 'ICPSwap',
         poolVariant: { IcusdIcp: null }, statsKey: 'icusd_icp', prefix: 'vol-icusd', tokenSym: 'icUSD' },
@@ -1185,6 +1204,11 @@
       hiddenPaused: JSON.parse(localStorage.getItem('rumi_dash_show_paused_v2') || '{}'), // fam -> true means SHOW paused (persisted)
       expandedRows: new Set(),
       ledgerFilter: null,
+      // Lives in state, not in the DOM, for the same reason ledgerFilter does:
+      // the 30s loadAll() poll re-renders the whole Ledger view, rebuilding the
+      // <select> from scratch. A DOM-only selection was silently reset to "All
+      // categories" every 30 seconds mid-read.
+      activityFilter: '',
       ledgerLegendOpen: false,
       chartFamily: 'icpswap-internal',
       chartOffSeries: new Set(),
@@ -1760,16 +1784,29 @@
       } catch (e) { console.error('loadOverviewFromSnapshot:', e); }
     }
 
-    async function loadSnapshots() {
-      snapshotCache = [];
+    // The paged IC queries anchor at the NEWEST record and walk backward, so
+    // successive batches step further into the past while each batch is itself
+    // oldest-first. Pushing them in fetch order therefore yields a chunk-
+    // reversed array (batch 2's timestamps all precede batch 1's), which breaks
+    // any consumer that assumes chronological order: cumulative sums, slice(-n)
+    // "most recent" windows, and lightweight-charts (which silently refuses to
+    // paint non-ascending time). Collect the batches, then reverse their order
+    // so the flattened result is strictly oldest → newest.
+    async function fetchAllPagedChronological(query, batchSize) {
+      const chunks = [];
       let offset = 0;
-      const batchSize = 2000;
       while (true) {
-        const batch = await anonymousActor.get_snapshots(BigInt(offset), BigInt(batchSize));
-        snapshotCache.push(...batch);
+        const batch = await query(BigInt(offset), BigInt(batchSize));
+        chunks.push(batch);
         if (batch.length < batchSize) break;
         offset += batchSize;
       }
+      return chunks.reverse().flat();
+    }
+
+    async function loadSnapshots() {
+      snapshotCache = await fetchAllPagedChronological(
+        (o, l) => anonymousActor.get_snapshots(o, l), 2000);
       snapshotsLoaded = true;
     }
 
@@ -1793,7 +1830,11 @@
         if (allGroups.length >= pageSize || isLastFetch) break;
         rawLimit *= 2;
       }
-      const shown = allGroups.slice(0, pageSize);
+      // get_trade_legs anchors at the NEWEST leg and walks backward, returning
+      // its window oldest-first — so the freshest groups sit at the END of
+      // allGroups. Taking from the front would silently drop the most recent
+      // trades (worse the larger the page size, since rawLimit over-fetches).
+      const shown = allGroups.slice(-pageSize);
       const consumedLegs = shown.reduce((n, g) => n + g.legs.length, 0);
       const hasMore = !isLastFetch || allGroups.length > shown.length;
       return { shown, consumedLegs, hasMore };
@@ -2026,7 +2067,13 @@
               vA: dexToVenue(leg.dex) || null, amount: bi(leg.bought_usd_value || leg.sold_usd_value) });
           }
         } else { // TopUp
-          entries.push({ legs: [leg], pnl: null, topUp: true, ts: leg.timestamp, vA: dexToVenue(leg.dex) || null });
+          // A TopUp prices both sides (stable sold → ICP bought), so its real
+          // cost — spread plus fee — is derivable and already flows into the
+          // all-time net_pnl sums. Showing it keeps row-level P&L reconcilable
+          // with the headline instead of rendering a blank.
+          const cost = bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd);
+          entries.push({ legs: [leg], pnl: cost, topUp: true, ts: leg.timestamp,
+            vA: dexToVenue(leg.dex) || null, amount: bi(leg.sold_usd_value) });
         }
       }
       if (pending) entries.push({ legs: [pending.leg1], pnl: null, unpaired: true, ts: pending.leg1.timestamp, vA: dexToVenue(pending.leg1.dex) || null });
@@ -2220,6 +2267,7 @@
               <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
               <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
               <div class="hero-delta text-ter">${s ? (bi(s.leg1_count) + bi(s.leg2_count)) + ' legs · ' + fmt$(s.total_usd_in) + ' volume' : ''}</div>
+              ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
             </div>
             <div class="hero-pockets">
               <div class="hero-pocket"><div class="hero-pocket-label">Arb main</div><div class="hero-pocket-value">$${pocketUsd(arbBal).toFixed(2)}</div></div>
@@ -2657,23 +2705,27 @@
     async function renderPnlChart() {
       const chart = mountChart('chart-container', 460);
       if (!chart) return;
-      let allLegs = [], offset = 0;
-      while (true) {
-        const batch = await anonymousActor.get_trade_legs(BigInt(offset), BigInt(2000));
-        allLegs.push(...batch);
-        if (batch.length < 2000) break;
-        offset += 2000;
-      }
+      // Chronological order is load-bearing here, not cosmetic: `cum` below is
+      // a running total accumulated in array order, so a chunk-reversed fetch
+      // computes every point against the wrong running balance (verified live
+      // against 2277 legs: first plotted point read $185.42 where the true
+      // cumulative was $2.19, and the curve terminated at $183.23 against a
+      // real all-time net of $203.66 — disagreeing with the cockpit hero).
+      const allLegs = await fetchAllPagedChronological(
+        (o, l) => anonymousActor.get_trade_legs(o, l), 2000);
       if (!allLegs.length) { showChartEmpty(); return; } hideChartEmpty();
       let cum = 0; const data = [];
       for (const leg of allLegs) {
         cum += (bi(leg.bought_usd_value) - bi(leg.sold_usd_value) - bi(leg.fees_usd));
         if ('Leg2' in leg.leg_type || 'Drain' in leg.leg_type) data.push({ time: Math.floor(bi(leg.timestamp) / 1e9), value: cum / 1e6 });
       }
-      // get_trade_legs isn't guaranteed strictly chronological end-to-end
-      // (verified live: later pages can carry earlier timestamps than
-      // earlier ones) — lightweight-charts requires strictly ascending,
-      // de-duplicated time values or the series silently fails to paint.
+      // Retained as a safety net, no longer as the primary ordering mechanism:
+      // the "later pages carry earlier timestamps" effect this once compensated
+      // for was the chunk-reversed fetch, now fixed at the source above. What
+      // remains is backfill_trade_legs, which appends historical legs at the
+      // end of the log and explicitly does not preserve chronology (state.rs).
+      // lightweight-charts needs strictly ascending, de-duplicated time values
+      // or the series silently fails to paint.
       data.sort((a, b) => a.time - b.time);
       const deduped = [];
       for (const pt of data) {
@@ -2801,6 +2853,58 @@
     ];
     const MONEY_BAL_KEY = { icp: 'bIcp', icusd: 'bIcusd', ckusdc: 'bCkusdc', ckusdt: 'bCkusdt', '3usd': 'b3usd', bob: 'bBob' };
 
+    // Volume is a cost centre, not a P&L line: it deliberately loses a little on
+    // every wash trade to move volume. total_cost_usd / total_volume_usd are
+    // lifetime counters already returned by get_volume_stats (public query — this
+    // renders logged-out) and were previously fetched every 30s and discarded,
+    // leaving lifetime spend visible nowhere in the UI.
+    //
+    // Per-day history is deliberately NOT shown: daily_cost_usd is zeroed every
+    // 24h by volume.rs with no archive, so "today" is the only day that exists.
+    // Charting it would require a backend change and could not backfill.
+    function volumeCostCardHtml() {
+      const stats = latestVolumeStats;
+      if (!stats) return `<div class="card" style="margin-bottom:var(--sp-4)"><div class="card-header">Volume cost</div><div class="text-ter">Loading…</div></div>`;
+      let tCost = 0, tVol = 0, tTrades = 0, tToday = 0, tCap = 0;
+      const rows = VOLUME_POOLS.map(p => {
+        const st = stats[p.statsKey].state, cfg = stats[p.statsKey].config;
+        const cost = bi(st.total_cost_usd), vol = bi(st.total_volume_usd);
+        const trades = bi(st.trade_count), today = bi(st.daily_cost_usd), cap = bi(cfg.daily_cost_cap_usd);
+        tCost += cost; tVol += vol; tTrades += trades; tToday += today; tCap += cap;
+        const capped = cap > 0 && today >= cap;
+        return `<tr>
+          <td>${esc(p.pair)}${!cfg.enabled ? ' <span class="text-ter" style="font-size:11px">(paused)</span>' : ''}</td>
+          <td>$${fmtUsd6(cost)}</td>
+          <td>$${fmtUsd6(vol)}</td>
+          <td>${trades.toLocaleString('en-US')}</td>
+          <td>${vol > 0 ? (cost / vol * 100).toFixed(3) + '%' : '<span class="dash">—</span>'}</td>
+          <td${capped ? ' style="color:var(--warning)"' : ''}>$${fmtUsd6(today)} / $${fmtUsd6(cap)}</td>
+        </tr>`;
+      }).join('');
+      return `
+        <div class="card" style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Volume cost — lifetime</div>
+          <div class="card-subtitle">What the volume bot has spent to move volume. A cost centre, not profit: every trade pays spread and fees by design. Per-day history isn't retained on-chain — only today's running total exists.</div>
+          <div class="table-wrap">
+            <table class="money-table">
+              <thead><tr><th>Pool</th><th>Lifetime cost</th><th>Volume moved</th><th>Trades</th><th>Cost / volume</th><th>Today / cap</th></tr></thead>
+              <tbody>
+                ${rows}
+                <tr class="total">
+                  <td>Total</td>
+                  <td>$${fmtUsd6(tCost)}</td>
+                  <td>$${fmtUsd6(tVol)}</td>
+                  <td>${tTrades.toLocaleString('en-US')}</td>
+                  <td>${tVol > 0 ? (tCost / tVol * 100).toFixed(3) + '%' : '<span class="dash">—</span>'}</td>
+                  <td>$${fmtUsd6(tToday)} / $${fmtUsd6(tCap)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="footnote">Volume trades are not arb legs — they are never written to the trade ledger. Their per-trade record is the activity log under <span class="text-sec">volume</span> / <span class="text-sec">volume_swap</span>.</div>
+        </div>`;
+    }
+
     function renderMoney() {
       const el = document.getElementById('view-money');
       const arb = window._rawBals, vol = window._rawVolBals, op = window._operatorBals;
@@ -2829,6 +2933,8 @@
           </div>
           <div class="footnote"><span class="mark">*</span> 3USD has no subaccounts — balance lives in arb-main only.</div>
         </div>
+
+        ${volumeCostCardHtml()}
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
@@ -3763,17 +3869,44 @@
     window.setLedgerFilter = function (id) { state.ledgerFilter = id; renderLedgerTable(); renderNav(); document.querySelectorAll('.ledger-filters .btn').forEach(b => {}); renderLedger(); };
     window.toggleLedgerLegend = function () { state.ledgerLegendOpen = !state.ledgerLegendOpen; renderLedger(); };
 
+    // Rebuilt on every load so a newly-observed category becomes selectable
+    // immediately. Preserves the current selection across rebuilds — and keeps
+    // it even if that category is absent from this page's data, so paging never
+    // silently resets the filter out from under the user.
+    function renderActivityFilterOptions(selected) {
+      const sel = document.getElementById('activity-filter');
+      if (!sel) return;
+      const cats = [...new Set([...ACTIVITY_CATEGORIES, ...seenActivityCategories, ...(selected ? [selected] : [])])].sort();
+      sel.innerHTML = `<option value="">All categories</option>`
+        + cats.map(c => `<option value="${esc(c)}"${c === selected ? ' selected' : ''}>${esc(c)}</option>`).join('');
+      sel.value = selected || '';
+    }
+
+    // Guards against a slow response landing after the user has already moved on.
+    // This matters specifically because renderActivityFilterOptions() writes back
+    // to sel.value: without the guard, a stale in-flight load would reset the
+    // dropdown to the *previous* category mid-interaction — fighting the user.
+    let activityLoadSeq = 0;
+
     async function loadActivityIntoDom() {
+      const seq = ++activityLoadSeq;
+      const filter = state.activityFilter;
       const entries = await loadActivity();
-      const filterEl = document.getElementById('activity-filter');
-      const filter = filterEl ? filterEl.value : '';
+      if (seq !== activityLoadSeq) return; // superseded — drop this response entirely
+      entries.forEach(e => { if (e.category) seenActivityCategories.add(e.category); });
+      renderActivityFilterOptions(filter);
       const filtered = filter ? entries.filter(e => e.category === filter) : entries;
       const list = document.getElementById('activity-list');
       if (!list) return;
-      const catColors = { trade: 'var(--accent)', swap: 'var(--info)', error: 'var(--loss)', admin: 'var(--v-partydex)', withdraw: 'var(--warning)', pool_deposit: 'var(--profit)', pool_redeem: 'var(--v-bob)', pool_exchange: 'var(--info)', approval: 'var(--text-secondary)', arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)' };
+      const catColors = { trade: 'var(--accent)', swap: 'var(--info)', volume: 'var(--v-bob)', volume_swap: 'var(--v-bob)', dry_run: 'var(--text-tertiary)', recover: 'var(--warning)', admin: 'var(--v-partydex)', withdraw: 'var(--warning)', pool_deposit: 'var(--profit)', pool_redeem: 'var(--v-bob)', pool_exchange: 'var(--info)', approval: 'var(--text-secondary)', arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)' };
       list.innerHTML = filtered.length
         ? [...filtered].reverse().map(e => `<div class="activity-entry"><span class="activity-ts">${fmtTime(e.timestamp)}</span><span class="activity-cat" style="color:${catColors[e.category] || 'var(--text-tertiary)'}">${esc(e.category)}</span>${esc(e.message)}</div>`).join('')
-        : `<div class="text-ter">No activity recorded</div>`;
+        : (filter
+            // Filtering is client-side over one 50-record page, so an empty
+            // result usually means "none on THIS page", not "none ever" — say
+            // which, rather than implying the category has never been written.
+            ? `<div class="text-ter">No <span class="text-sec">${esc(filter)}</span> entries on page ${activityPage + 1}${entries.length ? ` (of ${entries.length} shown)` : ''} — try Next, or All categories.</div>`
+            : `<div class="text-ter">No activity recorded</div>`);
       const prevBtn = document.getElementById('activity-prev'), nextBtn = document.getElementById('activity-next'), pageEl = document.getElementById('activity-page');
       if (prevBtn) prevBtn.disabled = activityPage === 0;
       if (nextBtn) nextBtn.disabled = entries.length < ACTIVITY_PAGE_SIZE;
@@ -3781,7 +3914,12 @@
     }
     window.activityPrev = () => { if (activityPage > 0) { activityPage--; loadActivityIntoDom(); } };
     window.activityNext = () => { activityPage++; loadActivityIntoDom(); };
-    window.activityFilterChanged = () => { activityPage = 0; loadActivityIntoDom(); };
+    window.activityFilterChanged = () => {
+      const sel = document.getElementById('activity-filter');
+      state.activityFilter = sel ? sel.value : '';
+      activityPage = 0;
+      loadActivityIntoDom();
+    };
 
     function renderLedger() {
       const el = document.getElementById('view-ledger');
@@ -3815,14 +3953,9 @@
         <div class="card" style="margin-top:var(--sp-4)">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <span>Activity log</span>
-            <select id="activity-filter" onchange="activityFilterChanged()" style="width:auto">
-              <option value="">All categories</option>
-              <option value="trade">trade</option><option value="swap">swap</option><option value="error">error</option>
-              <option value="admin">admin</option><option value="withdraw">withdraw</option>
-              <option value="pool_deposit">pool_deposit</option><option value="pool_redeem">pool_redeem</option>
-              <option value="pool_exchange">pool_exchange</option><option value="approval">approval</option>
-              <option value="arb_skip">arb_skip</option><option value="arb_start">arb_start</option><option value="drain">drain</option>
-            </select>
+            <!-- Options are built by renderActivityFilterOptions() from
+                 ACTIVITY_CATEGORIES ∪ observed categories, never hand-listed. -->
+            <select id="activity-filter" onchange="activityFilterChanged()" style="width:auto"></select>
           </div>
           <div id="activity-list"></div>
           <div class="pagination">
@@ -3833,6 +3966,9 @@
         </div>
       `;
       loadLedgerPage();
+      // Populate synchronously so the select is never briefly empty, and so the
+      // active filter is visibly restored the instant the view re-renders.
+      renderActivityFilterOptions(state.activityFilter);
       loadActivityIntoDom();
     }
 
