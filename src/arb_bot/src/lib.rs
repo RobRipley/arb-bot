@@ -1536,6 +1536,81 @@ async fn dry_run_strategy_r() -> arb::DryRunResult {
     }
 }
 
+#[update]
+async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
+    require_admin();
+
+    let config = state::read_state(|s| s.config.clone());
+    if config.strategy_t_icusd_ckusdc_pool == Principal::anonymous()
+        || config.strategy_t_icusd_ckusdt_pool == Principal::anonymous()
+        || config.strategy_t_ckusdt_ckusdc_pool == Principal::anonymous()
+    {
+        return strategy_t::StrategyTDryRunResult {
+            candidates: vec![],
+            best_economic: None,
+            best_executable: None,
+        };
+    }
+
+    let this_canister = ic_cdk::id();
+    let pools = strategy_t::PoolPrincipals {
+        icusd_ckusdc: config.strategy_t_icusd_ckusdc_pool,
+        icusd_ckusdt: config.strategy_t_icusd_ckusdt_pool,
+        ckusdt_ckusdc: config.strategy_t_ckusdt_ckusdc_pool,
+    };
+    let ledgers = strategy_t::TokenLedgers {
+        icusd: config.icusd_ledger,
+        ckusdt: config.ckusdt_ledger,
+        ckusdc: config.ckusdc_ledger,
+    };
+
+    let (icusd_bal, ckusdt_bal, ckusdc_bal) = futures::future::join3(
+        swaps::icrc1_balance_of_default(config.icusd_ledger),
+        swaps::icrc1_balance_of_default(config.ckusdt_ledger),
+        swaps::icrc1_balance_of_default(config.ckusdc_ledger),
+    ).await;
+    let balances = strategy_t::TokenAmounts {
+        icusd: icusd_bal.unwrap_or(0),
+        ckusdt: ckusdt_bal.unwrap_or(0),
+        ckusdc: ckusdc_bal.unwrap_or(0),
+    };
+    let floors = strategy_t::TokenAmounts {
+        icusd: config.strategy_t_icusd_floor,
+        ckusdt: config.strategy_t_ckusdt_floor,
+        ckusdc: config.strategy_t_ckusdc_floor,
+    };
+    let ceilings = strategy_t::TokenAmounts {
+        icusd: config.strategy_t_icusd_ceiling,
+        ckusdt: config.strategy_t_ckusdt_ceiling,
+        ckusdc: config.strategy_t_ckusdc_ceiling,
+    };
+
+    let max_trade_usd = config.strategy_t_max_trade_size_usd;
+    let start_amount_native = move |token: strategy_t::StableToken| -> u64 {
+        // 6-dec USD max trade size converted to the token's native decimals
+        // at $1 peg — matches `par_usd_6dec`'s inverse.
+        let decimals = token.decimals() as u32;
+        if decimals >= 6 {
+            max_trade_usd * 10u64.pow(decimals - 6)
+        } else {
+            max_trade_usd / 10u64.pow(6 - decimals)
+        }
+    };
+
+    strategy_t::evaluate(
+        config.rumi_3pool,
+        pools,
+        this_canister,
+        ledgers,
+        start_amount_native,
+        config.strategy_t_min_profit_usd,
+        config.strategy_t_min_profit_bps,
+        balances,
+        floors,
+        ceilings,
+    ).await
+}
+
 // ─── Cross-pool target builders ───
 
 const ICUSD_FEE: u64 = 100_000;

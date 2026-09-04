@@ -225,6 +225,17 @@ pub struct CandidateQuote {
     /// recomputing it from `start_amount_native` mixes decimals across
     /// tokens (see the fix history for this field).
     pub closing_leg_input_native: Option<u64>,
+    /// The candidate's actual native-decimal end-token amount net of all
+    /// fees — for a one-leg stop, `rumi_gross_out` minus `rumi_out`'s own
+    /// ledger fee; for a two-leg close, `closing_gross_out` minus
+    /// `start`'s ledger fee (the same `net_received` value each of Task
+    /// 2's profit functions computes internally, just also surfaced here).
+    /// Zero when the candidate's fill_status isn't `FullyQuoted`. This
+    /// must be used for any native-decimal inventory/balance check — never
+    /// reconstructed from `economic_profit_usd`, which is USD-denominated
+    /// and mixes decimals across tokens exactly like the bug Task 5's fix
+    /// round corrected.
+    pub net_end_amount_native: u64,
 }
 
 /// Quotes all twelve candidates for the given per-start-token trade size.
@@ -247,30 +258,33 @@ pub async fn quote_all_candidates(
         )
         .await;
 
-        let (economic_profit_usd, fill_status, closing_leg_input_native) = match (rumi_result, route.closing) {
-            (Err(e), _) => (0, FillStatus::RumiQuoteFailed(e), None),
-            (Ok(rumi_gross), None) => {
-                let profit = one_leg_net_profit_usd(route.start, amount_in, route.rumi_out, rumi_gross);
-                (profit, FillStatus::FullyQuoted, None)
-            }
-            (Ok(rumi_gross), Some(closing_pool)) => {
-                let leg2_input = closing_leg_input(route.rumi_out, rumi_gross);
-                let zero_for_one = closing_pool.zero_for_one_from(route.rumi_out);
-                let closing_result = crate::prices::fetch_icpswap_quote_for_all(
-                    pools.resolve(closing_pool),
-                    leg2_input,
-                    zero_for_one,
-                )
-                .await;
-                match closing_result {
-                    Err(e) => (0, FillStatus::ClosingQuoteRejected(e), Some(leg2_input)),
-                    Ok(closing_gross) => {
-                        let profit = two_leg_net_profit_usd(route.start, amount_in, closing_gross);
-                        (profit, FillStatus::FullyQuoted, Some(leg2_input))
+        let (economic_profit_usd, fill_status, closing_leg_input_native, net_end_amount_native) =
+            match (rumi_result, route.closing) {
+                (Err(e), _) => (0, FillStatus::RumiQuoteFailed(e), None, 0),
+                (Ok(rumi_gross), None) => {
+                    let profit = one_leg_net_profit_usd(route.start, amount_in, route.rumi_out, rumi_gross);
+                    let net_end = rumi_gross.saturating_sub(route.rumi_out.ledger_fee());
+                    (profit, FillStatus::FullyQuoted, None, net_end)
+                }
+                (Ok(rumi_gross), Some(closing_pool)) => {
+                    let leg2_input = closing_leg_input(route.rumi_out, rumi_gross);
+                    let zero_for_one = closing_pool.zero_for_one_from(route.rumi_out);
+                    let closing_result = crate::prices::fetch_icpswap_quote_for_all(
+                        pools.resolve(closing_pool),
+                        leg2_input,
+                        zero_for_one,
+                    )
+                    .await;
+                    match closing_result {
+                        Err(e) => (0, FillStatus::ClosingQuoteRejected(e), Some(leg2_input), 0),
+                        Ok(closing_gross) => {
+                            let profit = two_leg_net_profit_usd(route.start, amount_in, closing_gross);
+                            let net_end = closing_gross.saturating_sub(route.start.ledger_fee());
+                            (profit, FillStatus::FullyQuoted, Some(leg2_input), net_end)
+                        }
                     }
                 }
-            }
-        };
+            };
 
         results.push(CandidateQuote {
             route,
@@ -278,6 +292,7 @@ pub async fn quote_all_candidates(
             economic_profit_usd,
             fill_status,
             closing_leg_input_native,
+            net_end_amount_native,
         });
     }
     results
@@ -386,4 +401,170 @@ pub fn check_inventory_bands(
     let end_ok = end_balance.saturating_add(expected_end_amount) <= end_ceiling;
 
     InventoryCheck { start_ok, end_ok }
+}
+
+// ─── Candid-facing conversions (dashboard reporting reuses Task 1's
+// state::StrategyTToken/state::StrategyTPool — no third enum pair) ───
+
+impl From<StableToken> for crate::state::StrategyTToken {
+    fn from(t: StableToken) -> Self {
+        match t {
+            StableToken::IcUsd => crate::state::StrategyTToken::IcUsd,
+            StableToken::CkUsdt => crate::state::StrategyTToken::CkUsdt,
+            StableToken::CkUsdc => crate::state::StrategyTToken::CkUsdc,
+        }
+    }
+}
+
+impl From<ClosingPool> for crate::state::StrategyTPool {
+    fn from(p: ClosingPool) -> Self {
+        match p {
+            ClosingPool::IcusdCkusdc => crate::state::StrategyTPool::IcusdCkusdc,
+            ClosingPool::IcusdCkusdt => crate::state::StrategyTPool::IcusdCkusdt,
+            ClosingPool::CkusdtCkusdc => crate::state::StrategyTPool::CkusdtCkusdc,
+        }
+    }
+}
+
+// ─── Reporting and ranking ───
+
+use candid::CandidType;
+
+#[derive(CandidType, Clone, Debug)]
+pub struct CandidateReport {
+    pub start: crate::state::StrategyTToken,
+    pub rumi_out: crate::state::StrategyTToken,
+    pub closing: Option<crate::state::StrategyTPool>,
+    pub start_amount_native: u64,
+    pub economic_profit_usd: i64,
+    pub meets_profit_threshold: bool,
+    pub allowance_status: String, // Display of AllowanceStatus — candid-simple, dashboard-friendly
+    pub inventory_eligible: bool,
+    pub fill_ok: bool,
+    pub fill_note: String, // empty if fill_ok, else the FillStatus error text
+}
+
+#[derive(CandidType, Clone, Debug)]
+pub struct StrategyTDryRunResult {
+    pub candidates: Vec<CandidateReport>,
+    /// Highest `economic_profit_usd` among fully-quoted candidates that
+    /// clear the profit threshold — regardless of allowance/inventory
+    /// eligibility. A profitable route must never disappear from this
+    /// list just because it isn't executable today.
+    pub best_economic: Option<CandidateReport>,
+    /// Highest `economic_profit_usd` among candidates that ALSO have
+    /// `allowance_status == Sufficient/NotRequired` AND `inventory_eligible`.
+    /// `None` if no candidate is both profitable and currently executable.
+    pub best_executable: Option<CandidateReport>,
+}
+
+/// Ranks a fully-assembled, fully-checked candidate list. Pure — no
+/// network calls; Task 6 Step 3's `evaluate()` does the async assembly and
+/// calls this at the end.
+pub fn rank_candidates(reports: Vec<CandidateReport>) -> StrategyTDryRunResult {
+    let best_economic = reports
+        .iter()
+        .filter(|r| r.fill_ok && r.meets_profit_threshold)
+        .max_by_key(|r| r.economic_profit_usd)
+        .cloned();
+
+    let best_executable = reports
+        .iter()
+        .filter(|r| {
+            r.fill_ok
+                && r.meets_profit_threshold
+                && r.inventory_eligible
+                && matches!(r.allowance_status.as_str(), "NotRequired" | "Sufficient")
+        })
+        .max_by_key(|r| r.economic_profit_usd)
+        .cloned();
+
+    StrategyTDryRunResult { candidates: reports, best_economic, best_executable }
+}
+
+/// Full Strategy T dry-run evaluation: quotes all twelve candidates,
+/// checks allowance and inventory eligibility for each, and ranks them.
+/// Every call this function makes is read-only (see Task 4/5 doc comments
+/// for the exhaustive list). Requires all three closing pools to be
+/// configured (non-anonymous) — returns an empty result otherwise.
+pub async fn evaluate(
+    rumi_3pool: Principal,
+    pools: PoolPrincipals,
+    this_canister: Principal,
+    ledgers: TokenLedgers,
+    start_amount_native: impl Fn(StableToken) -> u64 + Copy,
+    min_profit_usd: i64,
+    min_profit_bps: u32,
+    balances: TokenAmounts,
+    floors: TokenAmounts,
+    ceilings: TokenAmounts,
+) -> StrategyTDryRunResult {
+    let quotes = quote_all_candidates(rumi_3pool, pools, start_amount_native).await;
+
+    let mut reports = Vec::with_capacity(quotes.len());
+    for q in quotes {
+        let start_amount = q.start_amount_native;
+        let bps_profit = if start_amount == 0 {
+            0i64
+        } else {
+            (q.economic_profit_usd as i128 * 10_000 / par_usd_6dec(start_amount, q.route.start).max(1) as i128) as i64
+        };
+        let meets_profit_threshold =
+            q.economic_profit_usd >= min_profit_usd && bps_profit >= min_profit_bps as i64;
+
+        let allowance_status = match q.route.closing {
+            None => AllowanceStatus::NotRequired,
+            Some(pool) => {
+                let token_ledger = ledgers.get(q.route.rumi_out);
+                let spender = pools.resolve(pool);
+                check_allowance(&q, token_ledger, spender, this_canister).await
+            }
+        };
+
+        let end_token = q.route.closing.map(|_| q.route.start).unwrap_or(q.route.rumi_out);
+        let expected_end_amount = q.net_end_amount_native;
+        let inventory = check_inventory_bands(
+            q.route.start, start_amount, end_token, expected_end_amount, balances, floors, ceilings,
+        );
+
+        let (fill_ok, fill_note) = match &q.fill_status {
+            FillStatus::FullyQuoted => (true, String::new()),
+            FillStatus::RumiQuoteFailed(e) => (false, format!("Rumi quote failed: {e}")),
+            FillStatus::ClosingQuoteRejected(e) => (false, format!("Closing quote rejected: {e}")),
+        };
+
+        reports.push(CandidateReport {
+            start: q.route.start.into(),
+            rumi_out: q.route.rumi_out.into(),
+            closing: q.route.closing.map(Into::into),
+            start_amount_native: start_amount,
+            economic_profit_usd: q.economic_profit_usd,
+            meets_profit_threshold,
+            allowance_status: format!("{:?}", allowance_status).split(' ').next().unwrap_or("").trim_end_matches('{').to_string(),
+            inventory_eligible: inventory.eligible(),
+            fill_ok,
+            fill_note,
+        });
+    }
+
+    rank_candidates(reports)
+}
+
+/// The three stablecoin ledger principals, resolved by the caller from
+/// `BotConfig` (`icusd_ledger`, `ckusdt_ledger`, `ckusdc_ledger`).
+#[derive(Clone, Copy, Debug)]
+pub struct TokenLedgers {
+    pub icusd: Principal,
+    pub ckusdt: Principal,
+    pub ckusdc: Principal,
+}
+
+impl TokenLedgers {
+    fn get(self, token: StableToken) -> Principal {
+        match token {
+            StableToken::IcUsd => self.icusd,
+            StableToken::CkUsdt => self.ckusdt,
+            StableToken::CkUsdc => self.ckusdc,
+        }
+    }
 }
