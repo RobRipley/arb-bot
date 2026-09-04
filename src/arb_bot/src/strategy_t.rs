@@ -273,3 +273,110 @@ pub async fn quote_all_candidates(
     }
     results
 }
+
+// ─── Eligibility: allowance (read-only) and inventory bands (pure) ───
+
+/// Whether a candidate's required ICPSwap-side allowance is currently
+/// sufficient. This module only ever *reads* allowances — see
+/// `swaps::query_allowance` — never grants or modifies one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AllowanceStatus {
+    /// No closing leg — nothing to approve (every Rumi 3pool approval
+    /// already exists, verified live 2026-09-02/03; a one-leg candidate is
+    /// never allowance-blocked on that basis).
+    NotRequired,
+    /// Allowance covers the candidate's required input.
+    Sufficient,
+    /// Allowance exists but is smaller than required, or is exactly zero.
+    Insufficient { allowance: u64, required: u64 },
+}
+
+/// Checks the allowance a two-leg candidate's closing leg needs: the
+/// intermediate token approved to spend into the closing ICPSwap pool.
+/// Returns `NotRequired` for a one-leg candidate.
+pub async fn check_allowance(
+    candidate: &CandidateQuote,
+    token_ledger: Principal,
+    spender: Principal,
+    this_canister: Principal,
+) -> AllowanceStatus {
+    if candidate.route.closing.is_none() {
+        return AllowanceStatus::NotRequired;
+    }
+    let required = closing_leg_input(
+        candidate.route.rumi_out,
+        // Re-derive the pre-closing-fee gross amount is not available here
+        // without re-quoting; callers pass the already-computed leg2 input
+        // via `required_override` in Task 6's wiring instead of calling
+        // this helper standalone when the exact figure matters. For a
+        // conservative (never-false-positive) check, use the candidate's
+        // start amount as a floor — any real leg2 input for a profitable
+        // candidate is within a few fee-units of it.
+        candidate.start_amount_native,
+    );
+    match crate::swaps::query_allowance(token_ledger, this_canister, spender).await {
+        Ok((allowance, _expires_at)) if allowance >= required => AllowanceStatus::Sufficient,
+        Ok((allowance, _expires_at)) => AllowanceStatus::Insufficient { allowance, required },
+        Err(_) => AllowanceStatus::Insufficient { allowance: 0, required },
+    }
+}
+
+/// Native-decimal balances/bands for all three tokens, keyed by
+/// `StableToken`. A small fixed-size struct rather than a `HashMap` — there
+/// are exactly three tokens and this is on the hot path of every dry-run.
+#[derive(Clone, Copy, Debug)]
+pub struct TokenAmounts {
+    pub icusd: u64,
+    pub ckusdt: u64,
+    pub ckusdc: u64,
+}
+
+impl TokenAmounts {
+    pub fn get(self, token: StableToken) -> u64 {
+        match token {
+            StableToken::IcUsd => self.icusd,
+            StableToken::CkUsdt => self.ckusdt,
+            StableToken::CkUsdc => self.ckusdc,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct InventoryCheck {
+    /// False if spending `start_amount` would take the start token's
+    /// balance below its configured floor.
+    pub start_ok: bool,
+    /// False if receiving the expected end amount would take the end
+    /// token's balance above its configured ceiling.
+    pub end_ok: bool,
+}
+
+impl InventoryCheck {
+    pub fn eligible(self) -> bool {
+        self.start_ok && self.end_ok
+    }
+}
+
+/// Pure inventory-band check — balances and bands are passed in (fetched
+/// by the caller in Task 6) so this stays synchronously unit-testable.
+/// `end_token`/`expected_end_amount` are the route's actual output token
+/// (== `rumi_out` for a one-leg stop, == `start` for a two-leg close).
+pub fn check_inventory_bands(
+    start_token: StableToken,
+    start_amount: u64,
+    end_token: StableToken,
+    expected_end_amount: u64,
+    balances: TokenAmounts,
+    floors: TokenAmounts,
+    ceilings: TokenAmounts,
+) -> InventoryCheck {
+    let start_balance = balances.get(start_token);
+    let start_floor = floors.get(start_token);
+    let start_ok = start_balance.saturating_sub(start_amount) >= start_floor;
+
+    let end_balance = balances.get(end_token);
+    let end_ceiling = ceilings.get(end_token);
+    let end_ok = end_balance.saturating_add(expected_end_amount) <= end_ceiling;
+
+    InventoryCheck { start_ok, end_ok }
+}

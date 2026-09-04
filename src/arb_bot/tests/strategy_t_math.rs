@@ -4,8 +4,8 @@
 //! No network access — these must never require `dfx` or a running canister.
 
 use arb_bot::strategy_t::{
-    all_routes, closing_leg_input, one_leg_net_profit_usd, par_usd_6dec,
-    two_leg_net_profit_usd, ClosingPool, StableToken,
+    all_routes, check_inventory_bands, closing_leg_input, one_leg_net_profit_usd, par_usd_6dec,
+    two_leg_net_profit_usd, ClosingPool, StableToken, TokenAmounts,
 };
 
 #[test]
@@ -108,4 +108,45 @@ fn zero_for_one_matches_live_verified_token_ordering() {
     // heq6n: token0=ckUSDT, token1=ckUSDC
     assert!(ClosingPool::CkusdtCkusdc.zero_for_one_from(CkUsdt));
     assert!(!ClosingPool::CkusdtCkusdc.zero_for_one_from(CkUsdc));
+}
+
+#[test]
+fn inventory_bands_block_start_leg_below_floor() {
+    let balances = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 10_000_000 }; // $10 ckUSDC
+    let floors = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 5_000_000 };    // $5 floor
+    let ceilings = TokenAmounts { icusd: 200_000_000_000, ckusdt: 2_000_000_000, ckusdc: 2_000_000_000 };
+    // Spending $8 would leave $2 balance, below the $5 floor.
+    let check = check_inventory_bands(
+        StableToken::CkUsdc, 8_000_000, StableToken::IcUsd, 0,
+        balances, floors, ceilings,
+    );
+    assert!(!check.start_ok);
+    assert!(!check.eligible());
+}
+
+#[test]
+fn inventory_bands_block_end_leg_above_ceiling() {
+    let balances = TokenAmounts { icusd: 199_000_000_000, ckusdt: 0, ckusdc: 100_000_000 };
+    let floors = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 5_000_000 };
+    let ceilings = TokenAmounts { icusd: 200_000_000_000, ckusdt: 2_000_000_000, ckusdc: 2_000_000_000 };
+    // Receiving 2000 icUSD would push balance to 199_002B + ... over the 200_000_000_000 ceiling.
+    let check = check_inventory_bands(
+        StableToken::CkUsdc, 10_000_000, StableToken::IcUsd, 2_000_000_000,
+        balances, floors, ceilings,
+    );
+    assert!(check.start_ok);
+    assert!(!check.end_ok);
+    assert!(!check.eligible());
+}
+
+#[test]
+fn inventory_bands_pass_within_range() {
+    let balances = TokenAmounts { icusd: 771_230_051_57, ckusdt: 402_313_538, ckusdc: 73_465_211 };
+    let floors = TokenAmounts { icusd: 500_000_000, ckusdt: 5_000_000, ckusdc: 5_000_000 };
+    let ceilings = TokenAmounts { icusd: 200_000_000_000, ckusdt: 2_000_000_000, ckusdc: 2_000_000_000 };
+    let check = check_inventory_bands(
+        StableToken::CkUsdc, 10_000_000, StableToken::IcUsd, 10_400_000_00,
+        balances, floors, ceilings,
+    );
+    assert!(check.eligible());
 }
