@@ -113,6 +113,21 @@ Existing on-ledger allowances are not revoked by this design. Allowance revocati
 
 This design retires Rumi AMM, PartyDEX, and BOB **from arbitrage only**. It does not retire or silently alter the separately configured volume bot, including its existing Rumi-AMM-backed 3USD/ICP activity or any icUSD/BOB volume setting. Those volume routes remain outside the active arbitrage graph and are affected only by the global account-mutation serialization in Section 7.3.
 
+Preserving volume economics does not preserve mutable call-target authority. Every retained volume target is code-pinned independently of legacy `BotConfig`:
+
+| Volume role | Principal |
+|---|---|
+| ICP ledger | `ryjl3-tyaaa-aaaaa-aaaba-cai` |
+| icUSD ledger | `t6bor-paaaa-aaaap-qrd5q-cai` |
+| 3USD ledger / Rumi 3pool | `fohh4-yyaaa-aaaap-qtkpa-cai` |
+| BOB ledger | `7pail-xaaaa-aaaas-aabmq-cai` |
+| Rumi AMM ICP/3USD | `ijlzs-2yaaa-aaaap-quaaq-cai` |
+| ICPSwap ICP/icUSD | `nqxwe-hiaaa-aaaar-qb5yq-cai` |
+| ICPSwap ICP/3USD | `mu2zw-6iaaa-aaaar-qb56q-cai` |
+| ICPSwap icUSD/BOB | `gxvvw-aiaaa-aaaar-qcada-cai` |
+
+On migration and every restart/upgrade, persisted volume principals, token pairs/orderings, and ledger identities must validate against this immutable registry before a volume timer is armed or a manual volume method can call out. A mismatch disables the affected volume pool and fails its manual/timer operation before any inter-canister call; it is never adopted as a new pin. Volume configuration may still control enabled status, size, cadence, and cost limits, but cannot change a call target. Re-admitting or replacing a volume target requires an explicit reviewed code-pin change.
+
 The arbitrage scheduler also retires automatic residual-asset drains. It never automatically sells excess or stranded ICP, ckBTC, or ckETH. The volume bot's separate subaccount settlement/recovery behavior is unchanged.
 
 ## 3. Candidate Classes and Profit Invariants
@@ -598,7 +613,7 @@ The deployed Candid baseline receives the following explicit Stage-1 disposition
 
 `get_prices` and `get_bot_health` fail closed because their legacy implementations perform mixed external lookups that include retired integrations. New active-registry route observation/health APIs and the existing volume-only status APIs replace them; a compatibility name is not allowed to conceal retired-pool polling. `volume_swap` is explicitly a narrowly scoped volume operation—not an arbitrage or generic manual-swap escape hatch—and remains subject to volume authorization, the global lock, provenance reservations, and source-bound reconciliation.
 
-Surviving generic and recovery methods also have exact target restrictions. `recover_partydex_balance` may address only the two code-pinned retired PartyDEX pools `xjiq2-fiaaa-aaaan-q52ra-cai` and `6b2bo-kyaaa-aaaao-qpira-cai`, after runtime token-pair verification. Generic `withdraw` may call only the six code-pinned active ledgers or the code-pinned legacy recovery ledgers 3USD (`fohh4-yyaaa-aaaap-qtkpa-cai`) and BOB (`7pail-xaaaa-aaaas-aabmq-cai`), and it cannot debit any ownership reservation. Volume fund/withdraw methods accept only the existing code-pinned volume ledger registry: ICP (`ryjl3-tyaaa-aaaaa-aaaba-cai`), icUSD (`t6bor-paaaa-aaaap-qrd5q-cai`), 3USD, and BOB. An arbitrary caller-supplied principal never becomes an inter-canister target merely because the caller is an admin.
+Surviving generic and recovery methods also have exact target restrictions. `recover_partydex_balance` may address only the two code-pinned retired PartyDEX pools `xjiq2-fiaaa-aaaan-q52ra-cai` and `6b2bo-kyaaa-aaaao-qpira-cai`, after runtime token-pair verification. Generic `withdraw` may call only the six code-pinned active ledgers or the code-pinned legacy recovery ledgers 3USD (`fohh4-yyaaa-aaaap-qtkpa-cai`) and BOB (`7pail-xaaaa-aaaas-aabmq-cai`), and it cannot debit any ownership reservation. Volume fund/withdraw and all internal/manual/timer volume calls resolve their targets exclusively from the immutable volume registry in Section 2.3, never directly from caller input or unvalidated persisted `BotConfig`. An arbitrary caller-supplied or legacy-persisted principal never becomes an inter-canister target merely because the caller is an admin or the value decoded successfully.
 
 ### Stage 2: Quote-only route planner
 
@@ -676,6 +691,8 @@ The design is implementation-ready only when a plan covers all of the following 
 - The arbitrage drain functions and their scheduler call sites are absent.
 - Manual external-venue withdrawal remains isolated and cannot initiate a market swap.
 - Generic withdrawal, volume fund/withdraw, and retired PartyDEX recovery reject every caller-supplied canister principal outside their exact code-pinned active/legacy-recovery target registries before an inter-canister call.
+- Migration/restart fixtures replace legacy volume call-target authority with the immutable Section-2.3 registry before arming timers; adversarial persisted principals, pair/order mismatches, or ledger-identity mismatches disable the affected volume pool and produce zero outbound calls.
+- Every retained manual, triggered, and timer-driven volume path resolves ledgers and venues from the code-pinned registry, while volume enable/size/cadence/cost settings retain their existing economic meaning.
 - Volume-bot recovery behavior is unchanged.
 - Drain deletion occurs in Stage 1 before quote-only observation; no later stage may retain or reintroduce an automatic drain.
 
