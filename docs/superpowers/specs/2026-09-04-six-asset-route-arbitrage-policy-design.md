@@ -136,7 +136,16 @@ net_profit_usd_6dec =
   - all_unaccounted_start_asset_fees
 ```
 
-`par_usd` values each stable at exactly $1 after converting its native decimals. This normalization applies only to the starting principal, final settled balance, fees, and profit report. Route discovery and every intermediate amount use actual size-dependent pool quotes; the planner never substitutes `$1` for an edge price. Candidate eligibility requires both:
+`par_usd_6dec(amount_native, decimals)` values each stable at exactly $1 using deterministic integer conversion:
+
+```text
+if decimals >= 6:
+  floor(amount_native / 10^(decimals - 6))
+else:
+  checked(amount_native * 10^(6 - decimals))
+```
+
+Native amounts are nonnegative, so division always truncates downward; sub-six-decimal multiplication, power construction, and conversion into the signed widened P&L representation are checked, and any overflow or unsupported decimal exponent rejects the candidate fail closed. Profit subtraction occurs only after every native amount and fee has been separately converted by this rule. This normalization applies only to the starting principal, final settled balance, fees, and profit report. Route discovery and every intermediate amount use actual size-dependent pool quotes; the planner never substitutes `$1` for an edge price. Candidate eligibility requires both:
 
 ```text
 net_profit_usd_6dec >= min_stable_profit_usd_6dec
@@ -351,7 +360,7 @@ Within each book, candidates rank by:
 3. fewer legs;
 4. deterministic `route_id` order.
 
-The initial live design permits one globally active route at a time. If both books have eligible candidates, the least-recently-served book wins; if only one book is eligible, it may run. After any submission, settlement, failure, or held-inventory transition, all quotes are invalidated and the graph is re-quoted before another selection. A reconciled held position does not permanently retain the global route lock, but its exposure applies to later inventory eligibility.
+The initial live design permits one globally active route at a time. If both books have eligible candidates, the least-recently-served book wins; if only one book is eligible, it may run. After any submission, settlement, failure, or held-inventory transition, all quotes are invalidated and the graph is re-quoted before another selection. Waiting for the global account-mutation lock also invalidates a selected winner if any quote could have aged or state could have changed: after acquiring the lock and immediately before the first submission, the executor re-quotes the complete route and revalidates quote age, pinned pool/ledger identity, full-fill status, allowance, unencumbered balance, inventory bands, native profit, and bps thresholds. Any failure releases the unused lock without mutation and returns to observation. A reconciled held position does not permanently retain the global route lock, but its reserved exposure applies to later inventory eligibility.
 
 The scheduler also enforces the canonical-cycle exclusion: no second funding rotation of the same cycle can run until the first reaches a terminal state and a fresh observation window begins.
 
@@ -426,7 +435,7 @@ If an adapter cannot obtain this source-bound evidence after a lost response, de
 
 ### 7.3 Global account-mutation ownership
 
-A single durable account-mutation lock covers **every canister-controlled operation that can mutate a route-relevant default account**, not only the route executor and volume bot. It is acquired before a transfer, approval-funded deposit, swap, withdrawal, sweep, recovery, or movement into a default account and held through settlement/refund reconciliation. Covered surfaces include scheduled and manual volume cycles, volume fund/withdraw administration, generic withdrawals, Rumi manual swaps, 3pool deposit/redeem/exchange tools, retired-venue recovery, and any compatibility endpoint that remains capable of moving funds. An endpoint may avoid the lock only if its accounts are structurally disjoint and that non-overlap is an asserted, tested invariant.
+A single durable account-mutation lock covers **every canister-controlled operation that can mutate a route-relevant default account**, not only the route executor and volume bot. It is acquired before a transfer, approval-funded deposit, swap, withdrawal, sweep, recovery, or movement into a default account and held through settlement/refund reconciliation. Covered surviving surfaces include scheduled and manual volume cycles, volume fund/withdraw administration, generic withdrawals, retired-venue recovery, and any non-retired compatibility endpoint that remains capable of moving funds. An endpoint may avoid the lock only if its accounts are structurally disjoint and that non-overlap is an asserted, tested invariant. Legacy public Rumi-AMM swap/quote and 3pool deposit/redeem/exchange endpoints are fail-closed under Section 10 rather than lock participants; only narrowly necessary internal volume operations may continue to use those venue adapters under the lock.
 
 While the route executor owns the lock, every covered scheduled, manual, or admin-triggered operation defers before its first mutation. While any other covered operation owns the lock, route execution defers. Quote-only calls remain permitted. The implementation maintains an exhaustive inventory of Candid update entrypoints and timer callbacks, classifying each as fail-closed, lock-participating, read-only, or proven-account-disjoint; an unclassified mutator fails the acceptance gate.
 
@@ -492,7 +501,6 @@ min_icp_profit_e8s
 min_icp_profit_bps
 per_asset_inventory_floor
 per_asset_inventory_ceiling
-per_asset_additional_exposure_enabled
 quote_max_age_ns
 settlement_timeout_ns
 reconciliation_queries_per_cycle
@@ -561,6 +569,7 @@ Migration is additive and staged.
 - Remove retired integrations from automatic metadata, quote, approval, scheduler, and execution paths.
 - Make every legacy lettered automatic and manual executor fail closed before any inter-canister call. Preserve wire signatures and read-only historical/dry-run access only where it cannot mutate funds.
 - Make the non-letter legacy `manual_arb_cycle` executor fail closed. Replace legacy `setup_approvals` behavior with a fail-closed compatibility stub; future active-pool allowances require a separately named, spender-specific admin action and remain outside dry-run observation.
+- Make public legacy `rumi_quote`, `rumi_manual_swap`, `pool_deposit`, `pool_redeem`, and `pool_exchange` fail-closed compatibility stubs before any inter-canister call, and remove their trading actions from the dashboard. The active route planner supplies its own quote adapters; only the separately configured volume bot may retain narrowly scoped internal Rumi-AMM/3pool venue calls.
 - Inventory every Candid update method and timer callback that can mutate a route-relevant balance. Retired and legacy execution surfaces fail closed; isolated recovery is explicitly classified; remaining active manual balance tools are marked for mandatory participation in the Stage-4 global account-mutation lock before the new executor can be enabled.
 - Delete the arbitrage functions `drain_residual_icp` and `drain_residual_bob` and their scheduler call sites; do not replace them with a generic drain.
 - Preserve isolated manual withdrawal from a retired external venue without admitting it to routing.
@@ -623,7 +632,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Canonical rotation deduplication with reversal remaining distinct.
 - No repeated vertices, repeated pools, same-pool consecutive reversals, or embedded cycles; distinct-pool reverse directions remain eligible.
 - Exact native-decimal and ledger/DEX-fee fixtures for every edge direction.
-- Stable-par and ICP-native profit invariants, thresholds, and rounding boundaries.
+- Stable-par and ICP-native profit invariants, thresholds, and rounding boundaries, including `par_usd_6dec` native-to-six-decimal floor conversion and checked sub-six-decimal multiplication/overflow rejection.
 - Stable and ICP `net_profit_bps` fixtures prove initial-principal denominators, signed widened checked arithmetic, truncation toward zero, zero-principal rejection, negative-profit behavior, overflow rejection, and exact values immediately below/at/above each configured bps threshold.
 - Stable-only routes use real chained pool quotes while applying $1 par only at their accounting boundary.
 - Stable-settled routes cover every graph-reachable permitted subset and ordering of ICP, ckBTC, and ckETH within the four-leg limit; unreachable endpoint/order combinations are reported as absent rather than synthesized.
@@ -636,6 +645,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Zero arbitrage-engine calls to Rumi AMM, PartyDEX, and BOB arbitrage pools; this assertion does not classify the independently configured volume bot's existing Rumi AMM or BOB activity as arbitrage.
 - Every legacy lettered automatic and manual executor fails before metadata, quote, approval, transfer, deposit, withdrawal, or swap calls from Stage 1 onward.
 - Non-letter `manual_arb_cycle` and legacy `setup_approvals` fail closed in Stage 1 before any inter-canister call.
+- Legacy public `rumi_quote`, `rumi_manual_swap`, `pool_deposit`, `pool_redeem`, and `pool_exchange` fail closed before any inter-canister call; their dashboard trading actions are absent, while separately scoped internal volume operations remain testable under the global lock.
 - Exhaustive Candid-update/timer inventory classifies every route-account mutator as fail-closed, global-lock-participating, read-only, or proven-account-disjoint; an unclassified mutator fails acceptance.
 - Approval setup excludes retired integrations.
 - The arbitrage drain functions and their scheduler call sites are absent.
@@ -663,6 +673,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Profit-preserving minimum-output proofs.
 - Planned-versus-realized P&L from attributable ledger deltas.
 - Global route lock, per-book scheduling, and canonical-cycle collision prevention.
+- A candidate delayed behind another lock owner is completely re-quoted and has age, identity, full-fill, allowance, unencumbered balance, inventory, native-profit, and bps eligibility revalidated after lock acquisition and immediately before first submission.
 - Candidate, execution, and held-position queries enforce cursor pagination and the page-size ceiling.
 - Held positions and execution evidence use dedicated bounded stable structures; each execution record is at most 65,536 encoded bytes with at most 64 evidence items, the terminal log contains at most 10,000 records, and capacity is reserved before submission.
 - Reaching any held-position, terminal-history, or record-size ceiling prevents a new route without deleting, coalescing unrelated records, or liquidating existing holdings; quote-only observation and existing reconciliation remain available.
