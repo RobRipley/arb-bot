@@ -298,6 +298,8 @@ Descriptive route IDs replace letters in new observations, trades, logs, and das
 - Rumi 3pool uses `calc_swap` with its native output and fee semantics.
 - Each downstream quote uses the preceding leg's output after every ledger movement required before the downstream venue can receive it.
 
+Full-input consumption is also an execution invariant, not merely a quote-time filter. If settlement evidence shows `effective_input != planned_input`, the leg is an unexpected partial fill and the executor must not submit the next leg, even if the partially filled tail now appears profitable.
+
 The planner never assumes that fee semantics are symmetric between venues. Native token decimals and ledger fees are edge inputs, not strategy-level constants.
 
 ### 5.2 Size search
@@ -433,6 +435,8 @@ Only `Completed`, `Aborted`, and `HeldInventory` are terminal for scheduling pur
 Each execution adapter defines a source-bound reconciliation predicate before it may be enabled. For ICPSwap and Rumi, `LegSettled` requires evidence tied to the recorded request fingerprint that establishes all of the following: the exact input debit from the recorded source account; the pool, direction, and effective input accepted; the corresponding output credit from an attributable venue or settlement account; every partial-fill refund or unused-input return; and conservation of the expected gross amounts and ledger/DEX fees within exact native-unit rules. Acceptable bindings include ledger transaction identities with matching from/to accounts and created-at-time or memo where supported, plus a pool receipt or transaction-history record that binds the venue execution to the same input. An amount-only DEX response or coincident balance delta is insufficient.
 
 If an adapter cannot obtain this source-bound evidence after a lost response, delayed withdrawal, or partial fill, the route remains `ReconciliationRequired` and the durable mutation lock remains held. The design does not guess, advance the next leg, mark profit, or downgrade uncertainty to `HeldInventory` merely because balances appear plausible.
+
+After source-bound evidence fully reconciles an unexpected partial fill, the route terminates without continuing: it becomes `Aborted` only when the entire planned input has been returned, no swap output or other non-principal route inventory remains, and unavoidable fees are accounted; otherwise it becomes `HeldInventory`. Every resulting output, unspent-input refund, and fee-bearing residual is recorded as an attributable lot and durably reserved before releasing the lock. The position retains the route's original stable-par or ICP-native principal basis, reports no completed-route profit, and may move again only through a separately initiated linked continuation. Execution never rescales the old downstream floor or silently treats a partial fill as a smaller successful route.
 
 ### 7.3 Global account-mutation ownership
 
@@ -582,6 +586,20 @@ Migration is additive and staged.
 - Preserve any deployed `pending_exit` evidence as a visible legacy held incident; do not use it to trigger an automatic swap.
 - Prove zero inter-canister calls for every retired path with call-counting tests.
 
+The deployed Candid baseline receives the following explicit Stage-1 disposition. Implementation regenerates this inventory from the then-current Candid and source and fails review if a public update or timer callback is absent:
+
+| Disposition | Existing surfaces |
+|---|---|
+| Fail-closed compatibility stubs before any inter-canister call | `get_prices`, `get_bot_health`, `setup_approvals`, `manual_arb_cycle`, every `execute_strategy_*`, every `dry_run_arb_cycle`/`dry_run_strategy_*` including Strategy T, `rumi_quote`, `rumi_manual_swap`, `pool_deposit`, `pool_redeem`, `pool_quote_deposit`, `pool_quote_redeem`, `pool_exchange`, `pool_quote_exchange`, `set_config`, `set_rumi_amm_paused`, `set_slippage_bps`, `set_arb_interval_secs`, `set_icp_inventory_band`, `set_bob_inventory_band`, every `set_strategy_t_*`, every `set_bob_*`, `backfill_trade_legs`, and the legacy automatic arbitrage timer callback |
+| Preserved local/query compatibility with no fund-moving or retired-venue call | `is_admin`, `add_admin`, `remove_admin`, `get_config`, paginated legacy history/activity/error/snapshot queries, `get_summary`, `get_public_health`, `get_volume_stats`, `get_volume_trades`, `cycles_balance`, `http_request`; `pause`/`resume` become aliases for the new route-arbitrage master pause and cannot revive legacy execution; `clear_cycle_lock` may clear only obsolete legacy in-memory cycle state and never the durable mutation/reconciliation lock |
+| Preserved volume configuration, no direct balance mutation | `set_volume_config`, `set_volume_global`, `pause_volume`, `resume_volume` |
+| Surviving volume operation; must acquire the global lock and honor all ownership reservations | `volume_swap`, `fund_volume_subaccount`, `withdraw_volume_subaccount`, `trigger_volume_cycle`, `trigger_volume_rebalance`, and the scheduled volume timer callback |
+| Surviving generic/recovery operation; must acquire the global lock, honor ownership reservations, and satisfy its own reconciliation predicate | `withdraw`, `recover_partydex_balance` |
+
+`get_prices` and `get_bot_health` fail closed because their legacy implementations perform mixed external lookups that include retired integrations. New active-registry route observation/health APIs and the existing volume-only status APIs replace them; a compatibility name is not allowed to conceal retired-pool polling. `volume_swap` is explicitly a narrowly scoped volume operation—not an arbitrage or generic manual-swap escape hatch—and remains subject to volume authorization, the global lock, provenance reservations, and source-bound reconciliation.
+
+Surviving generic and recovery methods also have exact target restrictions. `recover_partydex_balance` may address only the two code-pinned retired PartyDEX pools `xjiq2-fiaaa-aaaan-q52ra-cai` and `6b2bo-kyaaa-aaaao-qpira-cai`, after runtime token-pair verification. Generic `withdraw` may call only the six code-pinned active ledgers or the code-pinned legacy recovery ledgers 3USD (`fohh4-yyaaa-aaaap-qtkpa-cai`) and BOB (`7pail-xaaaa-aaaas-aabmq-cai`), and it cannot debit any ownership reservation. Volume fund/withdraw methods accept only the existing code-pinned volume ledger registry: ICP (`ryjl3-tyaaa-aaaaa-aaaba-cai`), icUSD (`t6bor-paaaa-aaaap-qrd5q-cai`), 3USD, and BOB. An arbitrary caller-supplied principal never becomes an inter-canister target merely because the caller is an admin.
+
 ### Stage 2: Quote-only route planner
 
 - Add the six-asset wallet/metadata registry, all allowlisted edges, candidate generation, canonicalization, accounting, ranking, held-inventory reports, and all-six-asset balance reporting.
@@ -651,17 +669,20 @@ The design is implementation-ready only when a plan covers all of the following 
 - Zero arbitrage-engine calls to Rumi AMM, PartyDEX, and BOB arbitrage pools; this assertion does not classify the independently configured volume bot's existing Rumi AMM or BOB activity as arbitrage.
 - Every legacy lettered automatic and manual executor fails before metadata, quote, approval, transfer, deposit, withdrawal, or swap calls from Stage 1 onward.
 - Non-letter `manual_arb_cycle` and legacy `setup_approvals` fail closed in Stage 1 before any inter-canister call.
-- Legacy public `rumi_quote`, `rumi_manual_swap`, `pool_deposit`, `pool_redeem`, and `pool_exchange` fail closed before any inter-canister call; their dashboard trading actions are absent, while separately scoped internal volume operations remain testable under the global lock.
+- Every surface in the Stage-1 disposition table has a generated classification test; `get_prices` and `get_bot_health` make zero retired-venue calls, and no newly discovered Candid update or timer callback remains unclassified.
+- Legacy public Rumi/3pool quote and mutation surfaces fail closed before any inter-canister call; their dashboard trading actions are absent, while separately scoped internal volume operations remain testable under the global lock.
 - Exhaustive Candid-update/timer inventory classifies every route-account mutator as fail-closed, global-lock-participating, read-only, or proven-account-disjoint; an unclassified mutator fails acceptance.
 - Approval setup excludes retired integrations.
 - The arbitrage drain functions and their scheduler call sites are absent.
 - Manual external-venue withdrawal remains isolated and cannot initiate a market swap.
+- Generic withdrawal, volume fund/withdraw, and retired PartyDEX recovery reject every caller-supplied canister principal outside their exact code-pinned active/legacy-recovery target registries before an inter-canister call.
 - Volume-bot recovery behavior is unchanged.
 - Drain deletion occurs in Stage 1 before quote-only observation; no later stage may retain or reintroduce an automatic drain.
 
 ### Execution, settlement, and holding
 
 - Full-fill rejection and refund accounting.
+- An execution-time `effective_input != planned_input` never advances to the next leg: exact full-principal refund with no non-principal inventory becomes fee-accounted `Aborted`; every other reconciled partial fill becomes reserved multi-lot `HeldInventory`, preserving the original principal domain and reporting no completed-route profit.
 - Delayed settlement, timeout, and out-of-order response behavior.
 - Trap/restart/upgrade at every persisted phase.
 - Duplicate timer/callback idempotency.
