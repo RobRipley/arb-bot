@@ -4,6 +4,7 @@ use ic_cdk_timers::TimerId;
 use std::cell::RefCell;
 
 pub mod state; // pub so integration tests can verify serde upgrade defaults
+pub mod strategy_t; // pub so integration tests can reach the pure math
 mod prices;
 mod swaps;
 mod partydex;
@@ -1535,6 +1536,74 @@ async fn dry_run_strategy_r() -> arb::DryRunResult {
     }
 }
 
+#[update]
+async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
+    require_admin();
+
+    let config = state::read_state(|s| s.config.clone());
+    if config.strategy_t_icusd_ckusdc_pool == Principal::anonymous()
+        || config.strategy_t_icusd_ckusdt_pool == Principal::anonymous()
+        || config.strategy_t_ckusdt_ckusdc_pool == Principal::anonymous()
+    {
+        return strategy_t::StrategyTDryRunResult {
+            candidates: vec![],
+            best_economic: None,
+            best_executable: None,
+        };
+    }
+
+    let this_canister = ic_cdk::id();
+    let pools = strategy_t::PoolPrincipals {
+        icusd_ckusdc: config.strategy_t_icusd_ckusdc_pool,
+        icusd_ckusdt: config.strategy_t_icusd_ckusdt_pool,
+        ckusdt_ckusdc: config.strategy_t_ckusdt_ckusdc_pool,
+    };
+    let ledgers = strategy_t::TokenLedgers {
+        icusd: config.icusd_ledger,
+        ckusdt: config.ckusdt_ledger,
+        ckusdc: config.ckusdc_ledger,
+    };
+
+    let (icusd_bal, ckusdt_bal, ckusdc_bal) = futures::future::join3(
+        swaps::icrc1_balance_of_default(config.icusd_ledger),
+        swaps::icrc1_balance_of_default(config.ckusdt_ledger),
+        swaps::icrc1_balance_of_default(config.ckusdc_ledger),
+    ).await;
+    let balances = strategy_t::TokenAmounts {
+        icusd: icusd_bal.unwrap_or(0),
+        ckusdt: ckusdt_bal.unwrap_or(0),
+        ckusdc: ckusdc_bal.unwrap_or(0),
+    };
+    let floors = strategy_t::TokenAmounts {
+        icusd: config.strategy_t_icusd_floor,
+        ckusdt: config.strategy_t_ckusdt_floor,
+        ckusdc: config.strategy_t_ckusdc_floor,
+    };
+    let ceilings = strategy_t::TokenAmounts {
+        icusd: config.strategy_t_icusd_ceiling,
+        ckusdt: config.strategy_t_ckusdt_ceiling,
+        ckusdc: config.strategy_t_ckusdc_ceiling,
+    };
+
+    let max_trade_usd = config.strategy_t_max_trade_size_usd;
+    let start_amount_native = move |token: strategy_t::StableToken| -> u64 {
+        strategy_t::native_from_par_usd_6dec(max_trade_usd, token)
+    };
+
+    strategy_t::evaluate(
+        config.rumi_3pool,
+        pools,
+        this_canister,
+        ledgers,
+        start_amount_native,
+        config.strategy_t_min_profit_usd,
+        config.strategy_t_min_profit_bps,
+        balances,
+        floors,
+        ceilings,
+    ).await
+}
+
 // ─── Cross-pool target builders ───
 
 const ICUSD_FEE: u64 = 100_000;
@@ -1900,6 +1969,120 @@ fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
         s.config.bob_inventory_ceiling_e8s = ceiling_e8s;
     });
     state::log_activity("admin", &format!("bob inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
+    Ok(())
+}
+
+/// Sets the three Strategy T ICPSwap closing-pool principals.
+///
+/// IMPORTANT: `strategy_t::ClosingPool::zero_for_one_from` hardcodes each
+/// pool's `token0`/`token1` ordering at compile time, asserted against the
+/// specific mainnet principals documented on `ClosingPool` (verified live
+/// 2026-09-02/03) — it is not runtime-probed. This setter only validates
+/// that the three principals are non-anonymous and pairwise distinct; it
+/// does NOT verify they are actually the correct, documented pools. Pointing
+/// this at a genuinely different pool (or transposing two of the three
+/// slots) will silently produce inverted `zeroForOne` swap quotes. Runtime
+/// `metadata` probing (matching the `icusd_token_ordering_resolved` /
+/// `ckusdt_token_ordering_resolved` pattern used elsewhere in `state.rs`)
+/// is out of scope here — re-pointing to different pools requires updating
+/// `strategy_t.rs` to match.
+#[update]
+fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt_ckusdc: Principal) -> Result<(), String> {
+    require_admin();
+    if icusd_ckusdc == Principal::anonymous()
+        || icusd_ckusdt == Principal::anonymous()
+        || ckusdt_ckusdc == Principal::anonymous()
+    {
+        return Err("strategy T pool principals must not be anonymous".into());
+    }
+    if icusd_ckusdc == icusd_ckusdt || icusd_ckusdc == ckusdt_ckusdc || icusd_ckusdt == ckusdt_ckusdc {
+        return Err("strategy T pool principals must be pairwise distinct".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_icusd_ckusdc_pool = icusd_ckusdc;
+        s.config.strategy_t_icusd_ckusdt_pool = icusd_ckusdt;
+        s.config.strategy_t_ckusdt_ckusdc_pool = ckusdt_ckusdc;
+    });
+    state::log_activity("admin", "strategy T pool principals updated");
+    Ok(())
+}
+
+/// Master enable switch for Strategy T. Dry-run evaluation (`dry_run_strategy_t`)
+/// runs once all three pool principals are non-anonymous, independent of
+/// this flag — there is no arb-cycle wiring for Strategy T in this build.
+/// This flag and `strategy_t_dry_run` exist for a future live-execution PR;
+/// this build has no live-trade path regardless of either value.
+#[update]
+fn set_strategy_t_enabled(enabled: bool) {
+    require_admin();
+    state::mutate_state(|s| s.config.strategy_t_enabled = enabled);
+    state::log_activity("admin", &format!("strategy_t_enabled set to {}", enabled));
+}
+
+#[update]
+fn set_strategy_t_dry_run(dry_run: bool) {
+    require_admin();
+    state::mutate_state(|s| s.config.strategy_t_dry_run = dry_run);
+    state::log_activity("admin", &format!("strategy_t_dry_run set to {}", dry_run));
+}
+
+#[update]
+fn set_strategy_t_thresholds(min_profit_usd: i64, min_profit_bps: u32, max_trade_size_usd: u64) -> Result<(), String> {
+    require_admin();
+    if max_trade_size_usd == 0 {
+        return Err("max_trade_size_usd must be > 0".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_min_profit_usd = min_profit_usd;
+        s.config.strategy_t_min_profit_bps = min_profit_bps;
+        s.config.strategy_t_max_trade_size_usd = max_trade_size_usd;
+    });
+    state::log_activity(
+        "admin",
+        &format!("strategy T thresholds set: min_profit_usd={} min_profit_bps={} max_trade_size_usd={}", min_profit_usd, min_profit_bps, max_trade_size_usd),
+    );
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_icusd_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_icusd_floor = floor;
+        s.config.strategy_t_icusd_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T icUSD band set to [{}, {}]", floor, ceiling));
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_ckusdt_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_ckusdt_floor = floor;
+        s.config.strategy_t_ckusdt_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T ckUSDT band set to [{}, {}]", floor, ceiling));
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_ckusdc_floor = floor;
+        s.config.strategy_t_ckusdc_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T ckUSDC band set to [{}, {}]", floor, ceiling));
     Ok(())
 }
 

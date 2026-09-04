@@ -282,6 +282,39 @@ pub async fn fetch_icpswap_quote_for_amount(
     }
 }
 
+/// Like `fetch_icpswap_quote_for_amount` but calls `quoteForAll`, which
+/// rejects with an explicit error instead of silently returning a
+/// plateaued/partial-fill amount when `amount` exceeds the pool's
+/// currently fillable ceiling. Strategy T MUST use this, never `quote`,
+/// for candidate sizing (verified live 2026-09-02/03 — see the plan's
+/// Global Constraints for the concrete before/after ceiling-move evidence).
+pub async fn fetch_icpswap_quote_for_all(
+    icpswap_pool: Principal,
+    amount: u64,
+    zero_for_one: bool,
+) -> Result<u64, String> {
+    #[derive(CandidType, Serialize)]
+    struct SwapArgs {
+        #[serde(rename = "amountIn")]
+        amount_in: String,
+        #[serde(rename = "zeroForOne")]
+        zero_for_one: bool,
+        #[serde(rename = "amountOutMinimum")]
+        amount_out_minimum: String,
+    }
+    let args = SwapArgs {
+        amount_in: amount.to_string(),
+        zero_for_one,
+        amount_out_minimum: "0".to_string(),
+    };
+    let result: Result<(IcpSwapResult,), _> = ic_cdk::call(icpswap_pool, "quoteForAll", (args,)).await;
+    match result {
+        Ok((IcpSwapResult::Ok(out),)) => Ok(nat_to_u64(&out)),
+        Ok((IcpSwapResult::Err(e),)) => Err(format!("ICPSwap quoteForAll error: {:?}", e)),
+        Err((code, msg)) => Err(format!("ICPSwap quoteForAll call failed ({:?}): {}", code, msg)),
+    }
+}
+
 pub fn nat_to_u64(n: &Nat) -> u64 {
     n.0.to_string().parse::<u64>().unwrap_or(0)
 }

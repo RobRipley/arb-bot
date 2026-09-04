@@ -2,3 +2,4 @@ target/
 .dfx/
 node_modules/
 .claude/
+.superpowers/

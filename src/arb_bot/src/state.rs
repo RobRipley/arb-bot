@@ -80,6 +80,30 @@ fn default_bob_min_spread_bps() -> u64 {
     150
 }
 
+fn default_strategy_t_min_profit_usd() -> i64 {
+    50_000 // $0.05 — matches existing `min_profit_usd` scale/convention
+}
+
+fn default_strategy_t_min_profit_bps() -> u32 {
+    50 // 0.50% — matches existing `min_spread_bps` convention
+}
+
+fn default_strategy_t_max_trade_size_usd() -> u64 {
+    40_000_000 // $40 — dedicated cap, deliberately equal to but independent
+               // from the global max_trade_size_usd (never reuse the global one)
+}
+
+fn default_strategy_t_icusd_floor() -> u64 { 500_000_000 }      // 5 icUSD (8 dec)
+fn default_strategy_t_icusd_ceiling() -> u64 { 200_000_000_000 } // 2000 icUSD
+fn default_strategy_t_ckusdt_floor() -> u64 { 5_000_000 }        // 5 ckUSDT (6 dec)
+fn default_strategy_t_ckusdt_ceiling() -> u64 { 2_000_000_000 }  // 2000 ckUSDT
+fn default_strategy_t_ckusdc_floor() -> u64 { 5_000_000 }        // 5 ckUSDC (6 dec)
+fn default_strategy_t_ckusdc_ceiling() -> u64 { 2_000_000_000 }  // 2000 ckUSDC
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct BotConfig {
     pub owner: Principal,
@@ -202,6 +226,53 @@ pub struct BotConfig {
     /// (dry-run-first, per design decision #5).
     #[serde(default)]
     pub bob_execution_enabled: bool,
+
+    // ─── Strategy T: three-stablecoin router (Rumi 3pool × 3 ICPSwap pairs) ───
+    /// icUSD/ckUSDC ICPSwap pool (eb25l-dyaaa-aaaar-qb4lq-cai when configured).
+    #[serde(default = "default_principal")]
+    pub strategy_t_icusd_ckusdc_pool: Principal,
+    /// icUSD/ckUSDT ICPSwap pool (jogrm-gqaaa-aaaar-qcg2a-cai when configured).
+    #[serde(default = "default_principal")]
+    pub strategy_t_icusd_ckusdt_pool: Principal,
+    /// ckUSDT/ckUSDC ICPSwap pool (heq6n-fyaaa-aaaag-qkcpq-cai when configured).
+    #[serde(default = "default_principal")]
+    pub strategy_t_ckusdt_ckusdc_pool: Principal,
+    /// Master enable switch for Strategy T. Dry-run evaluation runs once all
+    /// three pool principals are non-anonymous, independent of this flag.
+    /// This flag and `strategy_t_dry_run` exist for a future live-execution
+    /// PR; this build has no live-trade path regardless of either value.
+    #[serde(default)]
+    pub strategy_t_enabled: bool,
+    /// Forces dry-run-only. Defaults true. Present so a future PR can add
+    /// live execution behind an explicit flip rather than a code change.
+    #[serde(default = "default_true")]
+    pub strategy_t_dry_run: bool,
+    /// Minimum net profit (6-decimal USD) for a candidate to be eligible.
+    #[serde(default = "default_strategy_t_min_profit_usd")]
+    pub strategy_t_min_profit_usd: i64,
+    /// Minimum net profit in basis points of start-leg notional, evaluated
+    /// alongside (both must pass) the absolute floor above.
+    #[serde(default = "default_strategy_t_min_profit_bps")]
+    pub strategy_t_min_profit_bps: u32,
+    /// Per-candidate max trade size (6-decimal USD). Dedicated to Strategy T
+    /// — never reuse or raise the global `max_trade_size_usd` for this.
+    #[serde(default = "default_strategy_t_max_trade_size_usd")]
+    pub strategy_t_max_trade_size_usd: u64,
+    /// Per-token inventory bands (native decimals). A candidate whose start
+    /// leg would draw the start token below its floor, or whose end leg
+    /// would push the end token above its ceiling, is ineligible.
+    #[serde(default = "default_strategy_t_icusd_floor")]
+    pub strategy_t_icusd_floor: u64,
+    #[serde(default = "default_strategy_t_icusd_ceiling")]
+    pub strategy_t_icusd_ceiling: u64,
+    #[serde(default = "default_strategy_t_ckusdt_floor")]
+    pub strategy_t_ckusdt_floor: u64,
+    #[serde(default = "default_strategy_t_ckusdt_ceiling")]
+    pub strategy_t_ckusdt_ceiling: u64,
+    #[serde(default = "default_strategy_t_ckusdc_floor")]
+    pub strategy_t_ckusdc_floor: u64,
+    #[serde(default = "default_strategy_t_ckusdc_ceiling")]
+    pub strategy_t_ckusdc_ceiling: u64,
 }
 
 /// Which DEX venue an arb leg trades against. Internal to arb targets — not
@@ -345,6 +416,29 @@ pub enum Pool {
     PartyDexIcpCkusdc,
     /// PartyDEX ICP/ckUSDT pool. Label-only in PR2a — see PartyDexIcpCkusdc.
     PartyDexIcpCkusdt,
+}
+
+/// One of the three par-valued stablecoins Strategy T routes between.
+/// Rumi 3pool coin index is fixed by the pool's own token ordering
+/// (verified live 2026-09-02/03): IcUsd=0, CkUsdt=1, CkUsdc=2.
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StrategyTToken {
+    IcUsd,
+    CkUsdt,
+    CkUsdc,
+}
+
+/// Which ICPSwap pool connects a given unordered pair of Strategy T
+/// stablecoins. Each of the three pairs among {IcUsd, CkUsdt, CkUsdc} has
+/// exactly one pool (verified live 2026-09-02/03 `metadata` calls).
+#[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StrategyTPool {
+    /// eb25l-dyaaa-aaaar-qb4lq-cai — token0=icUSD, token1=ckUSDC.
+    IcusdCkusdc,
+    /// jogrm-gqaaa-aaaar-qcg2a-cai — token0=ckUSDT, token1=icUSD.
+    IcusdCkusdt,
+    /// heq6n-fyaaa-aaaag-qkcpq-cai — token0=ckUSDT, token1=ckUSDC.
+    CkusdtCkusdc,
 }
 
 // ─── Volume bot types ───
@@ -705,6 +799,20 @@ impl Default for BotState {
                 bob_max_trade_size_usd: default_bob_max_trade_size_usd(),
                 bob_min_spread_bps: default_bob_min_spread_bps(),
                 bob_execution_enabled: false,
+                strategy_t_icusd_ckusdc_pool: Principal::anonymous(),
+                strategy_t_icusd_ckusdt_pool: Principal::anonymous(),
+                strategy_t_ckusdt_ckusdc_pool: Principal::anonymous(),
+                strategy_t_enabled: false,
+                strategy_t_dry_run: true,
+                strategy_t_min_profit_usd: default_strategy_t_min_profit_usd(),
+                strategy_t_min_profit_bps: default_strategy_t_min_profit_bps(),
+                strategy_t_max_trade_size_usd: default_strategy_t_max_trade_size_usd(),
+                strategy_t_icusd_floor: default_strategy_t_icusd_floor(),
+                strategy_t_icusd_ceiling: default_strategy_t_icusd_ceiling(),
+                strategy_t_ckusdt_floor: default_strategy_t_ckusdt_floor(),
+                strategy_t_ckusdt_ceiling: default_strategy_t_ckusdt_ceiling(),
+                strategy_t_ckusdc_floor: default_strategy_t_ckusdc_floor(),
+                strategy_t_ckusdc_ceiling: default_strategy_t_ckusdc_ceiling(),
             },
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
