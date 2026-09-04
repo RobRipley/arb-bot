@@ -4,6 +4,7 @@ use ic_cdk_timers::TimerId;
 use std::cell::RefCell;
 
 pub mod state; // pub so integration tests can verify serde upgrade defaults
+pub mod strategy_t; // pub so integration tests can reach the pure math
 mod prices;
 mod swaps;
 mod partydex;
