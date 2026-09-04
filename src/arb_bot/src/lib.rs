@@ -11,22 +11,28 @@ mod partydex;
 mod arb;
 mod volume;
 
-use state::{BotConfig, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord, CycleSnapshot};
+use state::{BotConfig, BotConfigInput, TradeRecord, TradeLeg, ErrorRecord, ActivityRecord, CycleSnapshot};
 
 thread_local! {
     static ARB_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
     static VOLUME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
 }
 
+/// `config` is `BotConfigInput`, not `BotConfig` — see that type's doc
+/// comment. A caller built against the pre-Strategy-T interface omits the
+/// 14 `strategy_t_*` fields entirely; `into_full_config` resolves those to
+/// the same inert defaults `BotState::default()` already establishes,
+/// since a genuinely fresh install has no prior config to preserve.
 #[derive(CandidType, Deserialize)]
 pub struct InitArgs {
-    pub config: BotConfig,
+    pub config: BotConfigInput,
 }
 
 #[init]
 fn init(args: InitArgs) {
+    let inert_defaults = state::BotState::default().config;
     state::init_state(state::BotState {
-        config: args.config,
+        config: args.config.into_full_config(&inert_defaults),
         ..Default::default()
     });
     // Can't make inter-canister calls during init, so resolve token ordering
@@ -295,9 +301,18 @@ async fn get_prices() -> PriceInfo {
 
 // ─── Admin Methods ───
 
+/// `config` is `BotConfigInput`, not `BotConfig` — see that type's doc
+/// comment. A caller built against the pre-Strategy-T interface (old
+/// dashboard, old dfx-generated bindings, or any external tooling that
+/// hasn't picked up the 14 new fields) sends a payload with none of them
+/// set; `into_full_config` preserves whatever this canister's CURRENT
+/// config already has for those fields rather than resetting them to the
+/// hardcoded default, so a routine old-style config write can never
+/// silently wipe Strategy T settings made via `set_strategy_t_*`.
 #[update]
-fn set_config(config: BotConfig) {
+fn set_config(config: BotConfigInput) {
     require_admin();
+    let config = state::read_state(|s| config.into_full_config(&s.config));
     // Reject a wholesale config write that would break the ICP inventory band
     // invariant (floor >= 1 ICP, ceiling > floor) — the drain depends on it.
     // A stale cached dashboard omitting the band fields decodes to the valid
@@ -1569,6 +1584,17 @@ async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
         swaps::icrc1_balance_of_default(config.ckusdt_ledger),
         swaps::icrc1_balance_of_default(config.ckusdc_ledger),
     ).await;
+    // A failed balance fetch must fail eligibility closed, not silently
+    // become a zero balance — a zero START balance is conservative, but a
+    // zero END balance is permissive (it can never trip a ceiling check).
+    // `balance_known` carries which fetches actually succeeded; `evaluate`
+    // forces `inventory_eligible = false` with an explicit diagnostic for
+    // any candidate touching a token whose balance is unknown this cycle.
+    let balance_known = strategy_t::TokenKnown {
+        icusd: icusd_bal.is_ok(),
+        ckusdt: ckusdt_bal.is_ok(),
+        ckusdc: ckusdc_bal.is_ok(),
+    };
     let balances = strategy_t::TokenAmounts {
         icusd: icusd_bal.unwrap_or(0),
         ckusdt: ckusdt_bal.unwrap_or(0),
@@ -1599,6 +1625,7 @@ async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
         config.strategy_t_min_profit_usd,
         config.strategy_t_min_profit_bps,
         balances,
+        balance_known,
         floors,
         ceilings,
     ).await

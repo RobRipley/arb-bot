@@ -275,6 +275,218 @@ pub struct BotConfig {
     pub strategy_t_ckusdc_ceiling: u64,
 }
 
+/// Candid-boundary counterpart to `BotConfig`, used ONLY as the argument
+/// type for `set_config` and inside `InitArgs`.
+///
+/// Candid subtyping is stricter than Rust's `#[serde(default)]`: the
+/// latter protects `BotState`'s internal JSON-in-stable-memory
+/// serialization (upgrades correctly fill in missing fields from an old
+/// on-disk blob), but it does nothing for the WIRE format of an inbound
+/// call. A record type used as a function ARGUMENT can only safely gain
+/// `opt` fields — a caller built against the pre-Strategy-T interface
+/// sends bytes with no `strategy_t_*` fields at all, and Candid's decoder
+/// (unlike `#[serde(default)]`) rejects an incoming record that's missing
+/// a field the target Rust type declares as required. Confirmed via
+/// `didc check` against the pre-Strategy-T `.did`: `set_config`'s old
+/// signature was not a safe subtype of the new one until these 14 fields
+/// became `opt` at the boundary.
+///
+/// `BotConfig` itself (used for `get_config`'s RETURN type, and internally
+/// everywhere else) is unaffected and stays fully required — a function's
+/// RETURN type gaining fields is always a safe, backward-compatible
+/// change, since an old caller simply doesn't read fields it doesn't know
+/// about.
+///
+/// Every field other than the 14 `strategy_t_*` ones mirrors `BotConfig`
+/// exactly (same name, same type, same required-ness) — an old caller's
+/// payload for those is decoded and applied exactly as before.
+///
+/// The `#[serde(default = ...)]` attributes below are copied verbatim from
+/// `BotConfig` for exactly that reason (identical decode behavior for the
+/// non-`strategy_t_*` fields) — NOT because this struct participates in
+/// the stable-memory upgrade path. It doesn't: `BotConfigInput` derives no
+/// `Serialize` and is never persisted; it exists only as a transient
+/// Candid-decode target for one inbound call, then it's consumed by
+/// `into_full_config` and dropped.
+#[derive(CandidType, Deserialize, Clone, Debug)]
+pub struct BotConfigInput {
+    pub owner: Principal,
+    pub rumi_amm: Principal,
+    pub rumi_3pool: Principal,
+    #[serde(default)]
+    pub rumi_amm_paused: bool,
+    pub icpswap_pool: Principal,
+    pub icp_ledger: Principal,
+    pub ckusdc_ledger: Principal,
+    pub three_usd_ledger: Principal,
+    pub min_spread_bps: u32,
+    pub max_trade_size_usd: u64,
+    pub paused: bool,
+    pub icpswap_icp_is_token0: bool,
+    #[serde(default)]
+    pub admins: Vec<Principal>,
+    #[serde(default = "default_principal")]
+    pub icpswap_icusd_pool: Principal,
+    #[serde(default = "default_principal")]
+    pub icusd_ledger: Principal,
+    #[serde(default)]
+    pub icpswap_icusd_icp_is_token0: bool,
+    #[serde(default)]
+    pub min_profit_usd: i64,
+    #[serde(default = "default_principal")]
+    pub icpswap_ckusdt_pool: Principal,
+    #[serde(default = "default_principal")]
+    pub ckusdt_ledger: Principal,
+    #[serde(default)]
+    pub icpswap_ckusdt_icp_is_token0: bool,
+    #[serde(default = "default_principal")]
+    pub icpswap_3usd_pool: Principal,
+    #[serde(default)]
+    pub icpswap_3usd_icp_is_token0: bool,
+    #[serde(default = "default_slippage_bps")]
+    pub slippage_bps: u64,
+    #[serde(default = "default_arb_interval_secs")]
+    pub arb_interval_secs: u64,
+    #[serde(default = "default_partydex_ckusdc_pool")]
+    pub partydex_ckusdc_pool: Principal,
+    #[serde(default = "default_partydex_ckusdt_pool")]
+    pub partydex_ckusdt_pool: Principal,
+    #[serde(default = "default_partydex_fee_pips")]
+    pub partydex_ckusdc_fee_pips: u32,
+    #[serde(default = "default_partydex_fee_pips")]
+    pub partydex_ckusdt_fee_pips: u32,
+    #[serde(default = "default_icp_inventory_floor")]
+    pub icp_inventory_floor_e8s: u64,
+    #[serde(default = "default_icp_inventory_ceiling")]
+    pub icp_inventory_ceiling_e8s: u64,
+    #[serde(default = "default_bob_inventory_floor")]
+    pub bob_inventory_floor_e8s: u64,
+    #[serde(default = "default_bob_inventory_ceiling")]
+    pub bob_inventory_ceiling_e8s: u64,
+    #[serde(default = "default_bob_ledger")]
+    pub bob_ledger: Principal,
+    #[serde(default = "default_bob_ledger_fee")]
+    pub bob_ledger_fee: u64,
+    #[serde(default = "default_icpswap_bob_icp_pool")]
+    pub icpswap_bob_icp_pool: Principal,
+    #[serde(default = "default_principal")]
+    pub icpswap_icusd_bob_pool: Principal,
+    #[serde(default)]
+    pub icpswap_bob_icp_icp_is_token0: bool,
+    #[serde(default)]
+    pub icpswap_icusd_bob_icusd_is_token0: bool,
+    #[serde(default = "default_bob_max_trade_size_usd")]
+    pub bob_max_trade_size_usd: u64,
+    #[serde(default = "default_bob_min_spread_bps")]
+    pub bob_min_spread_bps: u64,
+    #[serde(default)]
+    pub bob_execution_enabled: bool,
+
+    // ─── Strategy T: opt at the boundary — see the struct doc comment.
+    // `None` means "caller didn't know about this field"; `into_full_config`
+    // falls back to the caller-supplied `current` config for those, never
+    // to the hardcoded inert default, so an old-style `set_config` call
+    // can never silently reset Strategy T settings an admin already made
+    // via the dedicated `set_strategy_t_*` setters. ───
+    #[serde(default)]
+    pub strategy_t_icusd_ckusdc_pool: Option<Principal>,
+    #[serde(default)]
+    pub strategy_t_icusd_ckusdt_pool: Option<Principal>,
+    #[serde(default)]
+    pub strategy_t_ckusdt_ckusdc_pool: Option<Principal>,
+    #[serde(default)]
+    pub strategy_t_enabled: Option<bool>,
+    #[serde(default)]
+    pub strategy_t_dry_run: Option<bool>,
+    #[serde(default)]
+    pub strategy_t_min_profit_usd: Option<i64>,
+    #[serde(default)]
+    pub strategy_t_min_profit_bps: Option<u32>,
+    #[serde(default)]
+    pub strategy_t_max_trade_size_usd: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_icusd_floor: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_icusd_ceiling: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_ckusdt_floor: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_ckusdt_ceiling: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_ckusdc_floor: Option<u64>,
+    #[serde(default)]
+    pub strategy_t_ckusdc_ceiling: Option<u64>,
+}
+
+impl BotConfigInput {
+    /// Builds a full `BotConfig`, falling back to `current`'s value for
+    /// any Strategy T field this input omitted (`None`). `current` is the
+    /// canister's existing config for `set_config` (preserve whatever's
+    /// already there), or a fresh `BotState::default().config` for `init`
+    /// (a genuinely new canister has no prior Strategy T state to
+    /// preserve, so `None` correctly resolves to the same inert defaults
+    /// `BotState::default()` already establishes).
+    pub fn into_full_config(self, current: &BotConfig) -> BotConfig {
+        BotConfig {
+            owner: self.owner,
+            rumi_amm: self.rumi_amm,
+            rumi_3pool: self.rumi_3pool,
+            rumi_amm_paused: self.rumi_amm_paused,
+            icpswap_pool: self.icpswap_pool,
+            icp_ledger: self.icp_ledger,
+            ckusdc_ledger: self.ckusdc_ledger,
+            three_usd_ledger: self.three_usd_ledger,
+            min_spread_bps: self.min_spread_bps,
+            max_trade_size_usd: self.max_trade_size_usd,
+            paused: self.paused,
+            icpswap_icp_is_token0: self.icpswap_icp_is_token0,
+            admins: self.admins,
+            icpswap_icusd_pool: self.icpswap_icusd_pool,
+            icusd_ledger: self.icusd_ledger,
+            icpswap_icusd_icp_is_token0: self.icpswap_icusd_icp_is_token0,
+            min_profit_usd: self.min_profit_usd,
+            icpswap_ckusdt_pool: self.icpswap_ckusdt_pool,
+            ckusdt_ledger: self.ckusdt_ledger,
+            icpswap_ckusdt_icp_is_token0: self.icpswap_ckusdt_icp_is_token0,
+            icpswap_3usd_pool: self.icpswap_3usd_pool,
+            icpswap_3usd_icp_is_token0: self.icpswap_3usd_icp_is_token0,
+            slippage_bps: self.slippage_bps,
+            arb_interval_secs: self.arb_interval_secs,
+            partydex_ckusdc_pool: self.partydex_ckusdc_pool,
+            partydex_ckusdt_pool: self.partydex_ckusdt_pool,
+            partydex_ckusdc_fee_pips: self.partydex_ckusdc_fee_pips,
+            partydex_ckusdt_fee_pips: self.partydex_ckusdt_fee_pips,
+            icp_inventory_floor_e8s: self.icp_inventory_floor_e8s,
+            icp_inventory_ceiling_e8s: self.icp_inventory_ceiling_e8s,
+            bob_inventory_floor_e8s: self.bob_inventory_floor_e8s,
+            bob_inventory_ceiling_e8s: self.bob_inventory_ceiling_e8s,
+            bob_ledger: self.bob_ledger,
+            bob_ledger_fee: self.bob_ledger_fee,
+            icpswap_bob_icp_pool: self.icpswap_bob_icp_pool,
+            icpswap_icusd_bob_pool: self.icpswap_icusd_bob_pool,
+            icpswap_bob_icp_icp_is_token0: self.icpswap_bob_icp_icp_is_token0,
+            icpswap_icusd_bob_icusd_is_token0: self.icpswap_icusd_bob_icusd_is_token0,
+            bob_max_trade_size_usd: self.bob_max_trade_size_usd,
+            bob_min_spread_bps: self.bob_min_spread_bps,
+            bob_execution_enabled: self.bob_execution_enabled,
+            strategy_t_icusd_ckusdc_pool: self.strategy_t_icusd_ckusdc_pool.unwrap_or(current.strategy_t_icusd_ckusdc_pool),
+            strategy_t_icusd_ckusdt_pool: self.strategy_t_icusd_ckusdt_pool.unwrap_or(current.strategy_t_icusd_ckusdt_pool),
+            strategy_t_ckusdt_ckusdc_pool: self.strategy_t_ckusdt_ckusdc_pool.unwrap_or(current.strategy_t_ckusdt_ckusdc_pool),
+            strategy_t_enabled: self.strategy_t_enabled.unwrap_or(current.strategy_t_enabled),
+            strategy_t_dry_run: self.strategy_t_dry_run.unwrap_or(current.strategy_t_dry_run),
+            strategy_t_min_profit_usd: self.strategy_t_min_profit_usd.unwrap_or(current.strategy_t_min_profit_usd),
+            strategy_t_min_profit_bps: self.strategy_t_min_profit_bps.unwrap_or(current.strategy_t_min_profit_bps),
+            strategy_t_max_trade_size_usd: self.strategy_t_max_trade_size_usd.unwrap_or(current.strategy_t_max_trade_size_usd),
+            strategy_t_icusd_floor: self.strategy_t_icusd_floor.unwrap_or(current.strategy_t_icusd_floor),
+            strategy_t_icusd_ceiling: self.strategy_t_icusd_ceiling.unwrap_or(current.strategy_t_icusd_ceiling),
+            strategy_t_ckusdt_floor: self.strategy_t_ckusdt_floor.unwrap_or(current.strategy_t_ckusdt_floor),
+            strategy_t_ckusdt_ceiling: self.strategy_t_ckusdt_ceiling.unwrap_or(current.strategy_t_ckusdt_ceiling),
+            strategy_t_ckusdc_floor: self.strategy_t_ckusdc_floor.unwrap_or(current.strategy_t_ckusdc_floor),
+            strategy_t_ckusdc_ceiling: self.strategy_t_ckusdc_ceiling.unwrap_or(current.strategy_t_ckusdc_ceiling),
+        }
+    }
+}
+
 /// Which DEX venue an arb leg trades against. Internal to arb targets — not
 /// part of BotConfig/CycleSnapshot, so it is not represented in arb_bot.did.
 #[derive(CandidType, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

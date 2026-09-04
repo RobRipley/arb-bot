@@ -7,8 +7,8 @@ use arb_bot::state::StrategyTToken;
 use arb_bot::strategy_t::{
     all_routes, allowance_status_for, check_inventory_bands, closing_leg_input,
     native_from_par_usd_6dec, one_leg_net_profit_usd, par_usd_6dec, rank_candidates,
-    two_leg_net_profit_usd, AllowanceStatus, CandidateReport, ClosingPool, StableToken,
-    TokenAmounts,
+    resolve_inventory_eligibility, two_leg_net_profit_usd, AllowanceStatus, CandidateReport,
+    ClosingPool, InventoryCheck, StableToken, TokenAmounts,
 };
 
 #[test]
@@ -224,6 +224,146 @@ fn inventory_bands_two_leg_round_trip_uses_net_delta_not_gross_addition() {
     assert!(fixed_check.eligible());
 }
 
+// ─── Follow-up finding 2 regression: check_inventory_bands must reserve
+// the start token's entry ledger fee, not just start_amount ───
+
+/// One-leg candidate: end_token != start_token, so `end_ok` is trivially
+/// satisfied and only `start_ok` is exercised. The real debit for entering
+/// the Rumi leg is `start_amount + start_token.ledger_fee()` (icrc2
+/// transferFrom debits amount+fee), not `start_amount` alone. This test's
+/// balance is chosen so the OLD (buggy) check — which ignored the fee —
+/// would have reported `start_ok == true` right at the boundary, while the
+/// real debit actually breaches the floor.
+#[test]
+fn inventory_bands_one_leg_start_floor_reserves_entry_fee() {
+    let balances = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 13_005_000 };
+    let floors = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 5_000_000 };
+    let ceilings = TokenAmounts { icusd: 200_000_000_000, ckusdt: 2_000_000_000, ckusdc: 2_000_000_000 };
+    let start_amount = 8_000_000u64; // $8 ckUSDC
+    let ckusdc_fee = StableToken::CkUsdc.ledger_fee(); // 10_000 = $0.01
+
+    // Old accounting (start_amount alone): 13_005_000 - 8_000_000 = 5_005_000
+    // >= 5_000_000 floor -> would have passed.
+    let old_style_delta = balances.ckusdc.saturating_sub(start_amount);
+    assert!(old_style_delta >= floors.ckusdc, "sanity: the old formula would have passed this case");
+
+    // Fixed accounting reserves start_amount + fee: 13_005_000 - 8_010_000 =
+    // 4_995_000 < 5_000_000 floor -> correctly fails.
+    let check = check_inventory_bands(
+        StableToken::CkUsdc, start_amount, StableToken::IcUsd, 0,
+        balances, floors, ceilings,
+    );
+    assert!(!check.start_ok, "entry fee ({ckusdc_fee}) must be reserved on top of start_amount");
+    assert!(!check.eligible());
+}
+
+/// Two-leg round trip: end_token == start_token, so this exercises the
+/// entry-fee fix layered on top of the (already-fixed) net-delta ceiling
+/// accounting. Without the entry-fee reservation, this candidate would
+/// pass both `start_ok` (old formula) and `end_ok` (net-delta formula,
+/// small profit, ceiling far away) — i.e. it would have been falsely
+/// `best_executable`. With the fix, `start_ok` alone correctly blocks it.
+#[test]
+fn inventory_bands_two_leg_start_floor_reserves_entry_fee() {
+    let balances = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 13_005_000 };
+    let floors = TokenAmounts { icusd: 0, ckusdt: 0, ckusdc: 5_000_000 };
+    let ceilings = TokenAmounts { icusd: 200_000_000_000, ckusdt: 2_000_000_000, ckusdc: 2_000_000_000 };
+    let start_amount = 8_000_000u64; // $8 ckUSDC
+    let net_end_amount_native = 8_050_000u64; // $8.05 back — a $0.05 profit
+    let fixed_expected_end_amount = net_end_amount_native.saturating_sub(start_amount); // 50_000
+
+    // Old accounting on both checks would have passed this candidate:
+    let old_start_ok = balances.ckusdc.saturating_sub(start_amount) >= floors.ckusdc;
+    let old_end_ok = balances.ckusdc.saturating_add(fixed_expected_end_amount) <= ceilings.ckusdc;
+    assert!(old_start_ok && old_end_ok, "sanity: old formulas would have passed this round trip");
+
+    let check = check_inventory_bands(
+        StableToken::CkUsdc, start_amount, StableToken::CkUsdc, fixed_expected_end_amount,
+        balances, floors, ceilings,
+    );
+    assert!(!check.start_ok, "entry fee must be reserved even when end_token == start_token");
+    assert!(!check.eligible(), "a round trip whose true entry debit breaches the floor must not be best_executable");
+}
+
+// ─── Follow-up finding 3 regression: a failed balance fetch must fail
+// eligibility closed, never silently default to a zero balance ───
+
+#[test]
+fn resolve_inventory_eligibility_passes_through_real_check_when_both_known() {
+    let check = InventoryCheck { start_ok: true, end_ok: true };
+    let (eligible, note) = resolve_inventory_eligibility(
+        true, true, StableToken::CkUsdc, StableToken::IcUsd, Some(check),
+    );
+    assert!(eligible);
+    assert!(note.is_empty());
+
+    let check = InventoryCheck { start_ok: false, end_ok: true };
+    let (eligible, note) = resolve_inventory_eligibility(
+        true, true, StableToken::CkUsdc, StableToken::IcUsd, Some(check),
+    );
+    assert!(!eligible, "a real ineligible check result must still be reported ineligible");
+    assert!(note.is_empty());
+}
+
+#[test]
+fn resolve_inventory_eligibility_fails_closed_when_start_balance_unknown() {
+    // end_token differs from start_token here — only the start fetch failed.
+    let (eligible, note) = resolve_inventory_eligibility(
+        false, true, StableToken::CkUsdc, StableToken::IcUsd, None,
+    );
+    assert!(!eligible, "unknown start balance must never yield eligible=true");
+    assert!(note.contains("CkUsdc"), "diagnostic must name the token with the unknown balance: {note}");
+    assert!(note.contains("failing closed"));
+}
+
+#[test]
+fn resolve_inventory_eligibility_fails_closed_when_end_balance_unknown() {
+    // This is the dangerous direction the finding called out: an unknown
+    // END balance is the one an `unwrap_or(0)` would make artificially
+    // PERMISSIVE (a zero end balance can never trip a ceiling), so it must
+    // fail closed just as hard as an unknown start balance.
+    let (eligible, note) = resolve_inventory_eligibility(
+        true, false, StableToken::CkUsdc, StableToken::IcUsd, None,
+    );
+    assert!(!eligible, "unknown end balance must never yield eligible=true");
+    assert!(note.contains("IcUsd"), "diagnostic must name the token with the unknown balance: {note}");
+}
+
+#[test]
+fn resolve_inventory_eligibility_fails_closed_for_one_leg_route_end_token_unknown() {
+    // A one-leg route where the end token (rumi_out) balance is unknown —
+    // exactly the scenario the finding describes: "a route ending in a
+    // token with an unknown balance cannot become best_executable merely
+    // because its balance was assumed to be zero."
+    let (eligible, note) = resolve_inventory_eligibility(
+        true, false, StableToken::CkUsdt, StableToken::IcUsd, None,
+    );
+    assert!(!eligible);
+    assert!(note.contains("IcUsd"));
+}
+
+#[test]
+fn resolve_inventory_eligibility_fails_closed_for_two_leg_route_same_token_unknown() {
+    // Two-leg round trip: start_token == end_token, and that one token's
+    // balance is unknown — both flags are false for the same token.
+    let (eligible, note) = resolve_inventory_eligibility(
+        false, false, StableToken::CkUsdc, StableToken::CkUsdc, None,
+    );
+    assert!(!eligible);
+    assert!(note.contains("CkUsdc"));
+    // Must not print "CkUsdc and CkUsdc" for the same-token case.
+    assert!(!note.contains("and"), "same-token failure must not report a duplicated token pair: {note}");
+}
+
+#[test]
+fn resolve_inventory_eligibility_fails_closed_when_both_different_tokens_unknown() {
+    let (eligible, note) = resolve_inventory_eligibility(
+        false, false, StableToken::CkUsdt, StableToken::CkUsdc, None,
+    );
+    assert!(!eligible);
+    assert!(note.contains("CkUsdt") && note.contains("CkUsdc") && note.contains("and"));
+}
+
 // ─── Finding 5: native_from_par_usd_6dec round-trips par_usd_6dec ───
 
 #[test]
@@ -255,6 +395,7 @@ fn make_report(
         meets_profit_threshold,
         allowance_status: allowance_status.to_string(),
         inventory_eligible,
+        inventory_note: String::new(),
         fill_ok,
         fill_note: String::new(),
     }

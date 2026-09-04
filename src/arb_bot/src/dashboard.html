@@ -713,6 +713,14 @@
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
     const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_inventory_floor_e8s: IDL.Nat64, bob_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool, strategy_t_icusd_ckusdc_pool: IDL.Principal, strategy_t_icusd_ckusdt_pool: IDL.Principal, strategy_t_ckusdt_ckusdc_pool: IDL.Principal, strategy_t_enabled: IDL.Bool, strategy_t_dry_run: IDL.Bool, strategy_t_min_profit_usd: IDL.Int64, strategy_t_min_profit_bps: IDL.Nat32, strategy_t_max_trade_size_usd: IDL.Nat64, strategy_t_icusd_floor: IDL.Nat64, strategy_t_icusd_ceiling: IDL.Nat64, strategy_t_ckusdt_floor: IDL.Nat64, strategy_t_ckusdt_ceiling: IDL.Nat64, strategy_t_ckusdc_floor: IDL.Nat64, strategy_t_ckusdc_ceiling: IDL.Nat64 });
+    // Candid-boundary type for set_config / InitArgs: identical to BotConfig
+    // except the 14 strategy_t_* fields are opt, so a pre-Strategy-T caller
+    // omitting them stays a valid subtype of the old interface (see the
+    // BotConfigInput doc comment in state.rs).
+    const BotConfigInput = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_inventory_floor_e8s: IDL.Nat64, bob_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool, strategy_t_icusd_ckusdc_pool: IDL.Opt(IDL.Principal), strategy_t_icusd_ckusdt_pool: IDL.Opt(IDL.Principal), strategy_t_ckusdt_ckusdc_pool: IDL.Opt(IDL.Principal), strategy_t_enabled: IDL.Opt(IDL.Bool), strategy_t_dry_run: IDL.Opt(IDL.Bool), strategy_t_min_profit_usd: IDL.Opt(IDL.Int64), strategy_t_min_profit_bps: IDL.Opt(IDL.Nat32), strategy_t_max_trade_size_usd: IDL.Opt(IDL.Nat64), strategy_t_icusd_floor: IDL.Opt(IDL.Nat64), strategy_t_icusd_ceiling: IDL.Opt(IDL.Nat64), strategy_t_ckusdt_floor: IDL.Opt(IDL.Nat64), strategy_t_ckusdt_ceiling: IDL.Opt(IDL.Nat64), strategy_t_ckusdc_floor: IDL.Opt(IDL.Nat64), strategy_t_ckusdc_ceiling: IDL.Opt(IDL.Nat64) });
+    // The 14 fields BotConfigInput declares `opt` — used by the config-save
+    // flow to wrap current values as [value] before calling set_config.
+    const STRATEGY_T_OPT_FIELDS = ['strategy_t_icusd_ckusdc_pool', 'strategy_t_icusd_ckusdt_pool', 'strategy_t_ckusdt_ckusdc_pool', 'strategy_t_enabled', 'strategy_t_dry_run', 'strategy_t_min_profit_usd', 'strategy_t_min_profit_bps', 'strategy_t_max_trade_size_usd', 'strategy_t_icusd_floor', 'strategy_t_icusd_ceiling', 'strategy_t_ckusdt_floor', 'strategy_t_ckusdt_ceiling', 'strategy_t_ckusdc_floor', 'strategy_t_ckusdc_ceiling'];
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null, TopUp: IDL.Null });
@@ -725,7 +733,7 @@
     const PoolQuoteResult = IDL.Record({ estimated_output: IDL.Nat64 });
     const StrategyTToken = IDL.Variant({ IcUsd: IDL.Null, CkUsdt: IDL.Null, CkUsdc: IDL.Null });
     const StrategyTPool = IDL.Variant({ IcusdCkusdc: IDL.Null, IcusdCkusdt: IDL.Null, CkusdtCkusdc: IDL.Null });
-    const CandidateReport = IDL.Record({ start: StrategyTToken, rumi_out: StrategyTToken, closing: IDL.Opt(StrategyTPool), start_amount_native: IDL.Nat64, economic_profit_usd: IDL.Int64, meets_profit_threshold: IDL.Bool, allowance_status: IDL.Text, inventory_eligible: IDL.Bool, fill_ok: IDL.Bool, fill_note: IDL.Text });
+    const CandidateReport = IDL.Record({ start: StrategyTToken, rumi_out: StrategyTToken, closing: IDL.Opt(StrategyTPool), start_amount_native: IDL.Nat64, economic_profit_usd: IDL.Int64, meets_profit_threshold: IDL.Bool, allowance_status: IDL.Text, inventory_eligible: IDL.Bool, inventory_note: IDL.Text, fill_ok: IDL.Bool, fill_note: IDL.Text });
     const StrategyTDryRunResult = IDL.Record({ candidates: IDL.Vec(CandidateReport), best_economic: IDL.Opt(CandidateReport), best_executable: IDL.Opt(CandidateReport) });
 
     const CycleSnapshot = IDL.Record({
@@ -849,7 +857,7 @@
       });
       return I.Service({
         get_config: I.Func([], [BotConfig], ['query']),
-        set_config: I.Func([BotConfig], [], []),
+        set_config: I.Func([BotConfigInput], [], []),
         get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
         get_trade_legs: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeLeg)], ['query']),
         get_summary: I.Func([], [TradeSummary], ['query']),
@@ -3469,7 +3477,17 @@
           if (!isNaN(minProfitRaw)) cfg.min_profit_usd = BigInt(Math.round(minProfitRaw * 1e6));
           if (!isNaN(partydexCkusdcFee)) cfg.partydex_ckusdc_fee_pips = partydexCkusdcFee;
           if (!isNaN(partydexCkusdtFee)) cfg.partydex_ckusdt_fee_pips = partydexCkusdtFee;
-          await authenticatedActor.set_config(cfg);
+          // set_config now takes BotConfigInput, not BotConfig: the 14
+          // strategy_t_* fields are `opt` at the wire boundary (see the
+          // BotConfigInput doc comment in state.rs), so candid-js expects
+          // them as [] | [value], not a bare value. cfg came from
+          // get_config() (BotConfig-shaped, bare values) — wrap each one
+          // in its current value to preserve it unchanged, exactly as
+          // omitting it would (the backend falls back to the existing
+          // config for any field the caller leaves out).
+          const cfgInput = { ...cfg };
+          for (const f of STRATEGY_T_OPT_FIELDS) cfgInput[f] = [cfg[f]];
+          await authenticatedActor.set_config(cfgInput);
         }
         if (!isNaN(arbIntervalRaw)) checkRes(await authenticatedActor.set_arb_interval_secs(BigInt(arbIntervalRaw)));
         if (!isNaN(icpFloorRaw) && !isNaN(icpCeilingRaw)) checkRes(await authenticatedActor.set_icp_inventory_band(BigInt(Math.round(icpFloorRaw * 1e8)), BigInt(Math.round(icpCeilingRaw * 1e8))));
