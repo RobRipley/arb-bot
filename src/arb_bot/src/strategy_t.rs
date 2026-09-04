@@ -169,3 +169,107 @@ pub fn two_leg_net_profit_usd(
     let net_received = closing_gross_out.saturating_sub(start.ledger_fee());
     par_usd_6dec(net_received, start) - par_usd_6dec(start_amount_native, start) - par_usd_6dec(start.ledger_fee(), start)
 }
+
+// ─── Live quoting (async — calls Rumi 3pool `calc_swap` and ICPSwap
+// `quoteForAll`; both are read-only query-style calls, no fund movement) ───
+
+use candid::Principal;
+
+/// The three configured ICPSwap closing-pool principals, resolved from
+/// `BotConfig` by the caller (Task 6) — kept out of `state::` here so this
+/// module's async layer stays testable against arbitrary principals.
+#[derive(Clone, Copy, Debug)]
+pub struct PoolPrincipals {
+    pub icusd_ckusdc: Principal,
+    pub icusd_ckusdt: Principal,
+    pub ckusdt_ckusdc: Principal,
+}
+
+impl PoolPrincipals {
+    fn resolve(self, pool: ClosingPool) -> Principal {
+        match pool {
+            ClosingPool::IcusdCkusdc => self.icusd_ckusdc,
+            ClosingPool::IcusdCkusdt => self.icusd_ckusdt,
+            ClosingPool::CkusdtCkusdc => self.ckusdt_ckusdc,
+        }
+    }
+}
+
+/// Why a candidate's economic profit could or couldn't be computed / relied
+/// on. `FullyQuoted` is the only status a candidate may be ranked on.
+#[derive(Clone, Debug)]
+pub enum FillStatus {
+    /// Both legs (or the one leg, for a stop) quoted successfully with a
+    /// full-fill guarantee (`quoteForAll` for ICPSwap; Rumi's `calc_swap`
+    /// has no partial-fill mode).
+    FullyQuoted,
+    /// Rumi's `calc_swap` call failed or errored.
+    RumiQuoteFailed(String),
+    /// The closing pool rejected the sizing (partial-fill boundary hit, or
+    /// any other `quoteForAll` error) — the candidate is not fillable at
+    /// this size right now, not merely "less profitable."
+    ClosingQuoteRejected(String),
+}
+
+#[derive(Clone, Debug)]
+pub struct CandidateQuote {
+    pub route: RouteDescriptor,
+    pub start_amount_native: u64,
+    pub economic_profit_usd: i64, // meaningless unless fill_status is FullyQuoted
+    pub fill_status: FillStatus,
+}
+
+/// Quotes all twelve candidates for the given per-start-token trade size.
+/// Never calls `swap`, `depositFromAndSwap`, `icrc2_approve`, or any other
+/// fund-moving method — every call here is `calc_swap` (Rumi, read-only)
+/// or `quoteForAll` (ICPSwap, read-only query).
+pub async fn quote_all_candidates(
+    rumi_3pool: Principal,
+    pools: PoolPrincipals,
+    start_amount_native: impl Fn(StableToken) -> u64,
+) -> Vec<CandidateQuote> {
+    let mut results = Vec::with_capacity(12);
+    for route in all_routes() {
+        let amount_in = start_amount_native(route.start);
+        let rumi_result = crate::swaps::pool_calc_swap(
+            rumi_3pool,
+            route.start.rumi_coin_index(),
+            route.rumi_out.rumi_coin_index(),
+            amount_in,
+        )
+        .await;
+
+        let (economic_profit_usd, fill_status) = match (rumi_result, route.closing) {
+            (Err(e), _) => (0, FillStatus::RumiQuoteFailed(e)),
+            (Ok(rumi_gross), None) => {
+                let profit = one_leg_net_profit_usd(route.start, amount_in, route.rumi_out, rumi_gross);
+                (profit, FillStatus::FullyQuoted)
+            }
+            (Ok(rumi_gross), Some(closing_pool)) => {
+                let leg2_input = closing_leg_input(route.rumi_out, rumi_gross);
+                let zero_for_one = closing_pool.zero_for_one_from(route.rumi_out);
+                let closing_result = crate::prices::fetch_icpswap_quote_for_all(
+                    pools.resolve(closing_pool),
+                    leg2_input,
+                    zero_for_one,
+                )
+                .await;
+                match closing_result {
+                    Err(e) => (0, FillStatus::ClosingQuoteRejected(e)),
+                    Ok(closing_gross) => {
+                        let profit = two_leg_net_profit_usd(route.start, amount_in, closing_gross);
+                        (profit, FillStatus::FullyQuoted)
+                    }
+                }
+            }
+        };
+
+        results.push(CandidateQuote {
+            route,
+            start_amount_native: amount_in,
+            economic_profit_usd,
+            fill_status,
+        });
+    }
+    results
+}
