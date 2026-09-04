@@ -48,23 +48,27 @@ No other asset may enter a candidate.
 
 ### 2.2 Active venues and edges
 
-The route registry is an allowlist. Only the following integrations may register edges:
+The route registry is a principal-pinned allowlist. Only the integrations in the following table may register edges, and each admitted pool contributes both directed pair edges (the Rumi 3pool contributes both directed edges for each of its three stable pairs):
 
-- **Rumi 3pool `fohh4-yyaaa-aaaap-qtkpa-cai`:** both directed stable-to-stable edges for each pair among icUSD, ckUSDT, and ckUSDC.
-- **ICPSwap ICP pools:** both directed edges for ICP/icUSD, ICP/ckUSDT, and ICP/ckUSDC.
-- **ICPSwap direct-stable pools:** both directed edges for icUSD/ckUSDT, icUSD/ckUSDC, and ckUSDT/ckUSDC.
-- **ICPSwap volatile and volatile/stable pools:** both directed edges for each allowlisted pool below:
+| Venue | Pair or pool | Pool principal |
+|---|---|---|
+| Rumi 3pool | icUSD / ckUSDT / ckUSDC | `fohh4-yyaaa-aaaap-qtkpa-cai` |
+| ICPSwap | ICP / ckUSDC | `mohjv-bqaaa-aaaag-qjyia-cai` |
+| ICPSwap | ICP / icUSD | `nqxwe-hiaaa-aaaar-qb5yq-cai` |
+| ICPSwap | ICP / ckUSDT | `hkstf-6iaaa-aaaag-qkcoq-cai` |
+| ICPSwap | icUSD / ckUSDT | `jogrm-gqaaa-aaaar-qcg2a-cai` |
+| ICPSwap | icUSD / ckUSDC | `eb25l-dyaaa-aaaar-qb4lq-cai` |
+| ICPSwap | ckUSDT / ckUSDC | `heq6n-fyaaa-aaaag-qkcpq-cai` |
+| ICPSwap | ckBTC / ICP | `xmiu5-jqaaa-aaaag-qbz7q-cai` |
+| ICPSwap | ICP / ckETH | `angxa-baaaa-aaaag-qcvnq-cai` |
+| ICPSwap | ckBTC / ckETH | `akhru-myaaa-aaaag-qcvna-cai` |
+| ICPSwap | ckETH / ckUSDC | `mvcvq-3iaaa-aaaag-qjykq-cai` |
+| ICPSwap | ckBTC / ckUSDC | `mhecj-xyaaa-aaaag-qjyjq-cai` |
+| ICPSwap | ckBTC / icUSD | `jhf2q-qyaaa-aaaar-qcg3q-cai` |
+| ICPSwap | ckUSDT / ckBTC | `ipfno-pqaaa-aaaag-qkevq-cai` |
+| ICPSwap | ckETH / icUSD | `jjhxy-liaaa-aaaar-qcg2q-cai` |
 
-| Pair | Pool principal |
-|---|---|
-| ckBTC / ICP | `xmiu5-jqaaa-aaaag-qbz7q-cai` |
-| ICP / ckETH | `angxa-baaaa-aaaag-qcvnq-cai` |
-| ckBTC / ckETH | `akhru-myaaa-aaaag-qcvna-cai` |
-| ckETH / ckUSDC | `mvcvq-3iaaa-aaaag-qjykq-cai` |
-| ckBTC / ckUSDC | `mhecj-xyaaa-aaaag-qjyjq-cai` |
-| ckBTC / icUSD | `jhf2q-qyaaa-aaaar-qcg3q-cai` |
-| ckUSDT / ckBTC | `ipfno-pqaaa-aaaag-qkevq-cai` |
-| ckETH / icUSD | `jjhxy-liaaa-aaaar-qcg2q-cai` |
+The three ICP/stable principals above are the values returned by the deployed arb canister's read-only `get_config` query on 2026-09-04. The direct-stable and volatile-pair principals are operator-supplied admission pins. Implementation must independently verify every principal against pool metadata before enabling its edges; the table is an allowlist, not proof that a pool is presently healthy.
 
 Each directed edge has a stable identity independent of token symbols:
 
@@ -81,17 +85,17 @@ execution_adapter
 settlement_adapter
 ```
 
-Pool principals, token ledgers, token ordering, decimals, fees, and supported full-fill quote semantics remain configured and runtime-verified. A supplied symbol/pair label is not admission evidence by itself. Candidate identity uses `edge_id`; parallel edges connecting the same assets remain distinguishable. Administration may update principals for these named pool slots, but it cannot admit another asset or venue type without a reviewed code and schema change.
+Pool principals, token ledgers, token ordering, decimals, fees, and supported full-fill quote semantics remain runtime-verified. A supplied symbol/pair label is not admission evidence by itself. Candidate identity uses `edge_id`; parallel edges connecting the same assets remain distinguishable. Administration may disable a pinned pool but may not substitute a different principal, asset, or venue type without a reviewed code and schema change.
 
 ### 2.3 Retired integrations
 
-The following are absent from the active route registry:
+The following are absent from the active **arbitrage** route registry:
 
 - Rumi AMM / 3USD-ICP arbitrage routes.
 - Every PartyDEX route.
 - BOB arbitrage Strategy S and all BOB pools as arbitrage edges.
 
-Retirement is stronger than winner-selection exclusion. A retired integration receives zero automatic:
+Arbitrage retirement is stronger than winner-selection exclusion. Within the arbitrage engine, scheduler, and arbitrage-facing administration, a retired integration receives zero automatic:
 
 - metadata or token-ordering calls;
 - quotes or health polling;
@@ -100,7 +104,7 @@ Retirement is stronger than winner-selection exclusion. A retired integration re
 - route ranking;
 - dashboard actions that could initiate trading.
 
-Legacy letter execution methods remain temporarily for Candid compatibility. Methods backed by a retired integration fail closed immediately. At the route-engine execution cutover, every remaining letter method also becomes a fail-closed stub before any inter-canister call and records a `retired_route` activity event. No letter method may bypass either integration retirement or the new engine.
+Legacy letter execution methods remain temporarily for Candid compatibility, but every automatic and manual lettered executor fails closed in Stage 1 before any inter-canister call and records a `retired_route` activity event. Historical and dry-run reads may remain available under their existing signatures during migration, provided they cannot submit an approval, transfer, deposit, swap, or withdrawal. There is no observation period in which a legacy lettered executor and the new executor are both live.
 
 Existing historical records and stable-state fields are preserved with their original meaning. They are not rewritten into the new taxonomy. Old configuration fields may remain decode-only during the compatibility period but are ignored by the route registry.
 
@@ -108,7 +112,7 @@ Explicit admin recovery capabilities for funds already stranded inside a retired
 
 Existing on-ledger allowances are not revoked by this design. Allowance revocation is a separate live operation requiring explicit authorization and an exact inventory of targets.
 
-This design retires BOB **arbitrage**. It does not silently alter the separately configured volume bot, including any icUSD/BOB volume setting.
+This design retires Rumi AMM, PartyDEX, and BOB **from arbitrage only**. It does not retire or silently alter the separately configured volume bot, including its existing Rumi-AMM-backed 3USD/ICP activity or any icUSD/BOB volume setting. Those volume routes remain outside the active arbitrage graph and are affected only by the shared account-mutation serialization in Section 7.3.
 
 The arbitrage scheduler also retires automatic residual-asset drains. It never automatically sells excess or stranded ICP, ckBTC, or ckETH. The volume bot's separate subaccount settlement/recovery behavior is unchanged.
 
@@ -356,7 +360,7 @@ reconciliation_evidence
 reconciliation_query_count
 ```
 
-The intent is persisted before the outbound update. `ledger_created_at_time_and_memo` are supplied wherever the called ledger interface supports them; the adapter fingerprint is evidence, not a claim that a DEX update is idempotent. Once an update may have been submitted, the executor never submits that leg again merely because the response was lost, a timer fired, or the canister restarted.
+The intent is persisted before the outbound update. The executor must durably transition to `LegSubmitted`, including `call_intent_id`, complete request fingerprint, planned input, source/destination accounts, and `submission_started_at`, **before** issuing a non-idempotent inter-canister call. `ledger_created_at_time_and_memo` are supplied wherever the called ledger interface supports them; the adapter fingerprint is evidence, not a claim that a DEX update is idempotent. Any resume from `LegSubmitted`, including a lost response, timer retry, trap, or upgrade, may only reconcile the recorded intent; it must never reconstruct and resubmit the debit or swap.
 
 Phases are:
 
@@ -388,7 +392,7 @@ Only `Completed`, `Aborted`, and `HeldInventory` are terminal for scheduling pur
 
 ### 7.3 Cross-engine account ownership
 
-A durable account-mutation lock is shared by the route executor and volume bot. It is acquired before either engine moves funds into a default account or submits a swap, and held through settlement/refund reconciliation. While the route executor owns the lock, a scheduled or manual volume cycle that would mutate any arb default account defers before its first transfer or swap. While the volume bot owns the lock, route execution defers. Quote-only calls remain permitted.
+A durable account-mutation lock is shared by the route executor and volume bot. It is acquired before either engine moves funds into a default account or submits a swap, and held through settlement/refund reconciliation. While the route executor owns the lock, every scheduled, manual, or admin-triggered volume operation that could fund, sweep, withdraw from, or otherwise mutate an arb default account defers before its first transfer or swap. While the volume bot or such an admin operation owns the lock, route execution defers. Quote-only calls remain permitted.
 
 This deliberately changes overlap scheduling because the existing volume flow transiently uses arb default accounts; it does not change the volume bot's pool selection, sizing, subaccount ownership, recovery semantics, or balances. The lock and owner survive upgrade/restart, and an unresolved `ReconciliationRequired` incident retains the lock.
 
@@ -439,6 +443,9 @@ max_route_legs
 max_size_ladder_entries
 max_quote_calls_per_observation
 max_concurrent_quote_calls
+max_terminal_execution_records
+max_execution_record_bytes
+max_reconciliation_evidence_items
 max_stable_principal_usd_6dec
 max_icp_principal_e8s
 min_stable_profit_usd_6dec
@@ -479,11 +486,13 @@ The implementation plan must measure the full current graph and choose defaults 
 
 ### 8.2 Bounded durable storage
 
-Current execution metadata remains a single bounded record. Executions, reconciliation evidence, and held positions live in dedicated indexed stable structures assigned new, non-overlapping memory IDs; they are not appended to heap `BotState`. Records have bounded encoded sizes and are queried by cursor.
+Current execution metadata remains a single bounded record. Executions, reconciliation evidence, and held positions live in dedicated indexed stable structures assigned new, non-overlapping memory IDs; they are not appended to heap `BotState`. Every execution record has a maximum encoded size of 65,536 bytes and at most 64 reconciliation-evidence items; any individual variable-length text/blob field is capped so the aggregate record remains encodable. Oversized evidence is rejected and reported rather than trapping a stable write.
 
-A held position contains at most six coalesced asset lots, one per active asset. `max_open_held_positions` is bounded by a compile-time ceiling of 256. Before beginning a route, the executor reserves capacity for one potential held position. Reaching the ceiling disables new execution without deleting, coalescing across unrelated executions, or liquidating existing holdings. Historical terminal executions may be retained in a separately paginated stable log without enlarging `BotState`.
+A held position contains at most six coalesced asset lots, one per active asset. `max_open_held_positions` is bounded by a compile-time ceiling of 256. Before beginning a route, the executor reserves capacity for one potential held position. Reaching the ceiling disables new execution without deleting, coalescing across unrelated executions, or liquidating existing holdings.
 
-Legacy letter dry-run and execute methods remain wire-compatible during the transition. Retired-integration methods fail closed in Stage 1. The remaining methods are labeled legacy while the new planner observes, then become fail-closed compatibility stubs at the execution cutover. No new consumer should call them.
+The terminal execution log is separately paginated and capped at 10,000 records. Capacity for the current route's terminal record is reserved before its first mutation. When either the terminal-log or held-position reservation cannot be made, new live execution fails closed while quote-only observation and existing reconciliation remain available. The executor never automatically deletes history or coalesces unrelated records to regain capacity; export/pruning, if desired, requires a separately reviewed admin design.
+
+Legacy letter dry-run and execute methods remain wire-compatible during the transition. Every lettered automatic and manual executor becomes a fail-closed compatibility stub in Stage 1. Read-only legacy observations may remain labeled legacy while the new planner observes. No new consumer should call them.
 
 ## 9. Reporting and Dashboard
 
@@ -512,7 +521,7 @@ Migration is additive and staged.
 ### Stage 1: Retirement safety
 
 - Remove retired integrations from automatic metadata, quote, approval, scheduler, and execution paths.
-- Make legacy manual K-R, S, and Rumi-AMM-backed letter methods fail closed.
+- Make every legacy lettered automatic and manual executor fail closed before any inter-canister call. Preserve wire signatures and read-only historical/dry-run access only where it cannot mutate funds.
 - Delete the arbitrage functions `drain_residual_icp` and `drain_residual_bob` and their scheduler call sites; do not replace them with a generic drain.
 - Preserve isolated manual withdrawal from a retired external venue without admitting it to routing.
 - Preserve any deployed `pending_exit` evidence as a visible legacy held incident; do not use it to trigger an automatic swap.
@@ -523,7 +532,7 @@ Migration is additive and staged.
 - Add the six-asset wallet/metadata registry, all allowlisted edges, candidate generation, canonicalization, accounting, ranking, held-inventory reports, and all-six-asset balance reporting.
 - Record a timestamped, read-only admission fixture for the Rumi 3pool and every ICPSwap pool: pool principal, token ledger pair, token ordering, fee tier/model, decimals, ledger fees, and full-fill quote behavior.
 - Keep all new execution disabled and dry-run-only.
-- Keep still-permitted legacy ICPSwap execution isolated from the new planner during observation; it cannot consume a new-planner candidate or route ID.
+- Confirm all legacy lettered execution remains fail-closed throughout observation; no legacy executor may consume either a historical quote or a new-planner candidate.
 - Preserve existing stable-state and Candid compatibility.
 
 ### Stage 3: Observation
@@ -537,7 +546,7 @@ Migration is additive and staged.
 
 - Add the persisted phase machine, per-call intent/receipt evidence, venue adapters, cross-engine account-mutation lock, bounded reconciliation process, route-aware floors, `ReconciliationRequired`, and attributable `HeldInventory` transition.
 - Validate deterministic failure and upgrade/restart behavior before any live authorization.
-- Define an atomic cutover: all remaining letter-based automatic and manual execution becomes fail-closed in the same release that can enable the new executor. There is never a window where both engines can execute the same opportunity.
+- Preserve the Stage-1 fail-closed legacy boundary in the same release that can enable the new executor. There is never a window where both engines can execute the same opportunity.
 
 ### Stage 5: Bounded live trial
 
@@ -566,6 +575,7 @@ The design is implementation-ready only when a plan covers all of the following 
 ### Graph and accounting
 
 - Exact active asset, pool, direction, and venue allowlist.
+- Golden admission fixture pins every active pool principal in Section 2.2 and proves an admin cannot substitute a different principal without a reviewed code/schema change.
 - Runtime ledger metadata and pool token-order verification for ICP, ckBTC, ckETH, icUSD, ckUSDT, and ckUSDC.
 - No candidate contains a retired venue or asset.
 - Exhaustive simple-path/cycle generation for one-to-four-leg shapes, with a golden fixture containing the exact ordered route-ID set and count for the admitted graph.
@@ -581,8 +591,8 @@ The design is implementation-ready only when a plan covers all of the following 
 
 ### Retirement
 
-- Zero automatic calls to Rumi AMM, PartyDEX, and BOB arbitrage pools.
-- Legacy automatic and manual execution fails before metadata, quote, approval, or swap calls.
+- Zero arbitrage-engine calls to Rumi AMM, PartyDEX, and BOB arbitrage pools; this assertion does not classify the independently configured volume bot's existing Rumi AMM or BOB activity as arbitrage.
+- Every legacy lettered automatic and manual executor fails before metadata, quote, approval, transfer, deposit, withdrawal, or swap calls from Stage 1 onward.
 - Approval setup excludes retired integrations.
 - The arbitrage drain functions and their scheduler call sites are absent.
 - Manual external-venue withdrawal remains isolated and cannot initiate a market swap.
@@ -595,9 +605,9 @@ The design is implementation-ready only when a plan covers all of the following 
 - Delayed settlement, timeout, and out-of-order response behavior.
 - Trap/restart/upgrade at every persisted phase.
 - Duplicate timer/callback idempotency.
-- Persist-before-call intent and receipt tests cover acknowledged-then-trapped ledger transfers, lost DEX responses, duplicate callbacks, delayed refunds, and restarts after the ledger duplicate window; an ambiguous leg is never resubmitted.
+- Persist-before-call intent and receipt tests prove `LegSubmitted` plus the complete immutable request fingerprint is durably written before the outbound call and cover acknowledged-then-trapped ledger transfers, lost DEX responses, duplicate callbacks, delayed refunds, and restarts after the ledger duplicate window; a resume from `LegSubmitted` reconciles only and an ambiguous leg is never resubmitted.
 - Settlement timeout enters `ReconciliationRequired`, retains the cross-engine mutation lock, emits an operator-visible incident, and performs only bounded read-only evidence queries.
-- Route and volume operations cannot overlap while either could mutate a shared default account; quote-only observation remains available.
+- Route operations and all scheduled, manual, or admin-triggered volume operations cannot overlap while either could mutate a shared default account; quote-only observation remains available.
 - Downstream quote deterioration and `HeldInventory` transition after exact reconciliation.
 - Full refund/no-position failures transition to `Aborted`, with unavoidable fees reported accurately.
 - Held positions preserve native amounts, tagged stable-par or ICP-native principal, route attribution, settled legs, and failure reason across restart and upgrade.
@@ -606,7 +616,8 @@ The design is implementation-ready only when a plan covers all of the following 
 - Planned-versus-realized P&L from attributable ledger deltas.
 - Global route lock, per-book scheduling, and canonical-cycle collision prevention.
 - Candidate, execution, and held-position queries enforce cursor pagination and the page-size ceiling.
-- Held positions and execution evidence use dedicated bounded stable structures; reaching the open-position ceiling prevents a new route without deleting or liquidating existing holdings.
+- Held positions and execution evidence use dedicated bounded stable structures; each execution record is at most 65,536 encoded bytes with at most 64 evidence items, the terminal log contains at most 10,000 records, and capacity is reserved before submission.
+- Reaching any held-position, terminal-history, or record-size ceiling prevents a new route without deleting, coalescing unrelated records, or liquidating existing holdings; quote-only observation and existing reconciliation remain available.
 
 ### Compatibility and presentation
 
