@@ -1979,6 +1979,94 @@ fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
     Ok(())
 }
 
+#[update]
+fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt_ckusdc: Principal) -> Result<(), String> {
+    require_admin();
+    state::mutate_state(|s| {
+        s.config.strategy_t_icusd_ckusdc_pool = icusd_ckusdc;
+        s.config.strategy_t_icusd_ckusdt_pool = icusd_ckusdt;
+        s.config.strategy_t_ckusdt_ckusdc_pool = ckusdt_ckusdc;
+    });
+    state::log_activity("admin", "strategy T pool principals updated");
+    Ok(())
+}
+
+/// Enables Strategy T's dry-run evaluation from the arb cycle (Task 8).
+/// This build has no live-trade path — flipping this on never moves funds.
+#[update]
+fn set_strategy_t_enabled(enabled: bool) {
+    require_admin();
+    state::mutate_state(|s| s.config.strategy_t_enabled = enabled);
+    state::log_activity("admin", &format!("strategy_t_enabled set to {}", enabled));
+}
+
+#[update]
+fn set_strategy_t_dry_run(dry_run: bool) {
+    require_admin();
+    state::mutate_state(|s| s.config.strategy_t_dry_run = dry_run);
+    state::log_activity("admin", &format!("strategy_t_dry_run set to {}", dry_run));
+}
+
+#[update]
+fn set_strategy_t_thresholds(min_profit_usd: i64, min_profit_bps: u32, max_trade_size_usd: u64) -> Result<(), String> {
+    require_admin();
+    if max_trade_size_usd == 0 {
+        return Err("max_trade_size_usd must be > 0".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_min_profit_usd = min_profit_usd;
+        s.config.strategy_t_min_profit_bps = min_profit_bps;
+        s.config.strategy_t_max_trade_size_usd = max_trade_size_usd;
+    });
+    state::log_activity(
+        "admin",
+        &format!("strategy T thresholds set: min_profit_usd={} min_profit_bps={} max_trade_size_usd={}", min_profit_usd, min_profit_bps, max_trade_size_usd),
+    );
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_icusd_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_icusd_floor = floor;
+        s.config.strategy_t_icusd_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T icUSD band set to [{}, {}]", floor, ceiling));
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_ckusdt_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_ckusdt_floor = floor;
+        s.config.strategy_t_ckusdt_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T ckUSDT band set to [{}, {}]", floor, ceiling));
+    Ok(())
+}
+
+#[update]
+fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
+    require_admin();
+    if ceiling <= floor {
+        return Err("ceiling must be > floor".into());
+    }
+    state::mutate_state(|s| {
+        s.config.strategy_t_ckusdc_floor = floor;
+        s.config.strategy_t_ckusdc_ceiling = ceiling;
+    });
+    state::log_activity("admin", &format!("strategy T ckUSDC band set to [{}, {}]", floor, ceiling));
+    Ok(())
+}
+
 /// Sets both Strategy S pool principals in one call. Resets the resolved-
 /// ordering flag for any pool whose principal actually changes, so a
 /// re-pointed pool gets its token ordering re-probed on the next cycle
