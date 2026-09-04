@@ -185,3 +185,42 @@ fn old_state_without_volume_stranded_bob_decodes_with_default() {
     let decoded: BotState = serde_json::from_value(v).expect("decode pre-volume_stranded_bob state");
     assert_eq!(decoded.volume_stranded_bob, 0);
 }
+
+/// Strategy T ships after this test suite exists — a blob saved before its
+/// fields existed must decode with dry-run-safe, inert defaults (all pools
+/// anonymous, enabled=false) so an upgrade never silently activates it.
+#[test]
+fn old_state_without_strategy_t_fields_decodes_with_defaults() {
+    let mut v = serde_json::to_value(BotState::default()).expect("serialize");
+    let cfg = v
+        .get_mut("config")
+        .and_then(|c| c.as_object_mut())
+        .expect("config object");
+    for field in [
+        "strategy_t_icusd_ckusdc_pool",
+        "strategy_t_icusd_ckusdt_pool",
+        "strategy_t_ckusdt_ckusdc_pool",
+        "strategy_t_enabled",
+        "strategy_t_dry_run",
+        "strategy_t_min_profit_usd",
+        "strategy_t_min_profit_bps",
+        "strategy_t_max_trade_size_usd",
+        "strategy_t_icusd_floor",
+        "strategy_t_icusd_ceiling",
+        "strategy_t_ckusdt_floor",
+        "strategy_t_ckusdt_ceiling",
+        "strategy_t_ckusdc_floor",
+        "strategy_t_ckusdc_ceiling",
+    ] {
+        assert!(cfg.remove(field).is_some(), "field {field} missing from serialized default");
+    }
+
+    let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
+    assert_eq!(decoded.config.strategy_t_enabled, false, "must decode inert");
+    assert_eq!(decoded.config.strategy_t_dry_run, true, "must decode dry-run-first");
+    assert_eq!(decoded.config.strategy_t_min_profit_usd, 50_000);
+    assert_eq!(decoded.config.strategy_t_min_profit_bps, 50);
+    assert_eq!(decoded.config.strategy_t_max_trade_size_usd, 40_000_000);
+    assert_eq!(decoded.config.strategy_t_icusd_floor, 500_000_000);
+    assert_eq!(decoded.config.strategy_t_ckusdc_ceiling, 2_000_000_000);
+}
