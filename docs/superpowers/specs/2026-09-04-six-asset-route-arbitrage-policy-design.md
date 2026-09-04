@@ -30,14 +30,14 @@ The operator policy values icUSD, ckUSDT, and ckUSDC at exactly $1. This is an i
 
 The six admitted ledger identities are code-pinned:
 
-| Role | Asset | Mainnet ledger principal |
-|---|---|---|
-| stable settlement, operator-defined $1 par | icUSD | `t6bor-paaaa-aaaap-qrd5q-cai` |
-| stable settlement, operator-defined $1 par | ckUSDT | `cngnf-vqaaa-aaaar-qag4q-cai` |
-| stable settlement, operator-defined $1 par | ckUSDC | `xevnm-gaaaa-aaaar-qafnq-cai` |
-| volatile pass-through and ICP-returning principal | ICP | `ryjl3-tyaaa-aaaaa-aaaba-cai` |
-| volatile pass-through and held inventory | ckBTC | `mxzaz-hqaaa-aaaar-qaada-cai` |
-| volatile pass-through and held inventory | ckETH | `ss2fx-dyaaa-aaaar-qacoq-cai` |
+| Role | Asset | Mainnet ledger principal | Expected symbol | Decimals |
+|---|---|---|---|---|
+| stable settlement, operator-defined $1 par | icUSD | `t6bor-paaaa-aaaap-qrd5q-cai` | `icUSD` | 8 |
+| stable settlement, operator-defined $1 par | ckUSDT | `cngnf-vqaaa-aaaar-qag4q-cai` | `ckUSDT` | 6 |
+| stable settlement, operator-defined $1 par | ckUSDC | `xevnm-gaaaa-aaaar-qafnq-cai` | `ckUSDC` | 6 |
+| volatile pass-through and ICP-returning principal | ICP | `ryjl3-tyaaa-aaaaa-aaaba-cai` | `ICP` | 8 |
+| volatile pass-through and held inventory | ckBTC | `mxzaz-hqaaa-aaaar-qaada-cai` | `ckBTC` | 8 |
+| volatile pass-through and held inventory | ckETH | `ss2fx-dyaaa-aaaar-qacoq-cai` | `ckETH` | 18 |
 
 ICP is also the only volatile asset permitted as the start and end of an ICP-returning cycle. ckBTC and ckETH are pass-through and held-inventory assets only; they are not valid principal or successful terminal assets in this version.
 
@@ -115,7 +115,7 @@ This design retires Rumi AMM, PartyDEX, and BOB **from arbitrage only**. It does
 
 Preserving volume economics does not preserve mutable call-target authority. Every retained volume target is code-pinned independently of legacy `BotConfig`:
 
-| Volume role | Principal | Immutable asset identity / ordering |
+| Volume role | Pinned value | Immutable asset identity / ordering |
 |---|---|---|
 | ICP ledger | `ryjl3-tyaaa-aaaaa-aaaba-cai` | ICP |
 | icUSD ledger | `t6bor-paaaa-aaaap-qrd5q-cai` | icUSD |
@@ -124,6 +124,7 @@ Preserving volume economics does not preserve mutable call-target authority. Eve
 | 3USD ledger / Rumi 3pool | `fohh4-yyaaa-aaaap-qtkpa-cai` | 3USD ledger; Rumi indices are the code-pinned icUSD/ckUSDT/ckUSDC ordering |
 | BOB ledger | `7pail-xaaaa-aaaas-aabmq-cai` | BOB |
 | Rumi AMM ICP/3USD | `ijlzs-2yaaa-aaaap-quaaq-cai` | adapter descriptor pins ICP ledger and 3USD ledger |
+| Rumi AMM composite pool ID | `fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai` | exact ordered identifier: 3USD ledger, then ICP ledger |
 | ICPSwap ICP/icUSD | `nqxwe-hiaaa-aaaar-qb5yq-cai` | token0 ICP; token1 icUSD |
 | ICPSwap ICP/3USD | `mu2zw-6iaaa-aaaar-qb56q-cai` | token0 3USD; token1 ICP |
 | ICPSwap icUSD/BOB | `gxvvw-aiaaa-aaaar-qcada-cai` | token0 BOB; token1 icUSD |
@@ -132,6 +133,8 @@ Preserving volume economics does not preserve mutable call-target authority. Eve
 | ICPSwap ICP/ckUSDT median reference | `hkstf-6iaaa-aaaag-qkcoq-cai` | token0 ckUSDT; token1 ICP |
 
 The registry covers both execution venues and every reference-price venue consulted by a retained volume flow. In particular, `IcusdBob` may derive its BOB mark only from the pinned BOB/ICP reference plus the pinned Rumi-AMM, ICP/icUSD, ICP/ckUSDC, and ICP/ckUSDT stable-per-ICP reference set; a quote-only dependency is still an inter-canister call target and cannot come from legacy configuration.
+
+`fohh4-yyaaa-aaaap-qtkpa-cai` intentionally has two pinned roles: it is the Rumi 3pool canister and the ICRC ledger for its `3USD` LP token. Code must select the API by typed role rather than treating the shared principal as evidence that the roles are interchangeable.
 
 On migration and every restart/upgrade, persisted volume principals, token pairs/orderings, and ledger identities must validate against this immutable registry before a volume timer is armed or a manual volume method can call out. Validation covers every transitive execution and reference-price dependency of that volume pool. A mismatch disables the affected volume pool and fails its manual/timer operation before any inter-canister call; it is never adopted as a new pin. Volume configuration may still control enabled status, size, cadence, and cost limits, but cannot change a call target. Re-admitting or replacing a volume target requires an explicit reviewed code-pin change.
 
@@ -173,6 +176,8 @@ Native amounts are nonnegative, so division always truncates downward; sub-six-d
 net_profit_usd_6dec >= min_stable_profit_usd_6dec
 net_profit_bps       >= min_stable_profit_bps
 ```
+
+Fee accounting follows one native-unit recurrence for every route. `principal_native` is the total start-asset wallet amount committed before the first entry fee. For leg `i`, the venue receives `wallet_amount_i - entry_ledger_fee_i`; the real size-dependent quote consumes that received amount; and the next wallet amount is `gross_pool_output_i - output_ledger_fee_i`. The next leg applies its own entry fee in its own asset. Every subtraction is checked and a non-positive result rejects the candidate. The final amount is therefore already net of every chained entry and output fee. `all_unaccounted_start_asset_fees` contains only execution-attributable start-asset debits outside this recurrence, is normally zero, and is converted once at the stable-par boundary; no intermediate fee is converted and subtracted a second time.
 
 A path ending in a different stable is labeled `par_assumption=true` and reports its terminal asset. It is not described as a guaranteed same-token round trip. Per-stable inventory floors and ceilings must remain satisfied.
 
@@ -357,6 +362,8 @@ available_native(asset) =
 
 The subtractions are checked and fail closed on underflow or inconsistent attribution. `durable_non_route_reservations_native` includes every route-relevant balance owned by another subsystem or provenance domain, including volume-bot residuals stranded in the shared default account and credits recovered from a retired venue until an explicit operator action assigns or withdraws them. Every asset lot in a `HeldInventory` position, including a stable or ICP lot, creates a durable per-asset reservation before the global route lock is released. An implementation may instead isolate held or non-route-owned balances in dedicated subaccounts, but it must preserve the same non-spendability invariant. Unlinked routes, volume operations, generic withdrawals, and admin tools may not consume, sweep, or count any encumbered balance as available principal. Only the owning subsystem's settlement/recovery path, a separately initiated continuation linked to a held position, or an explicit ownership-release action may release or spend its reservation; ownership release requires reconciled provenance and cannot be inferred from a timer or balance alone.
 
+Migrated `pending_exit` and `pending_bob_exit` incidents are ownership encumbrances under this same formula, not informational flags. They contribute an exact durable reservation when their amount and account provenance are source-bound; if either cannot be proven, a durable whole-asset mutation freeze makes `available_native` zero for that asset until explicit reconciliation. Clearing or decoding a legacy field never releases this reservation or freeze by itself.
+
 ICP, ckBTC, and ckETH ceilings gate additional exposure; exceeding a ceiling never triggers an automatic sale. A settled balance created by a failed route remains held even when it exceeds the configured ceiling, and new candidates that would increase that exposure become ineligible.
 
 ### 5.4 Route-aware minimum output
@@ -368,6 +375,8 @@ principal + all remaining fees + configured minimum native profit
 ```
 
 If no such floor can be established before the first leg, the route is quote-only and cannot execute. After a settled leg, if the remaining route no longer supports such a floor, execution transitions to `HeldInventory` rather than forcing a loss-making conversion.
+
+The floor is computed by checked backward induction in native units. The required terminal wallet amount is the original principal plus configured minimum profit in the route's terminal profit domain. For the final edge, the required gross venue output additionally includes that asset's output-ledger fee. For each preceding edge, the planner finds the smallest gross output whose post-output-fee wallet balance can pay the next edge's entry fee and whose fresh full-fill downstream quote still reaches the terminal requirement. Heterogeneous intermediate-token fees remain deductions in their own native units and affect the next quoted input; they are never converted through an oracle or $1 assumption merely to construct a floor. Any missing inverse/full-fill quote, unsupported rounding step, underflow, or overflow makes the route non-executable.
 
 ## 6. Ranking and Scheduling
 
@@ -383,7 +392,8 @@ Within each book, candidates rank by:
 1. highest net profit in the book's native profit unit;
 2. highest net profit bps;
 3. fewer legs;
-4. deterministic `route_id` order.
+4. deterministic `route_id` order;
+5. ascending configured size-ladder index, then native principal amount, as the final total-order tie-break.
 
 The initial live design permits one globally active route at a time. If both books have eligible candidates, the least-recently-served book wins; if only one book is eligible, it may run. After any submission, settlement, failure, or held-inventory transition, all quotes are invalidated and the graph is re-quoted before another selection. Waiting for the global account-mutation lock also invalidates a selected winner if any quote could have aged or state could have changed: after acquiring the lock and immediately before the first submission, the executor re-quotes the complete route and revalidates quote age, pinned pool/ledger identity, full-fill status, allowance, unencumbered balance, inventory bands, native profit, and bps thresholds. Any failure releases the unused lock without mutation and returns to observation. A reconciled held position does not permanently retain the global route lock, but its reserved exposure applies to later inventory eligibility.
 
@@ -539,6 +549,16 @@ The versioned asset registry contains the allowlisted asset role, **code-pinned*
 
 There is one master route-arbitrage enable switch plus the explicit `stable_book_enabled` and `icp_book_enabled` switches. Administration may enable or disable an already code-pinned pool; changing a principal, asset identity, ordering, or admitting any future venue requires a reviewed code/schema change rather than a configuration write. `max_route_legs` cannot exceed four and each size ladder cannot exceed 16 entries. Dry-run is the migration default.
 
+Time and reconciliation settings are nonzero and have immutable resource ceilings:
+
+```text
+HARD_MAX_QUOTE_AGE_NS = 60_000_000_000                  # 60 seconds
+HARD_MAX_SETTLEMENT_TIMEOUT_NS = 86_400_000_000_000     # 24 hours
+HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE = 32
+```
+
+Setters reject zero or above-ceiling values without changing stored configuration. Migration and every restart validate these fields before arming a route or volume timer; missing fields receive versioned safe defaults, while an encoded invalid value disables wallet mutation and reports a configuration incident rather than being silently clamped. Quote age uses checked `now - quoted_at` and rejects clock regression. Settlement expiry uses checked elapsed-time comparison (`now - submitted_at >= timeout`) rather than addition of an untrusted duration; underflow, overflow, or invalid timestamps remain fail closed. Each reconciliation cycle issues at most the configured query count and never carries unused budget into a later cycle.
+
 New APIs are additive and use the new taxonomy:
 
 - quote a cursor-bounded batch of the route universe and report observation completeness;
@@ -662,6 +682,8 @@ The currently merged stable-only Strategy T work remains useful source groundwor
 - Dashboard and client code must distinguish active route records from immutable legacy records.
 - Existing `pending_exit` and `pending_bob_exit` data must decode without initiating a drain and must remain inspectable as legacy incident evidence.
 - Legacy pending records without a provable principal basis migrate to `LegacyUnknown`; migration must not fabricate stable or ICP cost basis.
+- Before any Stage-1 timer or wallet-mutating method is enabled, migration converts each `pending_exit` into an ICP `LegacyUnknown` ownership reservation and each `pending_bob_exit` into a BOB legacy non-route reservation, or proves the referenced funds are in a structurally disjoint account. A nonzero recorded amount is reserved exactly only when source-bound balance evidence shows that amount is present and not already attributed; otherwise the entire affected asset is durably frozen from route, volume, generic-withdrawal, and admin spending pending operator reconciliation. A zero/unknown amount also freezes the affected asset rather than treating zero as no exposure. Reservation/freeze persistence is established before legacy drains are removed or the global mutation lock is released.
+- Migration overlap, insufficient balance, unknown destination, duplicate attribution, or reservation-capacity failure records a visible incident and leaves all outbound mutation for that asset disabled. Restart and upgrade preserve the reservation or freeze until source-bound evidence supports an explicit ownership release; later unrelated credits do not implicitly clear it.
 
 ## 12. Verification and Acceptance
 
@@ -700,6 +722,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Generic withdrawal, volume fund/withdraw, and retired PartyDEX recovery reject every caller-supplied canister principal outside their exact code-pinned active/legacy-recovery target registries before an inter-canister call.
 - Migration/restart fixtures replace legacy volume call-target authority with the immutable Section-2.3 registry before arming timers; adversarial persisted principals, pair/order mismatches, or ledger-identity mismatches disable the affected volume pool and produce zero outbound calls.
 - Those fixtures independently corrupt the Rumi AMM, Rumi 3pool, ICP/icUSD, ICP/3USD, icUSD/BOB, BOB/ICP-reference, ICP/ckUSDC-reference, and ICP/ckUSDT-reference targets and their ledger/order fields. Each mismatch proves zero outbound execution **and reference-quote** calls for the affected manual, triggered, rebalance, and timer path.
+- The Rumi AMM composite pool ID is the exact code-pinned string `fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai`; an independently corrupted legacy value disables the affected volume path and produces zero quote, swap, or transfer calls.
 - Every retained manual, triggered, rebalance, and timer-driven volume path resolves all ledgers, execution venues, and transitive reference-price venues from the code-pinned registry, while volume enable/size/cadence/cost settings retain their existing economic meaning.
 - Volume-bot recovery behavior is unchanged.
 - Drain deletion occurs in Stage 1 before quote-only observation; no later stage may retain or reintroduce an automatic drain.
@@ -721,6 +744,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Held positions preserve native amounts, tagged stable-par or ICP-native principal, route attribution, settled legs, and failure reason across restart and upgrade.
 - Held ICP, ckBTC, and ckETH remain untouched across later arb cycles; no ceiling, timer, or scheduler event automatically sells them.
 - Held stable, ICP, ckBTC, and ckETH lots create durable per-asset reservations; after restart or upgrade, unrelated routes, volume operations, withdrawals, and admin tools may fund only from `ledger balance - held reservations - active reservations - non-route reservations`.
+- Legacy `pending_exit` and `pending_bob_exit` migrations create durable ICP/BOB ownership reservations when amounts are provable and otherwise persist a whole-asset mutation freeze; zero, excess, overlapping, duplicated, unknown-destination, and reservation-capacity cases remain unspendable across restart/upgrade and never initiate a drain.
 - Reservation underflow, attribution mismatch, or insufficient unencumbered balance fails closed without releasing or spending a held lot.
 - Volume-owned ICP/stable residuals and retired-venue recovery credits create durable per-asset non-route reservations (or remain in proven-disjoint accounts) before their operation can release the mutation lock; restart/upgrade tests prove they cannot fund a route or unrelated withdrawal.
 - Ambiguous volume/recovery settlement retains the durable mutation lock; reconciled return to the owning account or persistence of an ownership reservation is required before release.
@@ -731,6 +755,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - Candidate, execution, and held-position queries enforce cursor pagination and the page-size ceiling.
 - Held positions and execution evidence use dedicated bounded stable structures; each execution record is at most 65,536 encoded bytes with at most 64 evidence items, the terminal log contains at most 10,000 records, and capacity is reserved before submission.
 - Non-route ownership reservations use dedicated bounded stable storage with a compile-time maximum of 256 open records; capacity is reserved before a volume/recovery mutation that could strand a route-relevant asset.
+- Configuration boundary tests reject zero and above-ceiling quote-age, settlement-timeout, and reconciliation-query values; migration of invalid encoded values disables mutation, checked elapsed-time tests cover clock regression and `u64` boundaries, and reconciliation call counting never exceeds 32 queries per cycle.
 - Reaching any held-position, non-route-reservation, terminal-history, or record-size ceiling prevents the affected new mutation without deleting, coalescing unrelated records, or liquidating existing holdings; quote-only observation and existing reconciliation remain available.
 
 ### Compatibility and presentation
