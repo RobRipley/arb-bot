@@ -46,6 +46,15 @@
 # check` on THAT pair too — didc's method-argument subtyping check does
 # catch it there. See the init-args-shim section below.
 #
+# RESIDUAL GAP: the shim validates the SHAPE of the type currently named
+# `InitArgs` in each file — it does not confirm the `service : (X) -> {`
+# constructor still actually binds to a type named `InitArgs` (e.g. it
+# would not catch the constructor argument being swapped for some other
+# type entirely, name and all). That narrower case is already covered
+# from the Rust side by the `cargo test` above (`service_equal` compares
+# Class/init args between the generated interface and the committed
+# `.did` directly), so this script does not duplicate it here.
+#
 # Usage:
 #   scripts/check-candid.sh              # grep-diff the 3 sources + run cargo test + subtyping check
 #   scripts/check-candid.sh --no-cargo   # grep-diff + subtyping check only (fast, no build)

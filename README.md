@@ -41,8 +41,9 @@ It does three things:
 
 - **Rust ↔ `.did` ↔ dashboard** — a fast grep-diff of the highest-drift
   surfaces (`execute_strategy_*` / `dry_run_strategy_*` method sets, `BotConfig`
-  fields, `BotConfigInput` fields, `CycleSnapshot` fields) across all three
-  sources.
+  fields, `BotConfigInput` fields and opt-ness, `CycleSnapshot` fields, plus a
+  dashboard-internal check that `STRATEGY_T_OPT_FIELDS` matches the
+  `BotConfigInput` IDL definition) across all three sources.
 - **Rust ↔ `.did`** — a `cargo test` (`src/arb_bot/tests/candid.rs`) compares
   the candid service generated from the live Rust signatures against the
   committed `arb_bot.did` using candid's own subtyping machinery
