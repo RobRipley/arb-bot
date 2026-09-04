@@ -115,18 +115,25 @@ This design retires Rumi AMM, PartyDEX, and BOB **from arbitrage only**. It does
 
 Preserving volume economics does not preserve mutable call-target authority. Every retained volume target is code-pinned independently of legacy `BotConfig`:
 
-| Volume role | Principal |
-|---|---|
-| ICP ledger | `ryjl3-tyaaa-aaaaa-aaaba-cai` |
-| icUSD ledger | `t6bor-paaaa-aaaap-qrd5q-cai` |
-| 3USD ledger / Rumi 3pool | `fohh4-yyaaa-aaaap-qtkpa-cai` |
-| BOB ledger | `7pail-xaaaa-aaaas-aabmq-cai` |
-| Rumi AMM ICP/3USD | `ijlzs-2yaaa-aaaap-quaaq-cai` |
-| ICPSwap ICP/icUSD | `nqxwe-hiaaa-aaaar-qb5yq-cai` |
-| ICPSwap ICP/3USD | `mu2zw-6iaaa-aaaar-qb56q-cai` |
-| ICPSwap icUSD/BOB | `gxvvw-aiaaa-aaaar-qcada-cai` |
+| Volume role | Principal | Immutable asset identity / ordering |
+|---|---|---|
+| ICP ledger | `ryjl3-tyaaa-aaaaa-aaaba-cai` | ICP |
+| icUSD ledger | `t6bor-paaaa-aaaap-qrd5q-cai` | icUSD |
+| ckUSDT ledger | `cngnf-vqaaa-aaaar-qag4q-cai` | ckUSDT |
+| ckUSDC ledger | `xevnm-gaaaa-aaaar-qafnq-cai` | ckUSDC |
+| 3USD ledger / Rumi 3pool | `fohh4-yyaaa-aaaap-qtkpa-cai` | 3USD ledger; Rumi indices are the code-pinned icUSD/ckUSDT/ckUSDC ordering |
+| BOB ledger | `7pail-xaaaa-aaaas-aabmq-cai` | BOB |
+| Rumi AMM ICP/3USD | `ijlzs-2yaaa-aaaap-quaaq-cai` | adapter descriptor pins ICP ledger and 3USD ledger |
+| ICPSwap ICP/icUSD | `nqxwe-hiaaa-aaaar-qb5yq-cai` | token0 ICP; token1 icUSD |
+| ICPSwap ICP/3USD | `mu2zw-6iaaa-aaaar-qb56q-cai` | token0 3USD; token1 ICP |
+| ICPSwap icUSD/BOB | `gxvvw-aiaaa-aaaar-qcada-cai` | token0 BOB; token1 icUSD |
+| ICPSwap BOB/ICP reference | `ybilh-nqaaa-aaaag-qkhzq-cai` | token0 BOB; token1 ICP |
+| ICPSwap ICP/ckUSDC median reference | `mohjv-bqaaa-aaaag-qjyia-cai` | token0 ICP; token1 ckUSDC |
+| ICPSwap ICP/ckUSDT median reference | `hkstf-6iaaa-aaaag-qkcoq-cai` | token0 ckUSDT; token1 ICP |
 
-On migration and every restart/upgrade, persisted volume principals, token pairs/orderings, and ledger identities must validate against this immutable registry before a volume timer is armed or a manual volume method can call out. A mismatch disables the affected volume pool and fails its manual/timer operation before any inter-canister call; it is never adopted as a new pin. Volume configuration may still control enabled status, size, cadence, and cost limits, but cannot change a call target. Re-admitting or replacing a volume target requires an explicit reviewed code-pin change.
+The registry covers both execution venues and every reference-price venue consulted by a retained volume flow. In particular, `IcusdBob` may derive its BOB mark only from the pinned BOB/ICP reference plus the pinned Rumi-AMM, ICP/icUSD, ICP/ckUSDC, and ICP/ckUSDT stable-per-ICP reference set; a quote-only dependency is still an inter-canister call target and cannot come from legacy configuration.
+
+On migration and every restart/upgrade, persisted volume principals, token pairs/orderings, and ledger identities must validate against this immutable registry before a volume timer is armed or a manual volume method can call out. Validation covers every transitive execution and reference-price dependency of that volume pool. A mismatch disables the affected volume pool and fails its manual/timer operation before any inter-canister call; it is never adopted as a new pin. Volume configuration may still control enabled status, size, cadence, and cost limits, but cannot change a call target. Re-admitting or replacing a volume target requires an explicit reviewed code-pin change.
 
 The arbitrage scheduler also retires automatic residual-asset drains. It never automatically sells excess or stranded ICP, ckBTC, or ckETH. The volume bot's separate subaccount settlement/recovery behavior is unchanged.
 
@@ -530,7 +537,7 @@ max_open_held_positions
 
 The versioned asset registry contains the allowlisted asset role, **code-pinned** ledger principal from Section 2.1, immutable expected symbol/decimals, runtime ledger fee, enabled status, and wallet-balance visibility for all six assets. Runtime metadata must match the code-pinned identity and immutable expectation before that asset or a dependent edge is eligible. Administration may toggle an admitted asset but cannot rewrite its identity. ckBTC and ckETH are enabled for balance visibility and receipt without requiring the bot to hold a pre-funded balance.
 
-There is one master route-arbitrage enable switch plus the explicit `stable_book_enabled` and `icp_book_enabled` switches. Pool registry changes and any future venue admission remain admin-only. `max_route_legs` cannot exceed four and each size ladder cannot exceed 16 entries. Dry-run is the migration default.
+There is one master route-arbitrage enable switch plus the explicit `stable_book_enabled` and `icp_book_enabled` switches. Administration may enable or disable an already code-pinned pool; changing a principal, asset identity, ordering, or admitting any future venue requires a reviewed code/schema change rather than a configuration write. `max_route_legs` cannot exceed four and each size ladder cannot exceed 16 entries. Dry-run is the migration default.
 
 New APIs are additive and use the new taxonomy:
 
@@ -692,7 +699,8 @@ The design is implementation-ready only when a plan covers all of the following 
 - Manual external-venue withdrawal remains isolated and cannot initiate a market swap.
 - Generic withdrawal, volume fund/withdraw, and retired PartyDEX recovery reject every caller-supplied canister principal outside their exact code-pinned active/legacy-recovery target registries before an inter-canister call.
 - Migration/restart fixtures replace legacy volume call-target authority with the immutable Section-2.3 registry before arming timers; adversarial persisted principals, pair/order mismatches, or ledger-identity mismatches disable the affected volume pool and produce zero outbound calls.
-- Every retained manual, triggered, and timer-driven volume path resolves ledgers and venues from the code-pinned registry, while volume enable/size/cadence/cost settings retain their existing economic meaning.
+- Those fixtures independently corrupt the Rumi AMM, Rumi 3pool, ICP/icUSD, ICP/3USD, icUSD/BOB, BOB/ICP-reference, ICP/ckUSDC-reference, and ICP/ckUSDT-reference targets and their ledger/order fields. Each mismatch proves zero outbound execution **and reference-quote** calls for the affected manual, triggered, rebalance, and timer path.
+- Every retained manual, triggered, rebalance, and timer-driven volume path resolves all ledgers, execution venues, and transitive reference-price venues from the code-pinned registry, while volume enable/size/cadence/cost settings retain their existing economic meaning.
 - Volume-bot recovery behavior is unchanged.
 - Drain deletion occurs in Stage 1 before quote-only observation; no later stage may retain or reintroduce an automatic drain.
 
