@@ -3,6 +3,7 @@ use serde::Serialize;
 use icrc_ledger_types::icrc1::account::Account;
 use icrc_ledger_types::icrc1::transfer::{TransferArg, TransferError};
 use icrc_ledger_types::icrc2::approve::{ApproveArgs, ApproveError};
+use icrc_ledger_types::icrc2::allowance::{Allowance, AllowanceArgs};
 
 use crate::prices::{self, nat_to_u64};
 
@@ -232,6 +233,35 @@ pub async fn approve_infinite_subaccount(
         Ok((Err(e),)) => Err(SwapError::ApproveFailed(format!("{:?}", e))),
         Err((code, msg)) => Err(SwapError::ApproveFailed(format!("{:?}: {}", code, msg))),
     }
+}
+
+/// Read-only ICRC-2 allowance check. Never grants or modifies an
+/// allowance — Strategy T uses this to report eligibility, not to act on
+/// it. Returns `(allowance, expires_at)` in the ledger's native decimals.
+pub async fn query_allowance(
+    token_ledger: Principal,
+    owner: Principal,
+    spender: Principal,
+) -> Result<(u64, Option<u64>), String> {
+    let args = AllowanceArgs {
+        account: Account { owner, subaccount: None },
+        spender: Account { owner: spender, subaccount: None },
+    };
+    let result: Result<(Allowance,), _> = ic_cdk::call(token_ledger, "icrc2_allowance", (args,)).await;
+    match result {
+        Ok((a,)) => Ok((nat_to_u64_saturating(&a.allowance), a.expires_at)),
+        Err((code, msg)) => Err(format!("icrc2_allowance call failed ({:?}): {}", code, msg)),
+    }
+}
+
+/// Saturating Nat->u64 conversion for allowance values, which are commonly
+/// set to u128::MAX (see `approve_infinite`) and would otherwise overflow.
+/// Strategy T only needs to know "is the allowance >= this trade's input,"
+/// so saturating to u64::MAX is exact for every value this module cares
+/// about (a candidate never needs more than u64::MAX of a 6-8 decimal
+/// token — that is already an absurd, inventory-band-blocked quantity).
+fn nat_to_u64_saturating(n: &Nat) -> u64 {
+    n.0.to_string().parse::<u64>().unwrap_or(u64::MAX)
 }
 
 /// Transfer tokens from the volume subaccount to the default account
