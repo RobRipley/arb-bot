@@ -40,6 +40,20 @@ type BotConfig = record {
   bob_max_trade_size_usd: nat64;
   bob_min_spread_bps: nat64;
   bob_execution_enabled: bool;
+  strategy_t_icusd_ckusdc_pool: principal;
+  strategy_t_icusd_ckusdt_pool: principal;
+  strategy_t_ckusdt_ckusdc_pool: principal;
+  strategy_t_enabled: bool;
+  strategy_t_dry_run: bool;
+  strategy_t_min_profit_usd: int64;
+  strategy_t_min_profit_bps: nat32;
+  strategy_t_max_trade_size_usd: nat64;
+  strategy_t_icusd_floor: nat64;
+  strategy_t_icusd_ceiling: nat64;
+  strategy_t_ckusdt_floor: nat64;
+  strategy_t_ckusdt_ceiling: nat64;
+  strategy_t_ckusdc_floor: nat64;
+  strategy_t_ckusdc_ceiling: nat64;
 };
 
 type Pool = variant {
@@ -261,6 +275,40 @@ type DryRunResult = record {
   message: text;
 };
 
+// One of the three par-valued stablecoins Strategy T routes between.
+type StrategyTToken = variant {
+  IcUsd;
+  CkUsdt;
+  CkUsdc;
+};
+
+// Which ICPSwap pool connects a given unordered pair of Strategy T
+// stablecoins.
+type StrategyTPool = variant {
+  IcusdCkusdc;
+  IcusdCkusdt;
+  CkusdtCkusdc;
+};
+
+type CandidateReport = record {
+  start: StrategyTToken;
+  rumi_out: StrategyTToken;
+  closing: opt StrategyTPool;
+  start_amount_native: nat64;
+  economic_profit_usd: int64;
+  meets_profit_threshold: bool;
+  allowance_status: text;
+  inventory_eligible: bool;
+  fill_ok: bool;
+  fill_note: text;
+};
+
+type StrategyTDryRunResult = record {
+  candidates: vec CandidateReport;
+  best_economic: opt CandidateReport;
+  best_executable: opt CandidateReport;
+};
+
 type InitArgs = record {
   config: BotConfig;
 };
@@ -377,6 +425,7 @@ service : (InitArgs) -> {
   dry_run_strategy_p: () -> (DryRunResult);
   dry_run_strategy_q: () -> (DryRunResult);
   dry_run_strategy_r: () -> (DryRunResult);
+  dry_run_strategy_t: () -> (StrategyTDryRunResult);
 
   // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
   pool_deposit: (nat8, nat64, nat64) -> ();
@@ -407,6 +456,16 @@ service : (InitArgs) -> {
   set_bob_pools: (principal, principal) -> (variant { Ok; Err: text });
   set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
   set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
+
+  // Strategy T (dry-run-only three-stablecoin router)
+  set_strategy_t_pools: (principal, principal, principal) -> (variant { Ok; Err: text });
+  set_strategy_t_enabled: (bool) -> ();
+  set_strategy_t_dry_run: (bool) -> ();
+  set_strategy_t_thresholds: (int64, nat32, nat64) -> (variant { Ok; Err: text });
+  set_strategy_t_icusd_band: (nat64, nat64) -> (variant { Ok; Err: text });
+  set_strategy_t_ckusdt_band: (nat64, nat64) -> (variant { Ok; Err: text });
+  set_strategy_t_ckusdc_band: (nat64, nat64) -> (variant { Ok; Err: text });
+
   get_bot_health: () -> (BotHealthReport);
   get_public_health: () -> (PublicHealth) query;
   trigger_volume_rebalance: () -> ();

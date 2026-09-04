@@ -712,7 +712,7 @@
     const Direction = IDL.Variant({ RumiToIcpswap: IDL.Null, IcpswapToRumi: IDL.Null });
     const TokenVariant = IDL.Variant({ ThreeUSD: IDL.Null, CkUSDC: IDL.Null });
 
-    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_inventory_floor_e8s: IDL.Nat64, bob_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool });
+    const BotConfig = IDL.Record({ owner: IDL.Principal, rumi_amm: IDL.Principal, rumi_3pool: IDL.Principal, rumi_amm_paused: IDL.Bool, icpswap_pool: IDL.Principal, icp_ledger: IDL.Principal, ckusdc_ledger: IDL.Principal, three_usd_ledger: IDL.Principal, min_spread_bps: IDL.Nat32, max_trade_size_usd: IDL.Nat64, paused: IDL.Bool, icpswap_icp_is_token0: IDL.Bool, admins: IDL.Vec(IDL.Principal), icpswap_icusd_pool: IDL.Principal, icusd_ledger: IDL.Principal, icpswap_icusd_icp_is_token0: IDL.Bool, min_profit_usd: IDL.Int64, icpswap_ckusdt_pool: IDL.Principal, ckusdt_ledger: IDL.Principal, icpswap_ckusdt_icp_is_token0: IDL.Bool, icpswap_3usd_pool: IDL.Principal, icpswap_3usd_icp_is_token0: IDL.Bool, slippage_bps: IDL.Nat64, arb_interval_secs: IDL.Nat64, partydex_ckusdc_pool: IDL.Principal, partydex_ckusdt_pool: IDL.Principal, partydex_ckusdc_fee_pips: IDL.Nat32, partydex_ckusdt_fee_pips: IDL.Nat32, icp_inventory_floor_e8s: IDL.Nat64, icp_inventory_ceiling_e8s: IDL.Nat64, bob_inventory_floor_e8s: IDL.Nat64, bob_inventory_ceiling_e8s: IDL.Nat64, bob_ledger: IDL.Principal, bob_ledger_fee: IDL.Nat64, icpswap_bob_icp_pool: IDL.Principal, icpswap_icusd_bob_pool: IDL.Principal, icpswap_bob_icp_icp_is_token0: IDL.Bool, icpswap_icusd_bob_icusd_is_token0: IDL.Bool, bob_max_trade_size_usd: IDL.Nat64, bob_min_spread_bps: IDL.Nat64, bob_execution_enabled: IDL.Bool, strategy_t_icusd_ckusdc_pool: IDL.Principal, strategy_t_icusd_ckusdt_pool: IDL.Principal, strategy_t_ckusdt_ckusdc_pool: IDL.Principal, strategy_t_enabled: IDL.Bool, strategy_t_dry_run: IDL.Bool, strategy_t_min_profit_usd: IDL.Int64, strategy_t_min_profit_bps: IDL.Nat32, strategy_t_max_trade_size_usd: IDL.Nat64, strategy_t_icusd_floor: IDL.Nat64, strategy_t_icusd_ceiling: IDL.Nat64, strategy_t_ckusdt_floor: IDL.Nat64, strategy_t_ckusdt_ceiling: IDL.Nat64, strategy_t_ckusdc_floor: IDL.Nat64, strategy_t_ckusdc_ceiling: IDL.Nat64 });
     const TradeRecord = IDL.Record({ timestamp: IDL.Nat64, direction: Direction, icp_amount: IDL.Nat64, input_amount: IDL.Nat64, input_token: TokenVariant, output_amount: IDL.Nat64, output_token: TokenVariant, virtual_price: IDL.Nat64, ledger_fees_usd: IDL.Int64, net_profit_usd: IDL.Int64, spread_bps: IDL.Nat32 });
     const TradeSummary = IDL.Record({ total_legs: IDL.Nat64, total_usd_in: IDL.Int64, total_usd_out: IDL.Int64, total_fees_usd: IDL.Int64, net_pnl_usd: IDL.Int64, leg1_count: IDL.Nat64, leg2_count: IDL.Nat64, drain_count: IDL.Nat64, rumi_count: IDL.Nat64, icpswap_count: IDL.Nat64, unpaired_drain_usd: IDL.Int64, unpaired_drain_sold_usd: IDL.Int64 });
     const LegType = IDL.Variant({ Leg1: IDL.Null, Leg2: IDL.Null, Drain: IDL.Null, TopUp: IDL.Null });
@@ -723,6 +723,10 @@
     const CandidateResult = IDL.Record({ input_amount: IDL.Nat64, icp_amount: IDL.Nat64, output_amount: IDL.Nat64, profit_usd: IDL.Int64 });
     const DryRunResult = IDL.Record({ should_trade: IDL.Bool, direction: IDL.Opt(Direction), spread_bps: IDL.Int32, rumi_price_usd: IDL.Nat64, icpswap_price_usd: IDL.Nat64, virtual_price: IDL.Nat64, optimal_input_amount: IDL.Nat64, optimal_input_token: IDL.Opt(TokenVariant), expected_icp_amount: IDL.Nat64, expected_output_amount: IDL.Nat64, expected_output_token: IDL.Opt(TokenVariant), expected_profit_usd: IDL.Int64, candidates_evaluated: IDL.Vec(CandidateResult), balance_3usd: IDL.Nat64, balance_ckusdc: IDL.Nat64, message: IDL.Text });
     const PoolQuoteResult = IDL.Record({ estimated_output: IDL.Nat64 });
+    const StrategyTToken = IDL.Variant({ IcUsd: IDL.Null, CkUsdt: IDL.Null, CkUsdc: IDL.Null });
+    const StrategyTPool = IDL.Variant({ IcusdCkusdc: IDL.Null, IcusdCkusdt: IDL.Null, CkusdtCkusdc: IDL.Null });
+    const CandidateReport = IDL.Record({ start: StrategyTToken, rumi_out: StrategyTToken, closing: IDL.Opt(StrategyTPool), start_amount_native: IDL.Nat64, economic_profit_usd: IDL.Int64, meets_profit_threshold: IDL.Bool, allowance_status: IDL.Text, inventory_eligible: IDL.Bool, fill_ok: IDL.Bool, fill_note: IDL.Text });
+    const StrategyTDryRunResult = IDL.Record({ candidates: IDL.Vec(CandidateReport), best_economic: IDL.Opt(CandidateReport), best_executable: IDL.Opt(CandidateReport) });
 
     const CycleSnapshot = IDL.Record({
       timestamp: IDL.Nat64, rumi_icp_price_3usd: IDL.Nat64, rumi_icp_price_usd: IDL.Nat64,
@@ -888,6 +892,7 @@
         dry_run_strategy_p: I.Func([], [DryRunResult], []),
         dry_run_strategy_q: I.Func([], [DryRunResult], []),
         dry_run_strategy_r: I.Func([], [DryRunResult], []),
+        dry_run_strategy_t: I.Func([], [StrategyTDryRunResult], []),
         withdraw: I.Func([I.Principal, I.Principal, I.Nat64], [], []),
         recover_partydex_balance: I.Func([I.Principal], [I.Variant({ Ok: I.Tuple(I.Nat64, I.Nat64), Err: I.Text })], []),
         backfill_trade_legs: I.Func([I.Vec(TradeLeg)], [], []),
@@ -918,6 +923,13 @@
         set_bob_params: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_bob_execution_enabled: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_rumi_amm_paused: I.Func([I.Bool], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_strategy_t_pools: I.Func([I.Principal, I.Principal, I.Principal], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_strategy_t_enabled: I.Func([I.Bool], [], []),
+        set_strategy_t_dry_run: I.Func([I.Bool], [], []),
+        set_strategy_t_thresholds: I.Func([I.Int64, I.Nat32, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_strategy_t_icusd_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_strategy_t_ckusdt_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_strategy_t_ckusdc_band: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_bot_health: I.Func([], [BotHealthReport], []),
         get_public_health: I.Func([], [PublicHealth], ['query']),
       });
