@@ -400,6 +400,30 @@ impl TokenAmounts {
     }
 }
 
+/// Whether each token's on-chain balance was actually fetched successfully.
+/// A failed `icrc1_balance_of` call must never be silently treated as a
+/// zero balance for eligibility purposes: a zero START balance is
+/// conservative (blocks the floor check), but a zero END balance is
+/// PERMISSIVE (the ceiling check can never trip), so a route ending in a
+/// token whose real balance is unknown must fail closed, not pass because
+/// its balance was assumed to be zero.
+#[derive(Clone, Copy, Debug)]
+pub struct TokenKnown {
+    pub icusd: bool,
+    pub ckusdt: bool,
+    pub ckusdc: bool,
+}
+
+impl TokenKnown {
+    pub fn get(self, token: StableToken) -> bool {
+        match token {
+            StableToken::IcUsd => self.icusd,
+            StableToken::CkUsdt => self.ckusdt,
+            StableToken::CkUsdc => self.ckusdc,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct InventoryCheck {
     /// False if spending `start_amount` would take the start token's
@@ -431,13 +455,47 @@ pub fn check_inventory_bands(
 ) -> InventoryCheck {
     let start_balance = balances.get(start_token);
     let start_floor = floors.get(start_token);
-    let start_ok = start_balance.saturating_sub(start_amount) >= start_floor;
+    // The true debit for entering the Rumi leg is start_amount PLUS the
+    // start token's own ledger fee (icrc2 transferFrom debits amount+fee —
+    // the same "entry fee" accounted for in `one_leg_net_profit_usd`/
+    // `two_leg_net_profit_usd`). Reserving only start_amount understates
+    // the real outflow and can pass this check right at the floor boundary
+    // when the actual debit would breach it.
+    let true_debit = start_amount.saturating_add(start_token.ledger_fee());
+    let start_ok = start_balance.saturating_sub(true_debit) >= start_floor;
 
     let end_balance = balances.get(end_token);
     let end_ceiling = ceilings.get(end_token);
     let end_ok = end_balance.saturating_add(expected_end_amount) <= end_ceiling;
 
     InventoryCheck { start_ok, end_ok }
+}
+
+/// Combines the balance-known gate with a `check_inventory_bands` result.
+/// Pure — split out of `evaluate()` for unit testing without a network
+/// call. `check` must be `Some` exactly when both `start_known` and
+/// `end_known` are true (the caller only runs `check_inventory_bands` once
+/// it knows both balances are real); passing `None` while both are known
+/// is a caller bug and panics rather than silently defaulting to eligible.
+pub fn resolve_inventory_eligibility(
+    start_known: bool,
+    end_known: bool,
+    start_token: StableToken,
+    end_token: StableToken,
+    check: Option<InventoryCheck>,
+) -> (bool, String) {
+    if !start_known || !end_known {
+        let missing = match (start_known, end_known) {
+            (false, false) if start_token != end_token => format!("{:?} and {:?}", start_token, end_token),
+            (false, _) => format!("{:?}", start_token),
+            (_, false) => format!("{:?}", end_token),
+            (true, true) => unreachable!(),
+        };
+        (false, format!("balance fetch failed for {missing} — failing closed"))
+    } else {
+        let check = check.expect("check must be Some when both tokens are known");
+        (check.eligible(), String::new())
+    }
 }
 
 // ─── Candid-facing conversions (dashboard reporting reuses Task 1's
@@ -477,6 +535,12 @@ pub struct CandidateReport {
     pub meets_profit_threshold: bool,
     pub allowance_status: String, // Display of AllowanceStatus — candid-simple, dashboard-friendly
     pub inventory_eligible: bool,
+    /// Empty when inventory_eligible reflects a real check_inventory_bands
+    /// result. Non-empty explains why inventory_eligible was forced false
+    /// without a real check — currently only "balance fetch failed for
+    /// <token> — failing closed" when the start or end token's on-chain
+    /// balance could not be read this cycle.
+    pub inventory_note: String,
     pub fill_ok: bool,
     pub fill_note: String, // empty if fill_ok, else the FillStatus error text
 }
@@ -533,6 +597,7 @@ pub async fn evaluate(
     min_profit_usd: i64,
     min_profit_bps: u32,
     balances: TokenAmounts,
+    balance_known: TokenKnown,
     floors: TokenAmounts,
     ceilings: TokenAmounts,
 ) -> StrategyTDryRunResult {
@@ -571,9 +636,21 @@ pub async fn evaluate(
         } else {
             q.net_end_amount_native
         };
-        let inventory = check_inventory_bands(
-            q.route.start, start_amount, end_token, expected_end_amount, balances, floors, ceilings,
-        );
+        // Fail closed if either token's balance is unknown this cycle,
+        // rather than letting an upstream `unwrap_or(0)` silently make a
+        // route "eligible" because its real (possibly near-ceiling)
+        // balance was assumed to be zero.
+        let start_known = balance_known.get(q.route.start);
+        let end_known = balance_known.get(end_token);
+        let check = if start_known && end_known {
+            Some(check_inventory_bands(
+                q.route.start, start_amount, end_token, expected_end_amount, balances, floors, ceilings,
+            ))
+        } else {
+            None
+        };
+        let (inventory_eligible, inventory_note) =
+            resolve_inventory_eligibility(start_known, end_known, q.route.start, end_token, check);
 
         let (fill_ok, fill_note) = match &q.fill_status {
             FillStatus::FullyQuoted => (true, String::new()),
@@ -589,7 +666,8 @@ pub async fn evaluate(
             economic_profit_usd: q.economic_profit_usd,
             meets_profit_threshold,
             allowance_status: format!("{:?}", allowance_status).split(' ').next().unwrap_or("").trim_end_matches('{').to_string(),
-            inventory_eligible: inventory.eligible(),
+            inventory_eligible,
+            inventory_note,
             fill_ok,
             fill_note,
         });

@@ -16,11 +16,31 @@
 # candid's own type machinery for full rigor on the Rust/.did pair (something a
 # grep-diff can't do), but which cannot see the hand-written dashboard IDL.
 #
-# Usage:
-#   scripts/check-candid.sh              # grep-diff the 3 sources + run cargo test
-#   scripts/check-candid.sh --no-cargo   # grep-diff only (fast, no build)
+# Finally it runs an old-deployed -> new subtyping check via `didc check`
+# against src/arb_bot/arb_bot.did.deployed. This is a DIFFERENT kind of
+# safety than the checks above: field/method PRESENCE agreeing across the
+# three sources says nothing about whether an EXISTING caller (an old
+# dashboard, an external script, `dfx canister call`) can still safely call
+# this interface. Candid subtyping requires new fields on an ARGUMENT type
+# to be `opt`; `#[serde(default)]` only protects the internal stable-memory
+# JSON blob, not the wire format of an inbound call — the two are unrelated
+# mechanisms and neither substitutes for the other. See BotConfigInput's
+# doc comment in state.rs for the concrete incident this check exists to
+# prevent (found by independent review, 2026-09-04: a `set_config` /
+# `InitArgs` signature that could no longer accept a payload from any
+# caller still using the pre-Strategy-T interface).
 #
-# Exit status is non-zero if any drift is found. No network or CI required.
+# arb_bot.did.deployed must be updated (copied from arb_bot.did) as part of
+# EVERY successful mainnet deploy — it is the source of truth for "what's
+# actually live," which is the correct baseline for this check. It is not
+# updated automatically by this script.
+#
+# Usage:
+#   scripts/check-candid.sh              # grep-diff the 3 sources + run cargo test + subtyping check
+#   scripts/check-candid.sh --no-cargo   # grep-diff + subtyping check only (fast, no build)
+#
+# Exit status is non-zero if any drift, or any unsafe subtyping change, is
+# found. No network or CI required (didc runs entirely locally).
 
 set -uo pipefail
 
@@ -32,8 +52,9 @@ RUST_LIB="$ROOT/src/arb_bot/src/lib.rs"
 RUST_STATE="$ROOT/src/arb_bot/src/state.rs"
 DID="$ROOT/src/arb_bot/arb_bot.did"
 DASH="$ROOT/src/arb_bot/src/dashboard.html"
+DID_DEPLOYED="$ROOT/src/arb_bot/arb_bot.did.deployed"
 
-for f in "$RUST_LIB" "$RUST_STATE" "$DID" "$DASH"; do
+for f in "$RUST_LIB" "$RUST_STATE" "$DID" "$DASH" "$DID_DEPLOYED"; do
   if [[ ! -f "$f" ]]; then
     echo "FATAL: expected source not found: $f" >&2
     exit 2
@@ -148,6 +169,11 @@ compare3 "BotConfig fields" \
   "$(did_record_fields BotConfig "$DID")" \
   "$(dash_record_fields BotConfig "$DASH")"
 
+compare3 "BotConfigInput fields" \
+  "$(rust_struct_fields BotConfigInput "$RUST_STATE")" \
+  "$(did_record_fields BotConfigInput "$DID")" \
+  "$(dash_record_fields BotConfigInput "$DASH")"
+
 compare3 "CycleSnapshot fields" \
   "$(rust_struct_fields CycleSnapshot "$RUST_STATE")" \
   "$(did_record_fields CycleSnapshot "$DID")" \
@@ -173,6 +199,26 @@ if [[ "$RUN_CARGO" -eq 1 ]]; then
 else
   echo
   echo "(skipped cargo test — run without --no-cargo for full Rust<->.did rigor)"
+fi
+
+# ── Old-deployed -> new subtyping check (didc) ────────────────────────────
+# Presence/absence agreement across the 3 sources (above) is a different
+# question from "can an existing caller still call this interface" — see
+# the header comment for why #[serde(default)] doesn't answer the latter.
+echo
+echo "== didc check: arb_bot.did.deployed -> arb_bot.did is a safe subtype =="
+if ! command -v didc >/dev/null 2>&1; then
+  echo "FAIL: didc not found on PATH. Install: cargo install didc" >&2
+  echo "      (or: https://github.com/dfinity/candid/releases)" >&2
+  fail=1
+elif didc check "$DID" "$DID_DEPLOYED"; then
+  echo "PASS: arb_bot.did is backward-compatible with the currently-deployed interface."
+else
+  echo "FAIL: arb_bot.did is NOT a safe subtype of arb_bot.did.deployed (see didc output above)." >&2
+  echo "      A caller using the currently-deployed interface could fail to call this canister." >&2
+  echo "      Fix: for an ARGUMENT type, only add opt fields, never required ones — see the" >&2
+  echo "      BotConfigInput pattern in state.rs. For a RETURN type, adding required fields is safe." >&2
+  fail=1
 fi
 
 exit "$fail"
