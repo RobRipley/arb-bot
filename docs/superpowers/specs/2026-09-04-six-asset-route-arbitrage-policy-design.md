@@ -50,7 +50,7 @@ No other asset may enter a candidate.
 
 The route registry is an allowlist. Only the following integrations may register edges:
 
-- **Rumi 3pool:** both directed stable-to-stable edges for each pair among icUSD, ckUSDT, and ckUSDC.
+- **Rumi 3pool `fohh4-yyaaa-aaaap-qtkpa-cai`:** both directed stable-to-stable edges for each pair among icUSD, ckUSDT, and ckUSDC.
 - **ICPSwap ICP pools:** both directed edges for ICP/icUSD, ICP/ckUSDT, and ICP/ckUSDC.
 - **ICPSwap direct-stable pools:** both directed edges for icUSD/ckUSDT, icUSD/ckUSDC, and ckUSDT/ckUSDC.
 - **ICPSwap volatile and volatile/stable pools:** both directed edges for each allowlisted pool below:
@@ -149,7 +149,7 @@ Requirements:
 - Start asset is one of the three stables.
 - End asset is one of the three stables.
 - At least one interior asset is ICP, ckBTC, or ckETH.
-- Any subset and ordering of ICP, ckBTC, and ckETH may appear, with each asset appearing at most once.
+- Any graph-reachable subset and ordering of ICP, ckBTC, and ckETH may appear, with each asset appearing at most once. This does not promise a direct edge between every stable and every first or last pass-through asset; reachability is determined by the admitted pool graph and four-swap limit.
 - Interior assets do not repeat.
 - A literal round trip may repeat only the start asset as the final asset.
 
@@ -197,7 +197,7 @@ No ICP/USD price is required to establish profitability. Any USD rendering is in
 
 The arbitrage engine rejects a new complete candidate that begins in the stable domain and ends in ICP, ckBTC, or ckETH, or that begins in any volatile asset and ends in the stable domain. Those are inventory conversions whose profitability requires a cost-basis or valuation policy outside normal route discovery.
 
-Individual stable/volatile and volatile/volatile edges remain valid inside eligible complete candidates. A failed or deteriorated execution may nevertheless terminate operationally in held ICP, ckBTC, or ckETH under Section 7.3; that is an incomplete route with attributable inventory, not a successful arbitrage candidate.
+Individual stable/volatile and volatile/volatile edges remain valid inside eligible complete candidates. A failed or deteriorated execution may nevertheless terminate operationally in held ICP, ckBTC, or ckETH under Section 7.4; that is an incomplete route with attributable inventory, not a successful arbitrage candidate.
 
 ## 4. Route Generation and Canonicalization
 
@@ -208,11 +208,11 @@ The planner generates venue-edge-specific routes of one to four swaps, subject t
 - A non-cyclic stable-par or stable-settled cross-asset path has no repeated asset.
 - A cycle repeats only its start asset as its final asset.
 - No candidate repeats an edge or pool.
-- No candidate contains an immediate inverse swap.
+- No candidate traverses both directions of the same physical pool consecutively. Reversing the asset direction through a different pool and different `edge_id` is permitted and is the normal two-venue stable-arbitrage shape.
 - No candidate contains a smaller embedded cycle.
 - Reverse directions remain distinct because they have different economics.
 
-Repeated-vertex walks are excluded: they either contain a smaller independently evaluable cycle or add avoidable fees and settlement risk.
+Repeated-vertex walks are excluded: they either contain a smaller independently evaluable cycle or add avoidable fees and settlement risk. The Rumi 3pool may appear at most once in a candidate; a second swap inside the same physical pool is replaced by the pool's direct pair edge and otherwise adds avoidable fees and settlement risk.
 
 ### 4.2 Canonical cycle identity
 
@@ -343,8 +343,20 @@ pre_call_balances
 expected_fees
 quote_timestamp
 phase
-retry_count
+call_intent_id
+source_and_destination_accounts
+allowance_spender
+ledger_created_at_time_and_memo
+adapter_request_fingerprint
+submission_started_at
+submission_response_or_reject
+expected_debits_credits_and_refunds
+observed_ledger_or_pool_receipts
+reconciliation_evidence
+reconciliation_query_count
 ```
+
+The intent is persisted before the outbound update. `ledger_created_at_time_and_memo` are supplied wherever the called ledger interface supports them; the adapter fingerprint is evidence, not a claim that a DEX update is idempotent. Once an update may have been submitted, the executor never submits that leg again merely because the response was lost, a timer fired, or the canister restarted.
 
 Phases are:
 
@@ -353,6 +365,7 @@ Planned
 LegPrepared
 LegSubmitted
 AwaitingSettlement
+ReconciliationRequired
 LegSettled
 RemainingRouteRequoted
 Completed
@@ -362,6 +375,8 @@ HeldInventory
 
 Only `Completed`, `Aborted`, and `HeldInventory` are terminal for scheduling purposes. `Aborted` means reconciliation proved that no non-principal route inventory remains, although unavoidable fees may have produced a realized loss. `HeldInventory` is reachable only after all ambiguous submissions, delayed withdrawals, refunds, and balance deltas have been reconciled; uncertainty about whether a swap executed is not a terminal hold state.
 
+`ReconciliationRequired` is a durable, non-terminal incident state entered when `settlement_timeout_ns` expires without sufficient evidence to classify the leg. It alerts the operator, continues read-only reconciliation polling with a bounded per-cycle query budget, and never resubmits the debit or swap. Quote-only observation may continue, but no new wallet-mutating route or volume operation may begin until evidence resolves the incident to `LegSettled`, `Aborted`, or `HeldInventory`. If authoritative evidence remains unavailable, the state and mutation lock remain fail-closed rather than guessing.
+
 ### 7.2 Settlement proof
 
 - An ICPSwap `depositFromAndSwap` success is submission evidence, not ledger settlement.
@@ -369,33 +384,41 @@ Only `Completed`, `Aborted`, and `HeldInventory` are terminal for scheduling pur
 - Rumi completion also uses balance evidence consistent with its transfer semantics.
 - The executor re-quotes the exact remaining route after each confirmed leg settlement.
 - Duplicate callbacks, timer retries, upgrades, and traps must resume from the persisted phase rather than repeat a debit.
+- Ledger transaction references, pool receipts where available, exact source/destination account deltas, and refund evidence are persisted as they are observed. A bare balance increase without account-mutation exclusivity is not sufficient attribution.
 
-### 7.3 Failed or deteriorated route
+### 7.3 Cross-engine account ownership
 
-If a submitted leg fails, or the exact re-quote after a settled leg no longer preserves principal and minimum profit, the executor does not drain, dump, or automatically liquidate the resulting inventory. After settlement and refund reconciliation, it enters `Aborted` when no non-principal route inventory remains; otherwise it enters `HeldInventory` and records one or more attributable held lots containing:
+A durable account-mutation lock is shared by the route executor and volume bot. It is acquired before either engine moves funds into a default account or submits a swap, and held through settlement/refund reconciliation. While the route executor owns the lock, a scheduled or manual volume cycle that would mutate any arb default account defers before its first transfer or swap. While the volume bot owns the lock, route execution defers. Quote-only calls remain permitted.
+
+This deliberately changes overlap scheduling because the existing volume flow transiently uses arb default accounts; it does not change the volume bot's pool selection, sizing, subaccount ownership, recovery semantics, or balances. The lock and owner survive upgrade/restart, and an unresolved `ReconciliationRequired` incident retains the lock.
+
+### 7.4 Failed or deteriorated route
+
+If a submitted leg fails, or the exact re-quote after a settled leg no longer preserves principal and minimum profit, the executor does not drain, dump, or automatically liquidate the resulting inventory. After settlement and refund reconciliation, it enters `Aborted` when no non-principal route inventory remains; otherwise it enters `HeldInventory` and records an attributable held position containing:
 
 ```text
-asset
-native_amount
 originating_execution_id
 originating_route_id
-starting_stable_asset
-starting_stable_cost_basis_usd_6dec
+principal_domain =
+    StablePar { start_asset, principal_native, principal_usd_6dec }
+  | IcpNative { principal_icp_e8s }
+  | LegacyUnknown { preserved_pending_fields }
 settled_leg_history
 failure_or_deterioration_reason
 first_held_timestamp
 last_reconciled_timestamp
+lots[] = { asset, native_amount, attributable_fees_native }
 ```
 
-The operator may leave any resulting stable, ICP, ckBTC, or ckETH balance in the bot indefinitely. Held inventory is not counted as completed-route proceeds or realized profit. Any later conversion is a separately initiated continuation linked to the held lot and subject to fresh full-fill quotes and an explicit minimum-output policy; there is no automatic retry or liquidation loop in this design.
+The operator may leave any resulting stable, ICP, ckBTC, or ckETH balance in the bot indefinitely. Held inventory is not counted as completed-route proceeds or realized profit. Stable-funded positions retain stable-par principal and cost basis; ICP-funded positions retain ICP-native principal and never invent a USD cost basis. `LegacyUnknown` is used only when migrated deployed evidence lacks a truthful original cost basis; it preserves the raw legacy fields and is ineligible for an automated continuation. Any later conversion is a separately initiated continuation linked to the held position and subject to fresh full-fill quotes and an explicit minimum-output policy; there is no automatic retry or liquidation loop in this design.
 
-### 7.4 Realized P&L
+### 7.5 Realized P&L
 
-Realized P&L uses before/after ledger deltas in the candidate's profit domain and records planned versus settled amounts per leg. Quoted profit is never recorded as realized profit. A `HeldInventory` route reports its original stable cost basis and current native holdings as an incomplete position without manufacturing a stablecoin P&L mark.
+Realized P&L uses before/after ledger deltas in the candidate's profit domain and records planned versus settled amounts per leg. Quoted profit is never recorded as realized profit. A `HeldInventory` route reports its tagged original principal domain and current native holdings as an incomplete position. Stable-funded holds may show the original stable-par cost basis; ICP-funded holds remain entirely ICP-native.
 
-### 7.5 Automatic arbitrage drain deletion
+### 7.6 Automatic arbitrage drain deletion
 
-The route-engine cutover deletes the arbitrage functions `drain_residual_icp` and `drain_residual_bob` and their scheduler call sites, and exposes no replacement generic drain. Loose or route-attributable ICP, ckBTC, and ckETH balances are never automatically sold merely because a cycle begins or an inventory ceiling is exceeded.
+Stage 1 deletes the arbitrage functions `drain_residual_icp` and `drain_residual_bob` and their scheduler call sites, before quote-only observation begins, and exposes no replacement generic drain. Loose or route-attributable ICP, ckBTC, and ckETH balances are never automatically sold merely because a cycle begins or an inventory ceiling is exceeded.
 
 This retirement does not remove the volume bot's separate subaccount settlement and stranded-fund recovery behavior. It also does not prohibit a narrowly scoped manual withdrawal from a retired external venue where funds are already stranded; such a withdrawal cannot perform an opportunistic market swap or feed an active route.
 
@@ -406,11 +429,16 @@ The new versioned route-arbitrage configuration contains:
 ```text
 enabled
 dry_run
+stable_book_enabled
+icp_book_enabled
 asset_registry
 active_pool_registry
 stable_size_ladder
 icp_size_ladder
 max_route_legs
+max_size_ladder_entries
+max_quote_calls_per_observation
+max_concurrent_quote_calls
 max_stable_principal_usd_6dec
 max_icp_principal_e8s
 min_stable_profit_usd_6dec
@@ -422,15 +450,17 @@ per_asset_inventory_ceiling
 per_asset_additional_exposure_enabled
 quote_max_age_ns
 settlement_timeout_ns
+reconciliation_queries_per_cycle
+max_open_held_positions
 ```
 
 The versioned asset registry contains the allowlisted asset role, ledger principal, expected symbol, expected decimals, ledger fee, and wallet-balance visibility for all six assets. Runtime metadata must match the configured expectation before that asset or a dependent edge is eligible. ckBTC and ckETH are enabled for balance visibility and receipt without requiring the bot to hold a pre-funded balance.
 
-There is one master route-arbitrage enable switch plus per-profit-book enable switches. Pool registry changes and any future venue admission remain admin-only. `max_route_legs` cannot exceed four in this schema. Dry-run is the migration default.
+There is one master route-arbitrage enable switch plus the explicit `stable_book_enabled` and `icp_book_enabled` switches. Pool registry changes and any future venue admission remain admin-only. `max_route_legs` cannot exceed four and each size ladder cannot exceed 16 entries. Dry-run is the migration default.
 
 New APIs are additive and use the new taxonomy:
 
-- quote the complete route universe;
+- quote a cursor-bounded batch of the route universe and report observation completeness;
 - inspect best candidate per profit book;
 - inspect pending execution and held inventory;
 - inspect all six arb-wallet ledger balances;
@@ -438,6 +468,20 @@ New APIs are additive and use the new taxonomy:
 - execute a descriptive route only after live execution is separately authorized.
 
 There is no drain API. A future held-inventory continuation API would require a separate reviewed design and explicit operator initiation.
+
+### 8.1 Bounded observation and query model
+
+Topology generation produces a deterministic ordered set of route IDs. Quoting walks that set in cursor-bounded batches with configured call and concurrency limits. Candidate-list, execution-history, and held-position APIs require pagination and enforce a maximum page size of 100 records.
+
+A live winner may be selected only from an observation that evaluated the entire enabled route-and-size universe within `quote_max_age_ns`. If the configured universe cannot complete within the quote-call, response-size, cycle, or age budget, the observation reports `incomplete` and no route may execute. It may not silently select the best result from a partial scan. Quote-prefix reuse is permitted only under the exact-match rule in Section 5.2.
+
+The implementation plan must measure the full current graph and choose defaults below tested canister limits. Compile-time ceilings cap size ladders at 16 entries, concurrent quote calls at 16, and returned pages at 100 records. Increasing those ceilings requires a reviewed schema/resource change.
+
+### 8.2 Bounded durable storage
+
+Current execution metadata remains a single bounded record. Executions, reconciliation evidence, and held positions live in dedicated indexed stable structures assigned new, non-overlapping memory IDs; they are not appended to heap `BotState`. Records have bounded encoded sizes and are queried by cursor.
+
+A held position contains at most six coalesced asset lots, one per active asset. `max_open_held_positions` is bounded by a compile-time ceiling of 256. Before beginning a route, the executor reserves capacity for one potential held position. Reaching the ceiling disables new execution without deleting, coalescing across unrelated executions, or liquidating existing holdings. Historical terminal executions may be retained in a separately paginated stable log without enlarging `BotState`.
 
 Legacy letter dry-run and execute methods remain wire-compatible during the transition. Retired-integration methods fail closed in Stage 1. The remaining methods are labeled legacy while the new planner observes, then become fail-closed compatibility stubs at the execution cutover. No new consumer should call them.
 
@@ -453,7 +497,7 @@ The active dashboard shows:
 - current durable execution phase and settlement latency;
 - explicit rejection and held-inventory reasons;
 - arb-wallet balances for ICP, ckBTC, ckETH, icUSD, ckUSDT, and ckUSDC;
-- held lots with originating route, stable cost basis, settled history, and reconciliation timestamp.
+- held positions with originating route, tagged stable-par/ICP-native/legacy-unknown principal domain, native asset lots, settled history, and reconciliation timestamp.
 
 Rumi AMM, PartyDEX, BOB arbitrage, and lettered strategies are absent from active opportunity cards. Historical views continue to render their original labels and fields as legacy data.
 
@@ -477,6 +521,7 @@ Migration is additive and staged.
 ### Stage 2: Quote-only route planner
 
 - Add the six-asset wallet/metadata registry, all allowlisted edges, candidate generation, canonicalization, accounting, ranking, held-inventory reports, and all-six-asset balance reporting.
+- Record a timestamped, read-only admission fixture for the Rumi 3pool and every ICPSwap pool: pool principal, token ledger pair, token ordering, fee tier/model, decimals, ledger fees, and full-fill quote behavior.
 - Keep all new execution disabled and dry-run-only.
 - Keep still-permitted legacy ICPSwap execution isolated from the new planner during observation; it cannot consume a new-planner candidate or route ID.
 - Preserve existing stable-state and Candid compatibility.
@@ -484,12 +529,13 @@ Migration is additive and staged.
 ### Stage 3: Observation
 
 - Collect timestamped route-size observations across materially different pool states.
-- Measure quote drift, full-fill rejections, quote latency, cycle cost, candidate rotation duplication, and expected settlement exposure.
+- Measure the exact enabled route count, route-and-size count, quote-call count, response size, quote drift, full-fill rejections, quote latency, cycle cost, candidate rotation duplication, and expected settlement exposure.
+- Demonstrate that a complete observation fits within configured call, concurrency, response-size, cycle, and quote-age limits; otherwise reduce the enabled universe rather than executing from a partial scan.
 - Do not infer realized fill performance from query-only observations.
 
 ### Stage 4: Durable executor
 
-- Add the persisted phase machine, venue adapters, settlement reconciliation, route-aware floors, and attributable `HeldInventory` transition.
+- Add the persisted phase machine, per-call intent/receipt evidence, venue adapters, cross-engine account-mutation lock, bounded reconciliation process, route-aware floors, `ReconciliationRequired`, and attributable `HeldInventory` transition.
 - Validate deterministic failure and upgrade/restart behavior before any live authorization.
 - Define an atomic cutover: all remaining letter-based automatic and manual execution becomes fail-closed in the same release that can enable the new executor. There is never a window where both engines can execute the same opportunity.
 
@@ -511,6 +557,7 @@ The currently merged stable-only Strategy T work remains useful source groundwor
 - Stable-memory decoding tests must cover the currently deployed schema, the merged pre-router schema, and the new schema.
 - Dashboard and client code must distinguish active route records from immutable legacy records.
 - Existing `pending_exit` and `pending_bob_exit` data must decode without initiating a drain and must remain inspectable as legacy incident evidence.
+- Legacy pending records without a provable principal basis migrate to `LegacyUnknown`; migration must not fabricate stable or ICP cost basis.
 
 ## 12. Verification and Acceptance
 
@@ -521,13 +568,13 @@ The design is implementation-ready only when a plan covers all of the following 
 - Exact active asset, pool, direction, and venue allowlist.
 - Runtime ledger metadata and pool token-order verification for ICP, ckBTC, ckETH, icUSD, ckUSDT, and ckUSDC.
 - No candidate contains a retired venue or asset.
-- Exhaustive simple-path/cycle generation for one-to-four-leg shapes.
+- Exhaustive simple-path/cycle generation for one-to-four-leg shapes, with a golden fixture containing the exact ordered route-ID set and count for the admitted graph.
 - Canonical rotation deduplication with reversal remaining distinct.
-- No repeated vertices, repeated pools, immediate inverses, or embedded cycles.
+- No repeated vertices, repeated pools, same-pool consecutive reversals, or embedded cycles; distinct-pool reverse directions remain eligible.
 - Exact native-decimal and ledger/DEX-fee fixtures for every edge direction.
 - Stable-par and ICP-native profit invariants, thresholds, and rounding boundaries.
 - Stable-only routes use real chained pool quotes while applying $1 par only at their accounting boundary.
-- Stable-settled routes cover every permitted subset and ordering of ICP, ckBTC, and ckETH within the four-leg limit.
+- Stable-settled routes cover every graph-reachable permitted subset and ordering of ICP, ckBTC, and ckETH within the four-leg limit; unreachable endpoint/order combinations are reported as absent rather than synthesized.
 - ckBTC and ckETH are rejected as successful route endpoints.
 - Per-stable inventory floor/ceiling enforcement, including changed terminal token.
 - Volatile exposure ceilings reject new exposure without triggering a sale of existing holdings.
@@ -540,6 +587,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - The arbitrage drain functions and their scheduler call sites are absent.
 - Manual external-venue withdrawal remains isolated and cannot initiate a market swap.
 - Volume-bot recovery behavior is unchanged.
+- Drain deletion occurs in Stage 1 before quote-only observation; no later stage may retain or reintroduce an automatic drain.
 
 ### Execution, settlement, and holding
 
@@ -547,13 +595,18 @@ The design is implementation-ready only when a plan covers all of the following 
 - Delayed settlement, timeout, and out-of-order response behavior.
 - Trap/restart/upgrade at every persisted phase.
 - Duplicate timer/callback idempotency.
+- Persist-before-call intent and receipt tests cover acknowledged-then-trapped ledger transfers, lost DEX responses, duplicate callbacks, delayed refunds, and restarts after the ledger duplicate window; an ambiguous leg is never resubmitted.
+- Settlement timeout enters `ReconciliationRequired`, retains the cross-engine mutation lock, emits an operator-visible incident, and performs only bounded read-only evidence queries.
+- Route and volume operations cannot overlap while either could mutate a shared default account; quote-only observation remains available.
 - Downstream quote deterioration and `HeldInventory` transition after exact reconciliation.
 - Full refund/no-position failures transition to `Aborted`, with unavoidable fees reported accurately.
-- Held lots preserve native amounts, stable cost basis, route attribution, settled legs, and failure reason across restart and upgrade.
+- Held positions preserve native amounts, tagged stable-par or ICP-native principal, route attribution, settled legs, and failure reason across restart and upgrade.
 - Held ICP, ckBTC, and ckETH remain untouched across later arb cycles; no ceiling, timer, or scheduler event automatically sells them.
 - Profit-preserving minimum-output proofs.
 - Planned-versus-realized P&L from attributable ledger deltas.
 - Global route lock, per-book scheduling, and canonical-cycle collision prevention.
+- Candidate, execution, and held-position queries enforce cursor pagination and the page-size ceiling.
+- Held positions and execution evidence use dedicated bounded stable structures; reaching the open-position ceiling prevents a new route without deleting or liquidating existing holdings.
 
 ### Compatibility and presentation
 
@@ -573,7 +626,7 @@ This design does not authorize or include:
 - funding the arb canister with ckBTC or ckETH;
 - re-admission of Rumi AMM, PartyDEX, BOB, or any other asset/venue;
 - removal or rewriting of legacy history;
-- changes to the volume bot;
+- changes to the volume bot's economic routing, sizing, recovery semantics, or subaccount ownership; the cross-engine account-mutation lock is the sole scheduling integration added by this design;
 - concurrent live route execution;
 - automatic draining, liquidation, or retry of held ICP, ckBTC, or ckETH;
 - ckBTC-returning or ckETH-returning profit books;
