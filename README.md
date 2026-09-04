@@ -37,18 +37,38 @@ Run the local guard before deploying anything that touches an endpoint,
 scripts/check-candid.sh
 ```
 
-It does two things:
+It does three things:
 
+- **Rust ↔ `.did` ↔ dashboard** — a fast grep-diff of the highest-drift
+  surfaces (`execute_strategy_*` / `dry_run_strategy_*` method sets, `BotConfig`
+  fields, `BotConfigInput` fields, `CycleSnapshot` fields) across all three
+  sources.
 - **Rust ↔ `.did`** — a `cargo test` (`src/arb_bot/tests/candid.rs`) compares
   the candid service generated from the live Rust signatures against the
   committed `arb_bot.did` using candid's own subtyping machinery
   (`service_equal`). Field/method ordering and type names don't matter — only
   structure. This is the rigorous check, but it can't see the dashboard.
-- **Rust ↔ `.did` ↔ dashboard** — a fast grep-diff of the three highest-drift
-  surfaces (`execute_strategy_*` / `dry_run_strategy_*` method sets, `BotConfig`
-  fields, `CycleSnapshot` fields) across all three sources, covering the
-  dashboard IDL the cargo test can't reach.
+- **Old-deployed ↔ new subtyping** — `didc check` (twice: once for the
+  service methods, once via a shim for the `InitArgs` constructor argument —
+  didc doesn't validate the constructor directly) confirms `arb_bot.did` is
+  still safely callable by anything using the interface that's *actually
+  live on mainnet right now*, tracked in `src/arb_bot/arb_bot.did.deployed`.
+  This answers a different question from the grep-diff and the cargo test
+  above: those two only confirm the three sources AGREE with each other,
+  not that an EXISTING caller (an old cached dashboard, an external script)
+  can still call the interface at all. A record used as a function argument
+  can only safely gain `opt` fields, never required ones — Rust's
+  `#[serde(default)]` does not help here, since it only protects the
+  internal stable-memory state blob, a completely different mechanism from
+  Candid's wire-format decoding of an inbound call.
 
-Both must pass (exit 0). Use `scripts/check-candid.sh --no-cargo` for the fast
-grep-only pass (no build). No CI / GitHub Actions is involved — this is a
-purely local command.
+  **`src/arb_bot/arb_bot.did.deployed` must be updated (copied from
+  `arb_bot.did`) as part of every successful mainnet deploy.** It is not
+  updated automatically — it's the deploy step's responsibility, and this
+  check's value depends entirely on that file staying in sync with what's
+  actually running. It does not track itself; nothing else in this repo
+  will remind you.
+
+All three must pass (exit 0). Use `scripts/check-candid.sh --no-cargo` to
+skip the cargo test (faster, no build) — the grep-diff and didc checks still
+run. No CI / GitHub Actions is involved — this is a purely local command.

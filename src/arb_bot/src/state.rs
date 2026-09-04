@@ -300,6 +300,14 @@ pub struct BotConfig {
 /// Every field other than the 14 `strategy_t_*` ones mirrors `BotConfig`
 /// exactly (same name, same type, same required-ness) — an old caller's
 /// payload for those is decoded and applied exactly as before.
+///
+/// The `#[serde(default = ...)]` attributes below are copied verbatim from
+/// `BotConfig` for exactly that reason (identical decode behavior for the
+/// non-`strategy_t_*` fields) — NOT because this struct participates in
+/// the stable-memory upgrade path. It doesn't: `BotConfigInput` derives no
+/// `Serialize` and is never persisted; it exists only as a transient
+/// Candid-decode target for one inbound call, then it's consumed by
+/// `into_full_config` and dropped.
 #[derive(CandidType, Deserialize, Clone, Debug)]
 pub struct BotConfigInput {
     pub owner: Principal,

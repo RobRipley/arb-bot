@@ -35,6 +35,17 @@
 # actually live," which is the correct baseline for this check. It is not
 # updated automatically by this script.
 #
+# CAVEAT (confirmed empirically, 2026-09-04): `didc check <new>.did
+# <old>.did` on the two FULL service files does NOT validate the service
+# CONSTRUCTOR's own argument type (`service : (InitArgs) -> {...}`) — only
+# ordinary method arguments/returns. A regression that reverts InitArgs to
+# the old, incompatible shape passes `didc check` on the full files with
+# no error. To get real coverage on InitArgs, this script also extracts
+# InitArgs (and whatever type it references) from each .did and wraps it
+# as an ordinary method on a throwaway shim service, then runs `didc
+# check` on THAT pair too — didc's method-argument subtyping check does
+# catch it there. See the init-args-shim section below.
+#
 # Usage:
 #   scripts/check-candid.sh              # grep-diff the 3 sources + run cargo test + subtyping check
 #   scripts/check-candid.sh --no-cargo   # grep-diff + subtyping check only (fast, no build)
@@ -125,6 +136,55 @@ dash_record_fields() { # $1=const name  $2=file
   | grep -vxE 'IDL|const' | sort -u
 }
 
+# Names of fields declared `Option<...>` inside a Rust `pub struct <Name> {`
+# block — the argument-boundary-type equivalent of an `opt` candid field.
+rust_struct_opt_fields() { # $1=struct name  $2=file
+  awk -v s="pub struct $1 {" '
+    index($0, s) { inb = 1; next }
+    inb && /^}/  { inb = 0 }
+    inb' "$2" \
+  | grep -oE '^[[:space:]]*pub [a-z_][a-z0-9_]*: Option<' \
+  | sed -E 's/^[[:space:]]*pub //; s/: Option<$//' | sort -u
+}
+
+# Names of fields declared `opt ...` inside a candid
+# `type <Name> = record { ... };` block.
+did_record_opt_fields() { # $1=type name  $2=file
+  awk -v s="type $1 = record {" '
+    index($0, s) { inb = 1; next }
+    inb && /^};/ { inb = 0 }
+    inb' "$2" \
+  | grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*: opt ' \
+  | sed -E 's/[[:space:]]*//; s/: opt .*$//' | sort -u
+}
+
+# Names of fields wrapped `IDL.Opt(...)` inside a dashboard
+# `const <Name> = IDL.Record({ ... });` literal.
+dash_record_opt_fields() { # $1=const name  $2=file
+  awk -v s="const $1 = IDL.Record({" '
+    index($0, s) { inb = 1 }
+    inb          { print }
+    inb && /}\);/ { inb = 0 }
+  ' "$2" \
+  | grep -oE '[a-z_][a-z0-9_]*[[:space:]]*:[[:space:]]*IDL\.Opt\(' \
+  | sed -E 's/[[:space:]]*:.*$//' | sort -u
+}
+
+# Contents of the dashboard's `const STRATEGY_T_OPT_FIELDS = [...]` literal
+# — the SECOND, independently hand-maintained list of the same field names,
+# used at config-save time to wrap values for the wire. Must stay identical
+# to dash_record_opt_fields(BotConfigInput, ...) or the dashboard's own
+# save flow can silently mis-encode.
+dash_opt_fields_array() { # $1=file
+  awk '
+    /const STRATEGY_T_OPT_FIELDS = \[/ { inb = 1 }
+    inb                                { print }
+    inb && /\];/                       { inb = 0; exit }
+  ' "$1" \
+  | grep -oE "'[a-z_][a-z0-9_]*'" \
+  | tr -d "'" | sort -u
+}
+
 # ── comparison ────────────────────────────────────────────────────────────
 # compare3 <label> <rust-list> <did-list> <dash-list>
 compare3() {
@@ -174,6 +234,29 @@ compare3 "BotConfigInput fields" \
   "$(did_record_fields BotConfigInput "$DID")" \
   "$(dash_record_fields BotConfigInput "$DASH")"
 
+compare3 "BotConfigInput opt-ness" \
+  "$(rust_struct_opt_fields BotConfigInput "$RUST_STATE")" \
+  "$(did_record_opt_fields BotConfigInput "$DID")" \
+  "$(dash_record_opt_fields BotConfigInput "$DASH")"
+
+# Dashboard-internal: STRATEGY_T_OPT_FIELDS (used at config-save time to
+# wire-wrap values) is a second, independent list of the same field names
+# hand-maintained in the same file — not one of the 3 cross-source pairs,
+# but a real drift risk on its own (see the finding this guards against:
+# a silent JS encode failure in the dashboard's config-save flow).
+DASH_IDL_OPT="$(dash_record_opt_fields BotConfigInput "$DASH")"
+DASH_ARRAY_OPT="$(dash_opt_fields_array "$DASH")"
+if [[ "$DASH_IDL_OPT" == "$DASH_ARRAY_OPT" ]]; then
+  n=$(printf '%s\n' "$DASH_IDL_OPT" | grep -c . || true)
+  printf '  ok   %-28s (%s entries, IDL def and array agree)\n' "STRATEGY_T_OPT_FIELDS" "$n"
+else
+  fail=1
+  printf '  DRIFT %-28s — BotConfigInput IDL opt-fields and the hand-written\n' "STRATEGY_T_OPT_FIELDS"
+  echo "        STRATEGY_T_OPT_FIELDS array disagree — the dashboard's own"
+  echo "        config-save flow will mis-wrap or miss a field:"
+  diff <(printf '%s\n' "$DASH_IDL_OPT") <(printf '%s\n' "$DASH_ARRAY_OPT") | sed 's/^/        /'
+fi
+
 compare3 "CycleSnapshot fields" \
   "$(rust_struct_fields CycleSnapshot "$RUST_STATE")" \
   "$(did_record_fields CycleSnapshot "$DID")" \
@@ -219,6 +302,62 @@ else
   echo "      Fix: for an ARGUMENT type, only add opt fields, never required ones — see the" >&2
   echo "      BotConfigInput pattern in state.rs. For a RETURN type, adding required fields is safe." >&2
   fail=1
+fi
+
+# ── InitArgs constructor-argument subtyping check (didc, via a shim) ─────
+# See the CAVEAT in the header: `didc check` on the two full service files
+# does not validate the constructor's own argument type. Extract InitArgs
+# (plus whatever type it references) from each .did and re-check it as an
+# ordinary method argument on a throwaway shim service instead.
+
+# Prints a `type <name> = record {...};` block verbatim.
+did_type_block() { # $1=type name  $2=file
+  awk -v s="type $1 = record {" '
+    index($0, s) { inb = 1 }
+    inb          { print }
+    inb && /^};/ { inb = 0; exit }
+  ' "$2"
+}
+
+# InitArgs plus every custom (capitalized) type it references, wrapped as
+# an ordinary method on a throwaway service so didc's method-argument
+# subtyping check (which DOES work) applies to it.
+init_args_shim() { # $1=file
+  local init_block dep
+  init_block="$(did_type_block InitArgs "$1")"
+  if [[ -z "$init_block" ]]; then
+    echo "FATAL: no 'type InitArgs = record { ... };' block found in $1" >&2
+    return 1
+  fi
+  dep="$(printf '%s\n' "$init_block" | grep -oE ':[[:space:]]*[A-Z][A-Za-z0-9_]*' | tr -d ' :' | sort -u)"
+  local d
+  for d in $dep; do
+    did_type_block "$d" "$1"
+  done
+  printf '%s\n' "$init_block"
+  echo "service : { __init_shim: (InitArgs) -> (); };"
+}
+
+echo
+echo "== didc check: InitArgs constructor argument is a safe subtype =="
+if ! command -v didc >/dev/null 2>&1; then
+  echo "FAIL: didc not found on PATH (see above)." >&2
+  fail=1
+else
+  NEW_SHIM="$(mktemp)"
+  OLD_SHIM="$(mktemp)"
+  trap 'rm -f "$NEW_SHIM" "$OLD_SHIM"' EXIT
+  if ! init_args_shim "$DID" > "$NEW_SHIM"; then
+    fail=1
+  elif ! init_args_shim "$DID_DEPLOYED" > "$OLD_SHIM"; then
+    fail=1
+  elif didc check "$NEW_SHIM" "$OLD_SHIM"; then
+    echo "PASS: InitArgs is backward-compatible with the currently-deployed interface."
+  else
+    echo "FAIL: InitArgs is NOT a safe subtype of the deployed InitArgs (see didc output above)." >&2
+    echo "      A fresh 'dfx canister install' from an old caller's InitArgs payload would fail." >&2
+    fail=1
+  fi
 fi
 
 exit "$fail"
