@@ -223,4 +223,23 @@ fn old_state_without_strategy_t_fields_decodes_with_defaults() {
     assert_eq!(decoded.config.strategy_t_max_trade_size_usd, 40_000_000);
     assert_eq!(decoded.config.strategy_t_icusd_floor, 500_000_000);
     assert_eq!(decoded.config.strategy_t_ckusdc_ceiling, 2_000_000_000);
+    assert_eq!(
+        decoded.config.strategy_t_icusd_ckusdc_pool,
+        Principal::anonymous(),
+        "icusd/ckusdc pool default = anonymous (master gate)"
+    );
+    assert_eq!(
+        decoded.config.strategy_t_icusd_ckusdt_pool,
+        Principal::anonymous(),
+        "icusd/ckusdt pool default = anonymous (master gate)"
+    );
+    assert_eq!(
+        decoded.config.strategy_t_ckusdt_ckusdc_pool,
+        Principal::anonymous(),
+        "ckusdt/ckusdc pool default = anonymous (master gate)"
+    );
+    assert_eq!(decoded.config.strategy_t_icusd_ceiling, 200_000_000_000, "icUSD ceiling default = 2000 icUSD");
+    assert_eq!(decoded.config.strategy_t_ckusdt_floor, 5_000_000, "ckUSDT floor default = 5 ckUSDT");
+    assert_eq!(decoded.config.strategy_t_ckusdt_ceiling, 2_000_000_000, "ckUSDT ceiling default = 2000 ckUSDT");
+    assert_eq!(decoded.config.strategy_t_ckusdc_floor, 5_000_000, "ckUSDC floor default = 5 ckUSDC");
 }

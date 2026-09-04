@@ -1587,14 +1587,7 @@ async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
 
     let max_trade_usd = config.strategy_t_max_trade_size_usd;
     let start_amount_native = move |token: strategy_t::StableToken| -> u64 {
-        // 6-dec USD max trade size converted to the token's native decimals
-        // at $1 peg — matches `par_usd_6dec`'s inverse.
-        let decimals = token.decimals() as u32;
-        if decimals >= 6 {
-            max_trade_usd * 10u64.pow(decimals - 6)
-        } else {
-            max_trade_usd / 10u64.pow(6 - decimals)
-        }
+        strategy_t::native_from_par_usd_6dec(max_trade_usd, token)
     };
 
     strategy_t::evaluate(
@@ -1979,9 +1972,32 @@ fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
     Ok(())
 }
 
+/// Sets the three Strategy T ICPSwap closing-pool principals.
+///
+/// IMPORTANT: `strategy_t::ClosingPool::zero_for_one_from` hardcodes each
+/// pool's `token0`/`token1` ordering at compile time, asserted against the
+/// specific mainnet principals documented on `ClosingPool` (verified live
+/// 2026-09-02/03) — it is not runtime-probed. This setter only validates
+/// that the three principals are non-anonymous and pairwise distinct; it
+/// does NOT verify they are actually the correct, documented pools. Pointing
+/// this at a genuinely different pool (or transposing two of the three
+/// slots) will silently produce inverted `zeroForOne` swap quotes. Runtime
+/// `metadata` probing (matching the `icusd_token_ordering_resolved` /
+/// `ckusdt_token_ordering_resolved` pattern used elsewhere in `state.rs`)
+/// is out of scope here — re-pointing to different pools requires updating
+/// `strategy_t.rs` to match.
 #[update]
 fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt_ckusdc: Principal) -> Result<(), String> {
     require_admin();
+    if icusd_ckusdc == Principal::anonymous()
+        || icusd_ckusdt == Principal::anonymous()
+        || ckusdt_ckusdc == Principal::anonymous()
+    {
+        return Err("strategy T pool principals must not be anonymous".into());
+    }
+    if icusd_ckusdc == icusd_ckusdt || icusd_ckusdc == ckusdt_ckusdc || icusd_ckusdt == ckusdt_ckusdc {
+        return Err("strategy T pool principals must be pairwise distinct".into());
+    }
     state::mutate_state(|s| {
         s.config.strategy_t_icusd_ckusdc_pool = icusd_ckusdc;
         s.config.strategy_t_icusd_ckusdt_pool = icusd_ckusdt;
@@ -1991,8 +2007,11 @@ fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt
     Ok(())
 }
 
-/// Enables Strategy T's dry-run evaluation from the arb cycle (Task 8).
-/// This build has no live-trade path — flipping this on never moves funds.
+/// Master enable switch for Strategy T. Dry-run evaluation (`dry_run_strategy_t`)
+/// runs once all three pool principals are non-anonymous, independent of
+/// this flag — there is no arb-cycle wiring for Strategy T in this build.
+/// This flag and `strategy_t_dry_run` exist for a future live-execution PR;
+/// this build has no live-trade path regardless of either value.
 #[update]
 fn set_strategy_t_enabled(enabled: bool) {
     require_admin();

@@ -3,9 +3,15 @@
 //! only — see the plan's Global Constraints for why this module never
 //! calls a fund-moving canister method.
 //!
-//! This file is split pure-first: everything above the `// ─── Live quoting
-//! ───` marker (added in later tasks) has no `ic_cdk` dependency and is
-//! covered by `tests/strategy_t_math.rs` with zero network access.
+//! This file is split pure-first, but the split is no longer a strict
+//! line-based boundary: the functions/types added in later tasks
+//! (`allowance_status_for`, `check_inventory_bands`, `TokenAmounts`,
+//! `InventoryCheck`, `rank_candidates`, `native_from_par_usd_6dec`) are pure
+//! and `ic_cdk`-free despite living below the `// ─── Live quoting ───`
+//! marker, alongside the async functions that do call out over the network
+//! (`quote_all_candidates`, `check_allowance`, `evaluate`). Each function is
+//! individually documented as pure or async; the pure ones are covered by
+//! `tests/strategy_t_math.rs` with zero network access.
 
 /// One of the three par-valued ($1) stablecoins Strategy T routes between.
 /// Rumi 3pool coin index is fixed by the pool's own token ordering
@@ -125,6 +131,18 @@ pub fn par_usd_6dec(amount_native: u64, token: StableToken) -> i64 {
         (amount_native / 10u64.pow(decimals - 6)) as i64
     } else {
         (amount_native * 10u64.pow(6 - decimals)) as i64
+    }
+}
+
+/// Inverse of `par_usd_6dec`: converts a 6-decimal-USD amount to the
+/// token's native decimals at the $1 peg. Saturates rather than
+/// overflowing on pathologically large inputs.
+pub fn native_from_par_usd_6dec(usd_6dec: u64, token: StableToken) -> u64 {
+    let decimals = token.decimals() as u32;
+    if decimals >= 6 {
+        usd_6dec.saturating_mul(10u64.pow(decimals - 6))
+    } else {
+        usd_6dec / 10u64.pow(6 - decimals)
     }
 }
 
@@ -248,15 +266,29 @@ pub async fn quote_all_candidates(
     start_amount_native: impl Fn(StableToken) -> u64,
 ) -> Vec<CandidateQuote> {
     let mut results = Vec::with_capacity(12);
+    // `all_routes()` emits each directed (start, rumi_out) leg's one-leg
+    // route immediately followed by its two-leg counterpart — always
+    // adjacent, by construction of its nested loop. Both need the identical
+    // Rumi quote (same start, rumi_out, amount_in), so cache the last one
+    // and reuse it instead of calling `pool_calc_swap` twice for the same
+    // inputs (cuts 12 Rumi calls per dry-run down to 6).
+    let mut last_rumi_quote: Option<(StableToken, StableToken, Result<u64, String>)> = None;
     for route in all_routes() {
         let amount_in = start_amount_native(route.start);
-        let rumi_result = crate::swaps::pool_calc_swap(
-            rumi_3pool,
-            route.start.rumi_coin_index(),
-            route.rumi_out.rumi_coin_index(),
-            amount_in,
-        )
-        .await;
+        let rumi_result = match &last_rumi_quote {
+            Some((s, r, res)) if *s == route.start && *r == route.rumi_out => res.clone(),
+            _ => {
+                let res = crate::swaps::pool_calc_swap(
+                    rumi_3pool,
+                    route.start.rumi_coin_index(),
+                    route.rumi_out.rumi_coin_index(),
+                    amount_in,
+                )
+                .await;
+                last_rumi_quote = Some((route.start, route.rumi_out, res.clone()));
+                res
+            }
+        };
 
         let (economic_profit_usd, fill_status, closing_leg_input_native, net_end_amount_native) =
             match (rumi_result, route.closing) {
@@ -325,9 +357,14 @@ pub async fn check_allowance(
     spender: Principal,
     this_canister: Principal,
 ) -> AllowanceStatus {
+    // ICRC-2 debits `amount + fee` from an allowance when `transferFrom`
+    // executes, so the required allowance is the deposit amount plus one
+    // ledger fee on the intermediate token (`rumi_out`) — not the deposit
+    // amount alone, or a borderline allowance could read as `Sufficient`
+    // when it's exactly one fee short.
     let required = match candidate.closing_leg_input_native {
         None => return AllowanceStatus::NotRequired,
-        Some(r) => r,
+        Some(r) => r.saturating_add(candidate.route.rumi_out.ledger_fee()),
     };
     let allowance_result = crate::swaps::query_allowance(token_ledger, this_canister, spender).await;
     allowance_status_for(required, allowance_result)
@@ -522,7 +559,18 @@ pub async fn evaluate(
         };
 
         let end_token = q.route.closing.map(|_| q.route.start).unwrap_or(q.route.rumi_out);
-        let expected_end_amount = q.net_end_amount_native;
+        // For a two-leg round trip, end_token == start_token: the balance
+        // change is the net profit (-start_amount + net_end_amount_native),
+        // not a full addition of net_end_amount_native on top of the
+        // untouched pre-trade balance (start_amount is already accounted
+        // for by start_ok, above). saturating_sub correctly floors the
+        // ceiling-side accumulation at zero for a losing candidate — a
+        // trade that loses money can't be what breaches a ceiling.
+        let expected_end_amount = if end_token == q.route.start {
+            q.net_end_amount_native.saturating_sub(start_amount)
+        } else {
+            q.net_end_amount_native
+        };
         let inventory = check_inventory_bands(
             q.route.start, start_amount, end_token, expected_end_amount, balances, floors, ceilings,
         );
