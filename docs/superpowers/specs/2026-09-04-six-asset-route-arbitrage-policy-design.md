@@ -328,9 +328,10 @@ available_native(asset) =
     ledger_balance_native(asset)
   - durable_held_reservations_native(asset)
   - active_execution_reservations_native(asset)
+  - durable_non_route_reservations_native(asset)
 ```
 
-The subtractions are checked and fail closed on underflow or inconsistent attribution. Every asset lot in a `HeldInventory` position, including a stable or ICP lot, creates a durable per-asset reservation before the global route lock is released. An implementation may instead isolate each held position in a dedicated subaccount, but it must preserve the same non-spendability invariant. Unlinked routes, volume operations, generic withdrawals, and admin tools may not consume, sweep, or count held lots as available principal. Only a separately initiated continuation linked to that held position may release or spend its reservation.
+The subtractions are checked and fail closed on underflow or inconsistent attribution. `durable_non_route_reservations_native` includes every route-relevant balance owned by another subsystem or provenance domain, including volume-bot residuals stranded in the shared default account and credits recovered from a retired venue until an explicit operator action assigns or withdraws them. Every asset lot in a `HeldInventory` position, including a stable or ICP lot, creates a durable per-asset reservation before the global route lock is released. An implementation may instead isolate held or non-route-owned balances in dedicated subaccounts, but it must preserve the same non-spendability invariant. Unlinked routes, volume operations, generic withdrawals, and admin tools may not consume, sweep, or count any encumbered balance as available principal. Only the owning subsystem's settlement/recovery path, a separately initiated continuation linked to a held position, or an explicit ownership-release action may release or spend its reservation; ownership release requires reconciled provenance and cannot be inferred from a timer or balance alone.
 
 ICP, ckBTC, and ckETH ceilings gate additional exposure; exceeding a ceiling never triggers an automatic sale. A settled balance created by a failed route remains held even when it exceeds the configured ceiling, and new candidates that would increase that exposure become ineligible.
 
@@ -439,7 +440,7 @@ A single durable account-mutation lock covers **every canister-controlled operat
 
 While the route executor owns the lock, every covered scheduled, manual, or admin-triggered operation defers before its first mutation. While any other covered operation owns the lock, route execution defers. Quote-only calls remain permitted. The implementation maintains an exhaustive inventory of Candid update entrypoints and timer callbacks, classifying each as fail-closed, lock-participating, read-only, or proven-account-disjoint; an unclassified mutator fails the acceptance gate.
 
-This deliberately changes overlap scheduling because the existing volume flow transiently uses arb default accounts; it does not change the volume bot's pool selection, sizing, subaccount ownership, recovery semantics, or balances. The lock and owner survive upgrade/restart, and an unresolved `ReconciliationRequired` incident retains the lock.
+This deliberately changes overlap scheduling because the existing volume flow transiently uses arb default accounts; it does not change the volume bot's pool selection, sizing, subaccount ownership, recovery semantics, or balances. A volume or retired-venue recovery operation may release the lock only after route-relevant funds have either returned to their owning subaccount/destination or a durable per-asset non-route ownership reservation has been persisted. If its submission or resulting credit remains ambiguous, its durable incident state retains the lock and uses the same no-guessing attribution discipline as route reconciliation. The lock, owner, and all ownership reservations survive upgrade/restart, and an unresolved `ReconciliationRequired` incident retains the lock.
 
 Legacy `clear_cycle_lock` behavior cannot release or overwrite this durable mutation lock. Resolving a stuck reconciliation lock requires source-bound settlement evidence or a separately reviewed, explicit loss-acceptance recovery design; ordinary cycle-lock administration cannot bypass attribution safety.
 
@@ -493,6 +494,7 @@ max_concurrent_quote_calls
 max_terminal_execution_records
 max_execution_record_bytes
 max_reconciliation_evidence_items
+max_open_non_route_reservations
 max_stable_principal_usd_6dec
 max_icp_principal_e8s
 min_stable_profit_usd_6dec
@@ -516,6 +518,7 @@ New APIs are additive and use the new taxonomy:
 - quote a cursor-bounded batch of the route universe and report observation completeness;
 - inspect best candidate per profit book;
 - inspect pending execution and held inventory;
+- inspect per-asset active, held, and non-route ownership reservations and resulting unencumbered balances;
 - inspect all six arb-wallet ledger balances;
 - configure route-arbitrage policy;
 - execute a descriptive route only after live execution is separately authorized.
@@ -532,9 +535,11 @@ The implementation plan must measure the full current graph and choose defaults 
 
 ### 8.2 Bounded durable storage
 
-Current execution metadata remains a single bounded record. Executions, their active per-asset funding reservations, reconciliation evidence, held per-asset reservations, and held positions live in dedicated indexed stable structures assigned new, non-overlapping memory IDs; they are not appended to heap `BotState`. Every execution record has a maximum encoded size of 65,536 bytes and at most 64 reconciliation-evidence items; any individual variable-length text/blob field is capped so the aggregate record remains encodable. Oversized evidence is rejected and reported rather than trapping a stable write.
+Current execution metadata remains a single bounded record. Executions, their active per-asset funding reservations, reconciliation evidence, held per-asset reservations, non-route ownership reservations, and held positions live in dedicated indexed stable structures assigned new, non-overlapping memory IDs; they are not appended to heap `BotState`. Every reservation records asset, native amount, provenance/owner domain, originating operation or incident ID, and reconciliation timestamp. Every execution record has a maximum encoded size of 65,536 bytes and at most 64 reconciliation-evidence items; any individual variable-length text/blob field is capped so the aggregate record remains encodable. Oversized evidence is rejected and reported rather than trapping a stable write.
 
 A held position contains at most six coalesced asset lots, one per active asset. `max_open_held_positions` is bounded by a compile-time ceiling of 256. Before beginning a route, the executor reserves capacity for one potential held position. Reaching the ceiling disables new execution without deleting, coalescing across unrelated executions, or liquidating existing holdings.
+
+`max_open_non_route_reservations` is also bounded by a compile-time ceiling of 256. Before a volume or retired-recovery operation can mutate a route-relevant account, it reserves capacity for its possible ownership record. Reaching the ceiling prevents a new such operation while preserving reconciliation and withdrawal by the owning subsystem; records from unrelated operations are never coalesced merely to regain capacity.
 
 The terminal execution log is separately paginated and capped at 10,000 records. Capacity for the current route's terminal record is reserved before its first mutation. When either the terminal-log or held-position reservation cannot be made, new live execution fails closed while quote-only observation and existing reconciliation remain available. The executor never automatically deletes history or coalesces unrelated records to regain capacity; export/pruning, if desired, requires a separately reviewed admin design.
 
@@ -552,6 +557,7 @@ The active dashboard shows:
 - current durable execution phase and settlement latency;
 - explicit rejection and held-inventory reasons;
 - arb-wallet balances for ICP, ckBTC, ckETH, icUSD, ckUSDT, and ckUSDC;
+- per-asset active-route, held-position, and non-route ownership reservations, plus unencumbered balances available to the router;
 - held positions with originating route, tagged stable-par/ICP-native/legacy-unknown principal domain, native asset lots, settled history, and reconciliation timestamp.
 
 Rumi AMM, PartyDEX, BOB arbitrage, and lettered strategies are absent from active opportunity cards. Historical views continue to render their original labels and fields as legacy data.
@@ -662,21 +668,24 @@ The design is implementation-ready only when a plan covers all of the following 
 - Persist-before-call intent and receipt tests prove `LegSubmitted` plus the complete immutable request fingerprint is durably written before the outbound call and cover acknowledged-then-trapped ledger transfers, lost DEX responses, duplicate callbacks, delayed refunds, and restarts after the ledger duplicate window; a resume from `LegSubmitted` reconciles only and an ambiguous leg is never resubmitted.
 - Adapter-specific reconciliation fixtures prove the exact source-bound predicate for full fills, partial fills, refunds, lost responses, and delayed withdrawals; a coincident amount-only external credit cannot advance the route.
 - Settlement timeout enters `ReconciliationRequired`, retains the global account-mutation lock, emits an operator-visible incident, and performs only bounded read-only evidence queries.
-- Route operations and every Candid/timer/admin operation that could mutate a shared default account cannot overlap; adversarial tests cover generic withdrawal, volume administration, active manual pool tools, and retired-venue recovery during route settlement. Quote-only observation remains available.
+- Route operations and every Candid/timer/admin operation that could mutate a shared default account cannot overlap; adversarial tests cover generic withdrawal, volume administration, active internal volume venue calls, and retired-venue recovery during route settlement. Quote-only observation remains available.
 - Legacy cycle-lock administration cannot release or overwrite a route reconciliation lock.
 - Downstream quote deterioration and `HeldInventory` transition after exact reconciliation.
 - Full refund/no-position failures transition to `Aborted`, with unavoidable fees reported accurately.
 - Held positions preserve native amounts, tagged stable-par or ICP-native principal, route attribution, settled legs, and failure reason across restart and upgrade.
 - Held ICP, ckBTC, and ckETH remain untouched across later arb cycles; no ceiling, timer, or scheduler event automatically sells them.
-- Held stable, ICP, ckBTC, and ckETH lots create durable per-asset reservations; after restart or upgrade, unrelated routes, volume operations, withdrawals, and admin tools may fund only from `ledger balance - held reservations - active reservations`.
+- Held stable, ICP, ckBTC, and ckETH lots create durable per-asset reservations; after restart or upgrade, unrelated routes, volume operations, withdrawals, and admin tools may fund only from `ledger balance - held reservations - active reservations - non-route reservations`.
 - Reservation underflow, attribution mismatch, or insufficient unencumbered balance fails closed without releasing or spending a held lot.
+- Volume-owned ICP/stable residuals and retired-venue recovery credits create durable per-asset non-route reservations (or remain in proven-disjoint accounts) before their operation can release the mutation lock; restart/upgrade tests prove they cannot fund a route or unrelated withdrawal.
+- Ambiguous volume/recovery settlement retains the durable mutation lock; reconciled return to the owning account or persistence of an ownership reservation is required before release.
 - Profit-preserving minimum-output proofs.
 - Planned-versus-realized P&L from attributable ledger deltas.
 - Global route lock, per-book scheduling, and canonical-cycle collision prevention.
 - A candidate delayed behind another lock owner is completely re-quoted and has age, identity, full-fill, allowance, unencumbered balance, inventory, native-profit, and bps eligibility revalidated after lock acquisition and immediately before first submission.
 - Candidate, execution, and held-position queries enforce cursor pagination and the page-size ceiling.
 - Held positions and execution evidence use dedicated bounded stable structures; each execution record is at most 65,536 encoded bytes with at most 64 evidence items, the terminal log contains at most 10,000 records, and capacity is reserved before submission.
-- Reaching any held-position, terminal-history, or record-size ceiling prevents a new route without deleting, coalescing unrelated records, or liquidating existing holdings; quote-only observation and existing reconciliation remain available.
+- Non-route ownership reservations use dedicated bounded stable storage with a compile-time maximum of 256 open records; capacity is reserved before a volume/recovery mutation that could strand a route-relevant asset.
+- Reaching any held-position, non-route-reservation, terminal-history, or record-size ceiling prevents the affected new mutation without deleting, coalescing unrelated records, or liquidating existing holdings; quote-only observation and existing reconciliation remain available.
 
 ### Compatibility and presentation
 
