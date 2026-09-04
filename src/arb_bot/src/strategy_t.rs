@@ -217,6 +217,14 @@ pub struct CandidateQuote {
     pub start_amount_native: u64,
     pub economic_profit_usd: i64, // meaningless unless fill_status is FullyQuoted
     pub fill_status: FillStatus,
+    /// The exact native-decimal amount (in `route.rumi_out`'s decimals)
+    /// fed into the closing pool's `quoteForAll` call — `None` for a
+    /// one-leg candidate, or when the Rumi leg itself failed. This is the
+    /// exact figure `check_allowance` needs as its required-allowance
+    /// amount; it must never be independently recomputed elsewhere, since
+    /// recomputing it from `start_amount_native` mixes decimals across
+    /// tokens (see the fix history for this field).
+    pub closing_leg_input_native: Option<u64>,
 }
 
 /// Quotes all twelve candidates for the given per-start-token trade size.
@@ -239,11 +247,11 @@ pub async fn quote_all_candidates(
         )
         .await;
 
-        let (economic_profit_usd, fill_status) = match (rumi_result, route.closing) {
-            (Err(e), _) => (0, FillStatus::RumiQuoteFailed(e)),
+        let (economic_profit_usd, fill_status, closing_leg_input_native) = match (rumi_result, route.closing) {
+            (Err(e), _) => (0, FillStatus::RumiQuoteFailed(e), None),
             (Ok(rumi_gross), None) => {
                 let profit = one_leg_net_profit_usd(route.start, amount_in, route.rumi_out, rumi_gross);
-                (profit, FillStatus::FullyQuoted)
+                (profit, FillStatus::FullyQuoted, None)
             }
             (Ok(rumi_gross), Some(closing_pool)) => {
                 let leg2_input = closing_leg_input(route.rumi_out, rumi_gross);
@@ -255,10 +263,10 @@ pub async fn quote_all_candidates(
                 )
                 .await;
                 match closing_result {
-                    Err(e) => (0, FillStatus::ClosingQuoteRejected(e)),
+                    Err(e) => (0, FillStatus::ClosingQuoteRejected(e), Some(leg2_input)),
                     Ok(closing_gross) => {
                         let profit = two_leg_net_profit_usd(route.start, amount_in, closing_gross);
-                        (profit, FillStatus::FullyQuoted)
+                        (profit, FillStatus::FullyQuoted, Some(leg2_input))
                     }
                 }
             }
@@ -269,6 +277,7 @@ pub async fn quote_all_candidates(
             start_amount_native: amount_in,
             economic_profit_usd,
             fill_status,
+            closing_leg_input_native,
         });
     }
     results
@@ -293,28 +302,26 @@ pub enum AllowanceStatus {
 
 /// Checks the allowance a two-leg candidate's closing leg needs: the
 /// intermediate token approved to spend into the closing ICPSwap pool.
-/// Returns `NotRequired` for a one-leg candidate.
+/// Returns `NotRequired` for a one-leg candidate (no closing leg) or when
+/// the Rumi quote itself failed (no actual closing amount to allocate).
 pub async fn check_allowance(
     candidate: &CandidateQuote,
     token_ledger: Principal,
     spender: Principal,
     this_canister: Principal,
 ) -> AllowanceStatus {
-    if candidate.route.closing.is_none() {
-        return AllowanceStatus::NotRequired;
-    }
-    let required = closing_leg_input(
-        candidate.route.rumi_out,
-        // Re-derive the pre-closing-fee gross amount is not available here
-        // without re-quoting; callers pass the already-computed leg2 input
-        // via `required_override` in Task 6's wiring instead of calling
-        // this helper standalone when the exact figure matters. For a
-        // conservative (never-false-positive) check, use the candidate's
-        // start amount as a floor — any real leg2 input for a profitable
-        // candidate is within a few fee-units of it.
-        candidate.start_amount_native,
-    );
-    match crate::swaps::query_allowance(token_ledger, this_canister, spender).await {
+    let required = match candidate.closing_leg_input_native {
+        None => return AllowanceStatus::NotRequired,
+        Some(r) => r,
+    };
+    let allowance_result = crate::swaps::query_allowance(token_ledger, this_canister, spender).await;
+    allowance_status_for(required, allowance_result)
+}
+
+/// Pure comparison logic for allowance sufficiency. Split out from
+/// `check_allowance` so this logic is unit-testable without a network call.
+pub fn allowance_status_for(required: u64, allowance_result: Result<(u64, Option<u64>), String>) -> AllowanceStatus {
+    match allowance_result {
         Ok((allowance, _expires_at)) if allowance >= required => AllowanceStatus::Sufficient,
         Ok((allowance, _expires_at)) => AllowanceStatus::Insufficient { allowance, required },
         Err(_) => AllowanceStatus::Insufficient { allowance: 0, required },

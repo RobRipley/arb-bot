@@ -4,8 +4,9 @@
 //! No network access — these must never require `dfx` or a running canister.
 
 use arb_bot::strategy_t::{
-    all_routes, check_inventory_bands, closing_leg_input, one_leg_net_profit_usd, par_usd_6dec,
-    two_leg_net_profit_usd, ClosingPool, StableToken, TokenAmounts,
+    all_routes, allowance_status_for, check_inventory_bands, closing_leg_input,
+    one_leg_net_profit_usd, par_usd_6dec, two_leg_net_profit_usd, AllowanceStatus,
+    ClosingPool, StableToken, TokenAmounts,
 };
 
 #[test]
@@ -149,4 +150,28 @@ fn inventory_bands_pass_within_range() {
         balances, floors, ceilings,
     );
     assert!(check.eligible());
+}
+
+#[test]
+fn allowance_status_sufficient_when_allowance_covers_required() {
+    let result = allowance_status_for(50u64, Ok((100u64, None)));
+    assert_eq!(result, AllowanceStatus::Sufficient);
+}
+
+#[test]
+fn allowance_status_insufficient_when_allowance_below_required() {
+    let result = allowance_status_for(50u64, Ok((30u64, None)));
+    assert_eq!(result, AllowanceStatus::Insufficient { allowance: 30, required: 50 });
+}
+
+#[test]
+fn allowance_status_insufficient_on_query_error() {
+    let result = allowance_status_for(50u64, Err("query failed".to_string()));
+    assert_eq!(result, AllowanceStatus::Insufficient { allowance: 0, required: 50 });
+}
+
+#[test]
+fn allowance_status_sufficient_at_exact_boundary() {
+    let result = allowance_status_for(50u64, Ok((50u64, None)));
+    assert_eq!(result, AllowanceStatus::Sufficient);
 }
