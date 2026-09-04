@@ -196,7 +196,27 @@ net_profit_bps     >= min_icp_profit_bps
 
 No ICP/USD price is required to establish profitability. Any USD rendering is informational and cannot change eligibility.
 
-### 3.4 Rejected endpoints
+### 3.4 Profit-bps normalization
+
+`net_profit_bps` always uses the candidate's **initial principal**, expressed in the same profit unit as its native profit, as the denominator. It never divides by final proceeds, gross route volume, or an oracle-converted value:
+
+```text
+stable candidate:
+  net_profit_bps = trunc_toward_zero(
+      checked_widen(net_profit_usd_6dec) * 10_000
+      / principal_usd_6dec
+  )
+
+ICP candidate:
+  net_profit_bps = trunc_toward_zero(
+      checked_widen(net_profit_icp_e8s) * 10_000
+      / principal_icp_e8s
+  )
+```
+
+The calculation uses a signed widened integer representation sufficient to multiply before division without overflow. Principal must be greater than zero. A zero principal, failed checked conversion/multiplication, quotient outside the report field's representable range, or any other arithmetic error rejects the candidate fail closed. Negative profit remains negative and truncates toward zero; it is never converted to an unsigned value. Threshold comparison uses the exact truncated integer result, so a mathematical value below 50 bps cannot become eligible for a 50-bps threshold through rounding.
+
+### 3.5 Rejected endpoints
 
 The arbitrage engine rejects a new complete candidate that begins in the stable domain and ends in ICP, ckBTC, or ckETH, or that begins in any volatile asset and ends in the stable domain. Those are inventory conversions whose profitability requires a cost-basis or valuation policy outside normal route discovery.
 
@@ -604,6 +624,7 @@ The design is implementation-ready only when a plan covers all of the following 
 - No repeated vertices, repeated pools, same-pool consecutive reversals, or embedded cycles; distinct-pool reverse directions remain eligible.
 - Exact native-decimal and ledger/DEX-fee fixtures for every edge direction.
 - Stable-par and ICP-native profit invariants, thresholds, and rounding boundaries.
+- Stable and ICP `net_profit_bps` fixtures prove initial-principal denominators, signed widened checked arithmetic, truncation toward zero, zero-principal rejection, negative-profit behavior, overflow rejection, and exact values immediately below/at/above each configured bps threshold.
 - Stable-only routes use real chained pool quotes while applying $1 par only at their accounting boundary.
 - Stable-settled routes cover every graph-reachable permitted subset and ordering of ICP, ckBTC, and ckETH within the four-leg limit; unreachable endpoint/order combinations are reported as absent rather than synthesized.
 - ckBTC and ckETH are rejected as successful route endpoints.
