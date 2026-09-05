@@ -1147,6 +1147,9 @@ async fn trigger_volume_cycle() -> String {
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         return reason;
     }
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)) {
+        return reason;
+    }
     let outcomes = volume::run_volume_cycle().await;
     if outcomes.is_empty() {
         "cycle ran, no outcomes".to_string()
@@ -1297,6 +1300,9 @@ fn get_public_health() -> state::PublicHealth {
 async fn trigger_volume_rebalance() {
     require_admin();
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        ic_cdk::trap(&reason);
+    }
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)) {
         ic_cdk::trap(&reason);
     }
     let config = state::read_state(|s| s.config.clone());

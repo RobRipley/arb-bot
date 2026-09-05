@@ -904,8 +904,8 @@ pub enum BobPool {
 
 /// Records the pool Strategy S acquired BOB through after a successful
 /// leg 1. Stage-1 retirement: this field's presence now triggers
-/// `legacy_route_freeze_reason`'s freeze on ICP/BOB spending until an
-/// operator resolves the incident manually (see Section 11).
+/// `legacy_route_freeze_reason`'s freeze on BOB spending only (not ICP)
+/// until an operator resolves the incident manually (see Section 11).
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct PendingBobExit {
     pub entry_pool: BobPool,
@@ -980,8 +980,8 @@ pub struct BotState {
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
     /// Strategy S: BOB acquired by leg 1 whose leg 2 has not completed.
-    /// Stage-1 retirement: presence of this field now freezes ICP/BOB
-    /// spending via `legacy_route_freeze_reason` until an operator
+    /// Stage-1 retirement: presence of this field now freezes BOB spending
+    /// only (not ICP) via `legacy_route_freeze_reason` until an operator
     /// resolves the incident manually.
     #[serde(default)]
     pub pending_bob_exit: Option<PendingBobExit>,
@@ -994,10 +994,13 @@ pub struct BotState {
     /// BOB amount stranded in the default account after a volume bot
     /// icUSD/BOB transfer-to-subaccount failure (BuyBob leg only — SellBob
     /// receives icUSD, which never mixed with this balance). Mirrors
-    /// `volume_stranded_icp`; the automatic drain that once had to avoid
-    /// sweeping this was deleted under Stage-1 retirement, so the
-    /// invariant is now moot — this balance is untouched by any
-    /// surviving automated method.
+    /// `volume_stranded_icp`; the automatic *arb drain* that once had to
+    /// specifically avoid sweeping this was deleted under Stage-1
+    /// retirement, so that particular invariant (arb-drain-must-not-touch-
+    /// this-balance) is now moot. This does NOT mean the balance is
+    /// untouched: `run_volume_cycle` (still live via `trigger_volume_cycle`)
+    /// reads, transfers, and zeroes this field as part of its stranded-BOB
+    /// sweep.
     #[serde(default)]
     pub volume_stranded_bob: u64,
 }
