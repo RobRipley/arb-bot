@@ -136,3 +136,14 @@ fn live_observation_adapter_contains_no_fund_moving_calls() {
     assert!(source.contains("fetch_icpswap_quote_for_all"));
     assert!(source.contains("pool_calc_swap"));
 }
+
+#[test]
+fn live_observation_applies_the_configured_concurrency_bound() {
+    let source = include_str!("../src/route_arb.rs");
+    let start = source.find("pub async fn quote_observation_items").unwrap();
+    let adapter = &source[start..];
+    assert!(
+        adapter.contains("buffered(usize::from(config.max_concurrent_quote_calls))"),
+        "quote items must be polled concurrently up to the validated configured bound"
+    );
+}
