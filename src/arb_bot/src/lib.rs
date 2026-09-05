@@ -53,18 +53,20 @@ fn post_upgrade() {
     setup_volume_timer();
 }
 
+/// Retired under Stage-1 of the six-asset route-arbitrage policy: the
+/// automatic arb-cycle timer is the "legacy automatic arbitrage timer
+/// callback" the spec requires to fail closed. Never registering it is
+/// the most directly verifiable way to guarantee it makes zero calls —
+/// there is no callback left to invoke. `ARB_TIMER_ID` is left in place
+/// (harmless — `clear_timer` on a never-set id is a no-op) rather than
+/// removed, to keep this diff minimal; a later stage may remove it
+/// entirely once the new engine's own scheduling exists.
 fn setup_timer() {
     ARB_TIMER_ID.with(|id| {
         if let Some(prev) = id.borrow_mut().take() {
             ic_cdk_timers::clear_timer(prev);
         }
     });
-    let interval = state::read_state(|s| s.config.arb_interval_secs).max(1);
-    let new_id = ic_cdk_timers::set_timer_interval(
-        std::time::Duration::from_secs(interval),
-        || ic_cdk::spawn(arb::run_arb_cycle()),
-    );
-    ARB_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
 }
 
 fn setup_volume_timer() {
@@ -76,9 +78,27 @@ fn setup_volume_timer() {
     let interval = state::read_state(|s| s.volume.interval_secs).max(1);
     let new_id = ic_cdk_timers::set_timer_interval(
         std::time::Duration::from_secs(interval),
-        || ic_cdk::spawn(async { let _ = volume::run_volume_cycle().await; }),
+        || {
+            ic_cdk::spawn(async {
+                let _ = run_volume_cycle_if_unfrozen().await;
+            })
+        },
     );
     VOLUME_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
+}
+
+async fn run_volume_cycle_if_unfrozen() -> Vec<String> {
+    if let Some(reason) = state::read_state(|s| {
+        state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)
+    }) {
+        return vec![reason];
+    }
+    if let Some(reason) = state::read_state(|s| {
+        state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)
+    }) {
+        return vec![reason];
+    }
+    volume::run_volume_cycle().await
 }
 
 fn require_admin() {
@@ -255,48 +275,7 @@ pub struct PriceInfo {
 #[update]
 async fn get_prices() -> PriceInfo {
     require_admin();
-    let config = state::read_state(|s| s.config.clone());
-    let pool_id = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-cai";
-    let strategy_a_fut = prices::fetch_all_prices(
-        config.rumi_amm, pool_id, config.icp_ledger,
-        config.rumi_3pool, config.icpswap_pool, config.icpswap_icp_is_token0,
-        6, // ckUSDC = 6 decimals
-    );
-
-    let has_icusd_pool = config.icpswap_icusd_pool != Principal::anonymous();
-    let icusd_resolved = state::read_state(|s| s.icusd_token_ordering_resolved);
-
-    let icusd_price_fut = async {
-        if has_icusd_pool && icusd_resolved {
-            prices::fetch_icpswap_price(config.icpswap_icusd_pool, config.icpswap_icusd_icp_is_token0).await.ok()
-        } else {
-            None
-        }
-    };
-
-    let (a_result, icusd_price) = futures::future::join(strategy_a_fut, icusd_price_fut).await;
-
-    match a_result {
-        Ok(p) => {
-            // Strategy B spread: icUSD/ICP vs ckUSDC/ICP (both in 6-dec USD)
-            let icusd_usd = icusd_price.map(|v| v / 100).unwrap_or(0);  // 8 dec → 6 dec
-            let ckusdc_usd = p.icpswap_price_usd_6dec();
-            let b_spread = if icusd_usd > 0 && ckusdc_usd > 0 {
-                let (i, c) = (icusd_usd as i64, ckusdc_usd as i64);
-                ((c - i) * 10_000 / i.min(c)) as i32
-            } else { 0 };
-            PriceInfo {
-                rumi_icp_price_3usd: p.rumi_icp_price_3usd_native,
-                rumi_icp_price_usd_6dec: p.rumi_price_usd_6dec(),
-                icpswap_icp_price_ckusdc: p.icpswap_icp_price_ckusdc_native,
-                virtual_price: p.virtual_price,
-                spread_bps: p.spread_bps(),
-                icpswap_icusd_icp_price: icusd_price.unwrap_or(0),
-                strategy_b_spread_bps: b_spread,
-            }
-        },
-        Err(e) => ic_cdk::trap(&format!("Price fetch failed: {}", e)),
-    }
+    ic_cdk::trap("retired: get_prices is retired under Stage-1 (mixed retired-venue price lookups) — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 // ─── Admin Methods ───
@@ -310,24 +289,9 @@ async fn get_prices() -> PriceInfo {
 /// hardcoded default, so a routine old-style config write can never
 /// silently wipe Strategy T settings made via `set_strategy_t_*`.
 #[update]
-fn set_config(config: BotConfigInput) {
+fn set_config(_config: BotConfigInput) {
     require_admin();
-    let config = state::read_state(|s| config.into_full_config(&s.config));
-    // Reject a wholesale config write that would break the ICP inventory band
-    // invariant (floor >= 1 ICP, ceiling > floor) — the drain depends on it.
-    // A stale cached dashboard omitting the band fields decodes to the valid
-    // serde defaults, so this only trips on genuinely bad values.
-    if config.icp_inventory_floor_e8s < 100_000_000
-        || config.icp_inventory_ceiling_e8s <= config.icp_inventory_floor_e8s
-    {
-        ic_cdk::trap("set_config rejected: invalid ICP inventory band (need floor >= 1 ICP and ceiling > floor)");
-    }
-    state::mutate_state(|s| {
-        let original_owner = s.config.owner;
-        s.config = config;
-        // Preserve owner — only the canister controller can change ownership
-        s.config.owner = original_owner;
-    });
+    ic_cdk::trap("retired: set_config is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 #[update]
@@ -362,13 +326,9 @@ fn clear_cycle_lock() {
 /// (every strategy that trades against `rumi_amm`) without touching the
 /// other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
 #[update]
-fn set_rumi_amm_paused(paused: bool) -> Result<(), String> {
+fn set_rumi_amm_paused(_paused: bool) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| { s.config.rumi_amm_paused = paused; });
-    state::log_activity("admin", &format!(
-        "rumi_amm_paused set to {} by {}", paused, ic_cdk::api::caller()
-    ));
-    Ok(())
+    Err("retired: set_rumi_amm_paused is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 // 3pool underlying token ledgers (icUSD=0, ckUSDT=1, ckUSDC=2)
@@ -392,109 +352,26 @@ fn pool_token_decimals(coin_index: u8) -> u8 {
 #[update]
 async fn setup_approvals() -> String {
     require_admin();
-    let config = state::read_state(|s| s.config.clone());
-
-    let icusd = Principal::from_text(ICUSD_LEDGER).unwrap();
-    let ckusdt = Principal::from_text(CKUSDT_LEDGER).unwrap();
-
-    let mut ok = Vec::new();
-    let mut errors = Vec::new();
-
-    let mut approvals: Vec<(&str, Principal, Principal)> = vec![
-        ("3USD→RumiAMM", config.three_usd_ledger, config.rumi_amm),
-        ("ICP→RumiAMM", config.icp_ledger, config.rumi_amm),
-        ("ICP→ICPSwap", config.icp_ledger, config.icpswap_pool),
-        ("ckUSDC→ICPSwap", config.ckusdc_ledger, config.icpswap_pool),
-        ("icUSD→3pool", icusd, config.rumi_3pool),
-        ("ckUSDT→3pool", ckusdt, config.rumi_3pool),
-        ("ckUSDC→3pool", config.ckusdc_ledger, config.rumi_3pool),
-    ];
-
-    // Strategy B approvals (if icUSD pool is configured)
-    if config.icpswap_icusd_pool != Principal::anonymous() {
-        approvals.push(("icUSD→ICPSwap-icUSD", config.icusd_ledger, config.icpswap_icusd_pool));
-        approvals.push(("ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool));
-    }
-
-    // Strategy C approvals (if ckUSDT pool is configured)
-    if config.icpswap_ckusdt_pool != Principal::anonymous() {
-        approvals.push(("ckUSDT→ICPSwap-ckUSDT", config.ckusdt_ledger, config.icpswap_ckusdt_pool));
-        approvals.push(("ICP→ICPSwap-ckUSDT", config.icp_ledger, config.icpswap_ckusdt_pool));
-    }
-
-    // Strategy G/H/I/J approvals (if 3USD ICPSwap pool is configured)
-    if config.icpswap_3usd_pool != Principal::anonymous() {
-        approvals.push(("3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool));
-        approvals.push(("ICP→ICPSwap-3USD", config.icp_ledger, config.icpswap_3usd_pool));
-    }
-
-    // PartyDEX approvals (Strategies K/L/M/Q in PR2b, if the ckUSDC pool is configured)
-    if config.partydex_ckusdc_pool != Principal::anonymous() {
-        approvals.push(("ICP→PartyDEX-ckUSDC", config.icp_ledger, config.partydex_ckusdc_pool));
-        approvals.push(("ckUSDC→PartyDEX-ckUSDC", config.ckusdc_ledger, config.partydex_ckusdc_pool));
-    }
-
-    // PartyDEX approvals (Strategies N/O/P/R in PR2b, if the ckUSDT pool is configured)
-    if config.partydex_ckusdt_pool != Principal::anonymous() {
-        approvals.push(("ICP→PartyDEX-ckUSDT", config.icp_ledger, config.partydex_ckusdt_pool));
-        approvals.push(("ckUSDT→PartyDEX-ckUSDT", config.ckusdt_ledger, config.partydex_ckusdt_pool));
-    }
-
-    // Strategy S approvals (if BOB pools are configured)
-    if config.icpswap_bob_icp_pool != Principal::anonymous() {
-        approvals.push(("BOB→ICPSwap-BOB-ICP", config.bob_ledger, config.icpswap_bob_icp_pool));
-        approvals.push(("ICP→ICPSwap-BOB-ICP", config.icp_ledger, config.icpswap_bob_icp_pool));
-    }
-    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
-        approvals.push(("icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
-        approvals.push(("BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
-    }
-
-    for (label, ledger, spender) in approvals {
-        match swaps::approve_infinite(ledger, spender).await {
-            Ok(_) => {
-                state::log_activity("approval", &format!("{}: approved", label));
-                ok.push(label.to_string());
-            }
-            Err(e) => {
-                state::log_activity("approval", &format!("{}: failed — {}", label, e));
-                errors.push(format!("{}: {}", label, e));
-            }
-        }
-    }
-
-    // Volume bot subaccount approvals
-    let mut volume_approvals = vec![
-        ("Vol: icUSD→ICPSwap-icUSD", config.icusd_ledger, config.icpswap_icusd_pool),
-        ("Vol: ICP→ICPSwap-icUSD", config.icp_ledger, config.icpswap_icusd_pool),
-        ("Vol: 3USD→ICPSwap-3USD", config.three_usd_ledger, config.icpswap_3usd_pool),
-        ("Vol: ICP→ICPSwap-3USD", config.icp_ledger, config.icpswap_3usd_pool),
-        ("Vol: ICP→RumiAMM", config.icp_ledger, config.rumi_amm),
-        ("Vol: 3USD→RumiAMM", config.three_usd_ledger, config.rumi_amm),
-        ("Vol: icUSD→3pool", config.icusd_ledger, config.rumi_3pool),
-    ];
-    // Volume bot icUSD/BOB approvals (if the icUSD/BOB pool is configured)
-    if config.icpswap_icusd_bob_pool != Principal::anonymous() {
-        volume_approvals.push(("Vol: icUSD→ICPSwap-icUSD-BOB", config.icusd_ledger, config.icpswap_icusd_bob_pool));
-        volume_approvals.push(("Vol: BOB→ICPSwap-icUSD-BOB", config.bob_ledger, config.icpswap_icusd_bob_pool));
-    }
-    for (label, token, spender) in volume_approvals {
-        match swaps::approve_infinite_subaccount(token, spender, swaps::VOLUME_SUBACCOUNT).await {
-            Ok(_) => ok.push(format!("{}: OK", label)),
-            Err(e) => errors.push(format!("{}: FAILED {:?}", label, e)),
-        }
-    }
-
-    let mut msg = format!("{}/{} approvals succeeded", ok.len(), ok.len() + errors.len());
-    if !errors.is_empty() {
-        msg.push_str(&format!(" (skipped: {})", errors.join("; ")));
-    }
-    msg
+    "retired: setup_approvals is retired under Stage-1 — active-pool allowances now require a separately named, spender-specific admin action (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md); no approval was granted".to_string()
 }
 
 #[update]
 async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     require_admin();
+
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        ic_cdk::trap(&reason);
+    }
 
     let transfer_args = icrc_ledger_types::icrc1::transfer::TransferArg {
         from_subaccount: None,
@@ -537,6 +414,9 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
 #[update]
 async fn recover_partydex_balance(pool: Principal) -> Result<(u64, u64), String> {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        return Err(reason);
+    }
     let result = partydex::withdraw_all(pool).await;
     match &result {
         Ok((base_out, quote_out)) => state::log_activity("recover", &format!(
@@ -560,131 +440,46 @@ pub struct PoolQuote {
 /// Deposit a single stablecoin into the 3pool to mint 3USD LP tokens.
 /// coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC
 #[update]
-async fn pool_deposit(coin_index: u8, amount: u64, min_lp_out: u64) {
+async fn pool_deposit(_coin_index: u8, _amount: u64, _min_lp_out: u64) {
     require_admin();
-    if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-    let mut amounts = vec![Nat::from(0u64), Nat::from(0u64), Nat::from(0u64)];
-    amounts[coin_index as usize] = Nat::from(amount);
-
-    let token_name = match coin_index { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
-    match swaps::pool_add_liquidity(rumi_3pool, amounts, min_lp_out).await {
-        Ok(lp_minted) => {
-            state::log_activity("pool_deposit", &format!(
-                "{} {} → {} 3USD LP (min: {}) by {}",
-                amount, token_name, lp_minted, min_lp_out, ic_cdk::api::caller()
-            ));
-        }
-        Err(e) => {
-            state::log_activity("pool_deposit", &format!(
-                "FAILED: {} {} (min_lp: {}) — {} by {}",
-                amount, token_name, min_lp_out, e, ic_cdk::api::caller()
-            ));
-            ic_cdk::trap(&format!("Pool deposit failed: {}", e));
-        }
-    }
+    ic_cdk::trap("retired: pool_deposit is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Redeem 3USD LP tokens for a single stablecoin.
 /// coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC
 #[update]
-async fn pool_redeem(coin_index: u8, lp_amount: u64, min_out: u64) {
+async fn pool_redeem(_coin_index: u8, _lp_amount: u64, _min_out: u64) {
     require_admin();
-    if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-
-    let token_name = match coin_index { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
-    match swaps::pool_remove_one_coin(rumi_3pool, lp_amount, coin_index, min_out).await {
-        Ok(amount_out) => {
-            state::log_activity("pool_redeem", &format!(
-                "{} 3USD LP → {} {} (min: {}) by {}",
-                lp_amount, amount_out, token_name, min_out, ic_cdk::api::caller()
-            ));
-        }
-        Err(e) => {
-            state::log_activity("pool_redeem", &format!(
-                "FAILED: {} 3USD LP → {} (min: {}) — {} by {}",
-                lp_amount, token_name, min_out, e, ic_cdk::api::caller()
-            ));
-            ic_cdk::trap(&format!("Pool redeem failed: {}", e));
-        }
-    }
+    ic_cdk::trap("retired: pool_redeem is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Quote how much 3USD LP you'd get from depositing a stablecoin.
 #[update]
-async fn pool_quote_deposit(coin_index: u8, amount: u64) -> PoolQuote {
+async fn pool_quote_deposit(_coin_index: u8, _amount: u64) -> PoolQuote {
     require_admin();
-    if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-    let mut amounts = vec![Nat::from(0u64), Nat::from(0u64), Nat::from(0u64)];
-    amounts[coin_index as usize] = Nat::from(amount);
-
-    match swaps::pool_calc_deposit(rumi_3pool, amounts).await {
-        Ok(lp_out) => PoolQuote { estimated_output: lp_out },
-        Err(e) => ic_cdk::trap(&format!("Quote failed: {}", e)),
-    }
+    ic_cdk::trap("retired: pool_quote_deposit is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Quote how much stablecoin you'd get from redeeming 3USD LP.
 #[update]
-async fn pool_quote_redeem(coin_index: u8, lp_amount: u64) -> PoolQuote {
+async fn pool_quote_redeem(_coin_index: u8, _lp_amount: u64) -> PoolQuote {
     require_admin();
-    if coin_index > 2 { ic_cdk::trap("Invalid coin index (0-2)"); }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-
-    match swaps::pool_calc_redeem(rumi_3pool, lp_amount, coin_index).await {
-        Ok(amount_out) => PoolQuote { estimated_output: amount_out },
-        Err(e) => ic_cdk::trap(&format!("Quote failed: {}", e)),
-    }
+    ic_cdk::trap("retired: pool_quote_redeem is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Swap one stablecoin for another directly via the 3pool.
 /// coin_in/coin_out: 0=icUSD, 1=ckUSDT, 2=ckUSDC
 #[update]
-async fn pool_exchange(coin_in: u8, coin_out: u8, amount_in: u64, min_out: u64) {
+async fn pool_exchange(_coin_in: u8, _coin_out: u8, _amount_in: u64, _min_out: u64) {
     require_admin();
-    if coin_in > 2 || coin_out > 2 || coin_in == coin_out {
-        ic_cdk::trap("Invalid coin indices (0-2, must differ)");
-    }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-    let name_in = match coin_in { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
-    let name_out = match coin_out { 0 => "icUSD", 1 => "ckUSDT", _ => "ckUSDC" };
-    match swaps::pool_swap(rumi_3pool, coin_in, coin_out, amount_in, min_out).await {
-        Ok(amount_out) => {
-            state::log_activity("pool_exchange", &format!(
-                "{} {} → {} {} (min: {}) by {}",
-                amount_in, name_in, amount_out, name_out, min_out, ic_cdk::api::caller()
-            ));
-        }
-        Err(e) => {
-            state::log_activity("pool_exchange", &format!(
-                "FAILED: {} {} → {} (min: {}) — {} by {}",
-                amount_in, name_in, name_out, min_out, e, ic_cdk::api::caller()
-            ));
-            ic_cdk::trap(&format!("Pool exchange failed: {}", e));
-        }
-    }
+    ic_cdk::trap("retired: pool_exchange is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Quote a direct stablecoin-to-stablecoin swap via the 3pool.
 #[update]
-async fn pool_quote_exchange(coin_in: u8, coin_out: u8, amount_in: u64) -> PoolQuote {
+async fn pool_quote_exchange(_coin_in: u8, _coin_out: u8, _amount_in: u64) -> PoolQuote {
     require_admin();
-    if coin_in > 2 || coin_out > 2 || coin_in == coin_out {
-        ic_cdk::trap("Invalid coin indices (0-2, must differ)");
-    }
-
-    let rumi_3pool = state::read_state(|s| s.config.rumi_3pool);
-    match swaps::pool_calc_swap(rumi_3pool, coin_in, coin_out, amount_in).await {
-        Ok(amount_out) => PoolQuote { estimated_output: amount_out },
-        Err(e) => ic_cdk::trap(&format!("Quote failed: {}", e)),
-    }
+    ic_cdk::trap("retired: pool_quote_exchange is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 // ─── Rumi AMM Manual Swap ───
@@ -693,37 +488,16 @@ const RUMI_POOL_ID: &str = "fohh4-yyaaa-aaaap-qtkpa-cai_ryjl3-tyaaa-aaaaa-aaaba-
 
 /// Quote a Rumi AMM swap (ICP ↔ 3USD). token_in is the ledger of the token being sold.
 #[update]
-async fn rumi_quote(token_in: Principal, amount: u64) -> PoolQuote {
+async fn rumi_quote(_token_in: Principal, _amount: u64) -> PoolQuote {
     require_admin();
-    let rumi_amm = state::read_state(|s| s.config.rumi_amm);
-    match prices::fetch_rumi_quote_for_amount(rumi_amm, RUMI_POOL_ID, token_in, amount).await {
-        Ok(out) => PoolQuote { estimated_output: out },
-        Err(e) => ic_cdk::trap(&format!("Rumi quote failed: {}", e)),
-    }
+    ic_cdk::trap("retired: rumi_quote is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Execute a Rumi AMM swap (ICP ↔ 3USD). token_in is the ledger of the token being sold.
 #[update]
-async fn rumi_manual_swap(token_in: Principal, amount: u64, min_out: u64) {
+async fn rumi_manual_swap(_token_in: Principal, _amount: u64, _min_out: u64) {
     require_admin();
-    let rumi_amm = state::read_state(|s| s.config.rumi_amm);
-    let caller = ic_cdk::api::caller();
-
-    match swaps::rumi_swap(rumi_amm, RUMI_POOL_ID, token_in, amount, min_out).await {
-        Ok(out) => {
-            state::log_activity("swap", &format!(
-                "Rumi AMM manual swap: {} in (token_in={}) → {} out (min: {}) by {}",
-                amount, token_in, out, min_out, caller
-            ));
-        }
-        Err(e) => {
-            state::log_activity("swap", &format!(
-                "Rumi AMM manual swap FAILED: {} in (token_in={}) — {} by {}",
-                amount, token_in, e, caller
-            ));
-            ic_cdk::trap(&format!("Rumi swap failed: {}", e));
-        }
-    }
+    ic_cdk::trap("retired: rumi_manual_swap is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 // ─── Volume Subaccount Manual Swaps ───
@@ -738,6 +512,9 @@ const VOL_ICUSD_FEE: u64 = 100_000;
 #[update]
 async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        ic_cdk::trap(&reason);
+    }
     let (rumi_amm, icp_ledger, three_usd_ledger, icusd_ledger, rumi_3pool) = state::read_state(|s| {
         (s.config.rumi_amm, s.config.icp_ledger, s.config.three_usd_ledger,
          Principal::from_text("t6bor-paaaa-aaaap-qrd5q-cai").unwrap(),
@@ -828,108 +605,93 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
 /// NOTE: Post stable-memory migration, this now APPENDS (previously prepended).
 /// Chronological ordering of historical entries is not preserved.
 #[update]
-fn backfill_trade_legs(legs: Vec<TradeLeg>) {
+fn backfill_trade_legs(_legs: Vec<TradeLeg>) {
     require_admin();
-    let count = state::append_trade_legs_batch(legs);
-    state::log_activity("admin", &format!("Backfilled {} historical trade legs", count));
+    ic_cdk::trap("retired: backfill_trade_legs is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 #[update]
 async fn manual_arb_cycle() {
     require_admin();
-    state::log_activity("admin", &format!("Manual arb cycle triggered by {}", ic_cdk::api::caller()));
-    arb::run_arb_cycle().await;
+    ic_cdk::trap("retired: manual_arb_cycle is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 #[update]
 async fn execute_strategy_a() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy A by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("A").await;
+    ic_cdk::trap("retired: execute_strategy_a is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_b() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy B by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("B").await;
+    ic_cdk::trap("retired: execute_strategy_b is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_c() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy C by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("C").await;
+    ic_cdk::trap("retired: execute_strategy_c is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_d() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy D by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("D").await;
+    ic_cdk::trap("retired: execute_strategy_d is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_f() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy F by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("F").await;
+    ic_cdk::trap("retired: execute_strategy_f is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_k() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy K by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("K").await;
+    ic_cdk::trap("retired: execute_strategy_k is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_l() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy L by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("L").await;
+    ic_cdk::trap("retired: execute_strategy_l is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_m() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy M by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("M").await;
+    ic_cdk::trap("retired: execute_strategy_m is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_n() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy N by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("N").await;
+    ic_cdk::trap("retired: execute_strategy_n is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_o() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy O by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("O").await;
+    ic_cdk::trap("retired: execute_strategy_o is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_p() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy P by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("P").await;
+    ic_cdk::trap("retired: execute_strategy_p is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_q() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy Q by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("Q").await;
+    ic_cdk::trap("retired: execute_strategy_q is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn execute_strategy_r() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy R by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("R").await;
+    ic_cdk::trap("retired: execute_strategy_r is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 /// Admin override for Strategy S — executes regardless of
@@ -937,698 +699,137 @@ async fn execute_strategy_r() {
 #[update]
 async fn execute_strategy_s() {
     require_admin();
-    state::log_activity("admin", &format!("Force-execute strategy S by {}", ic_cdk::api::caller()));
-    arb::run_specific_strategy("S").await;
+    ic_cdk::trap("retired: execute_strategy_s is retired under the Stage-1 lettered-strategy retirement (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md)");
 }
 
 #[update]
 async fn dry_run_arb_cycle() -> arb::DryRunResult {
     require_admin();
-
-    // Ensure token ordering is resolved first (Strategy A)
-    let resolved = state::read_state(|s| s.token_ordering_resolved);
-    if !resolved {
-        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icp_is_token0 = icp_is_token0;
-                    s.token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-
-    // Resolve Strategy B token ordering if needed
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if has_icusd_pool && !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            state::mutate_state(|s| {
-                s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                s.icusd_token_ordering_resolved = true;
-            });
-        }
-    }
-
-    let config = state::read_state(|s| s.config.clone());
-    let target_a = arb::IcpswapTarget {
-        pool: config.icpswap_pool,
-        icp_is_token0: config.icpswap_icp_is_token0,
-        label: "ICPSwap",
-        strategy_tag: "A",
-        stable_token_name: "ckUSDC",
-        stable_fee: 10_000,
-        stable_ledger: config.ckusdc_ledger,
-        pool_enum: state::Pool::IcpswapCkusdc,
-        stable_decimals: 6,
-        uses_vp: false,
-        venue: state::Venue::Icpswap,
-        fee_pips: 0,
-    };
-    match arb::compute_optimal_trade(&config, &target_a).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_arb_cycle is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_c() -> arb::DryRunResult {
     require_admin();
-
-    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
-        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
-    });
-    if !has_ckusdt_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy C not configured (no ckUSDT pool)".to_string();
-        return result;
-    }
-    if !ckusdt_resolved {
-        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
-                    s.ckusdt_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    let target_c = arb::IcpswapTarget {
-        pool: config.icpswap_ckusdt_pool,
-        icp_is_token0: config.icpswap_ckusdt_icp_is_token0,
-        label: "ICPSwap-ckUSDT",
-        strategy_tag: "C",
-        stable_token_name: "ckUSDT",
-        stable_fee: 10_000,
-        stable_ledger: config.ckusdt_ledger,
-        pool_enum: state::Pool::IcpswapCkusdt,
-        stable_decimals: 6,
-        uses_vp: false,
-        venue: state::Venue::Icpswap,
-        fee_pips: 0,
-    };
-    match arb::compute_optimal_trade(&config, &target_c).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[C] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_c is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_d() -> arb::DryRunResult {
     require_admin();
-
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if !has_icusd_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy D not configured (no icUSD pool)".to_string();
-        return result;
-    }
-    if !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                    s.icusd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    let target_d = arb::IcpswapTarget {
-        pool: config.icpswap_icusd_pool,
-        icp_is_token0: config.icpswap_icusd_icp_is_token0,
-        label: "ICPSwap-icUSD",
-        strategy_tag: "D",
-        stable_token_name: "icUSD",
-        stable_fee: 100_000,
-        stable_ledger: config.icusd_ledger,
-        pool_enum: state::Pool::IcpswapIcusd,
-        stable_decimals: 8,
-        uses_vp: false,
-        venue: state::Venue::Icpswap,
-        fee_pips: 0,
-    };
-    match arb::compute_optimal_trade(&config, &target_d).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[D] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_d is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_b() -> arb::DryRunResult {
     require_admin();
-
-    // Resolve both pool orderings
-    let resolved = state::read_state(|s| s.token_ordering_resolved);
-    if !resolved {
-        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
-        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
-            state::mutate_state(|s| {
-                s.config.icpswap_icp_is_token0 = icp_is_token0;
-                s.token_ordering_resolved = true;
-            });
-        }
-    }
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if !has_icusd_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy B not configured (no icUSD pool)".to_string();
-        return result;
-    }
-    if !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                    s.icusd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-
-    let config = state::read_state(|s| s.config.clone());
-    let target = build_cross_b(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[B] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_b is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_f() -> arb::DryRunResult {
     require_admin();
-
-    // Resolve ckUSDC/ICP pool ordering (needed as reference)
-    let resolved = state::read_state(|s| s.token_ordering_resolved);
-    if !resolved {
-        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
-        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
-            state::mutate_state(|s| {
-                s.config.icpswap_icp_is_token0 = icp_is_token0;
-                s.token_ordering_resolved = true;
-            });
-        }
-    }
-    // Resolve icUSD pool ordering
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if !has_icusd_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy F not configured (no icUSD pool)".to_string();
-        return result;
-    }
-    if !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                    s.icusd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    // Resolve ckUSDT pool ordering
-    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
-        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
-    });
-    if !has_ckusdt_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy F not configured (no ckUSDT pool)".to_string();
-        return result;
-    }
-    if !ckusdt_resolved {
-        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
-                    s.ckusdt_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-
-    let config = state::read_state(|s| s.config.clone());
-    let target = build_cross_f(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[F] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_f is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_k() -> arb::DryRunResult {
     require_admin();
-
-    // K's ICPSwap side reuses the main ckUSDC/ICP pool ordering.
-    let resolved = state::read_state(|s| s.token_ordering_resolved);
-    if !resolved {
-        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
-        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
-            state::mutate_state(|s| {
-                s.config.icpswap_icp_is_token0 = icp_is_token0;
-                s.token_ordering_resolved = true;
-            });
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdc_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy K not configured (no PartyDEX ckUSDC pool)".to_string();
-        return result;
-    }
-    let target = build_cross_k(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[K] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_k is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_l() -> arb::DryRunResult {
     require_admin();
-
-    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
-        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
-    });
-    if !has_ckusdt_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy L not configured (no ckUSDT pool)".to_string();
-        return result;
-    }
-    if !ckusdt_resolved {
-        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
-                    s.ckusdt_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdc_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy L not configured (no PartyDEX ckUSDC pool)".to_string();
-        return result;
-    }
-    let target = build_cross_l(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[L] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_l is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_m() -> arb::DryRunResult {
     require_admin();
-
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if !has_icusd_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy M not configured (no icUSD pool)".to_string();
-        return result;
-    }
-    if !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                    s.icusd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdc_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy M not configured (no PartyDEX ckUSDC pool)".to_string();
-        return result;
-    }
-    let target = build_cross_m(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[M] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_m is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_n() -> arb::DryRunResult {
     require_admin();
-
-    // N's ICPSwap side reuses the main ckUSDC/ICP pool ordering.
-    let resolved = state::read_state(|s| s.token_ordering_resolved);
-    if !resolved {
-        let (icpswap_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_pool, s.config.icp_ledger));
-        if let Ok(icp_is_token0) = prices::fetch_icpswap_token_ordering(icpswap_pool, icp_ledger).await {
-            state::mutate_state(|s| {
-                s.config.icpswap_icp_is_token0 = icp_is_token0;
-                s.token_ordering_resolved = true;
-            });
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdt_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy N not configured (no PartyDEX ckUSDT pool)".to_string();
-        return result;
-    }
-    let target = build_cross_n(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[N] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_n is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_o() -> arb::DryRunResult {
     require_admin();
-
-    let (ckusdt_resolved, has_ckusdt_pool) = state::read_state(|s| {
-        (s.ckusdt_token_ordering_resolved, s.config.icpswap_ckusdt_pool != Principal::anonymous())
-    });
-    if !has_ckusdt_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy O not configured (no ckUSDT pool)".to_string();
-        return result;
-    }
-    if !ckusdt_resolved {
-        let (ckusdt_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_ckusdt_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(ckusdt_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_ckusdt_icp_is_token0 = icp_is_token0;
-                    s.ckusdt_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve ckUSDT pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdt_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy O not configured (no PartyDEX ckUSDT pool)".to_string();
-        return result;
-    }
-    let target = build_cross_o(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[O] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_o is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_p() -> arb::DryRunResult {
     require_admin();
-
-    let (icusd_resolved, has_icusd_pool) = state::read_state(|s| {
-        (s.icusd_token_ordering_resolved, s.config.icpswap_icusd_pool != Principal::anonymous())
-    });
-    if !has_icusd_pool {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy P not configured (no icUSD pool)".to_string();
-        return result;
-    }
-    if !icusd_resolved {
-        let (icusd_pool, icp_ledger) = state::read_state(|s| (s.config.icpswap_icusd_pool, s.config.icp_ledger));
-        match prices::fetch_icpswap_token_ordering(icusd_pool, icp_ledger).await {
-            Ok(icp_is_token0) => {
-                state::mutate_state(|s| {
-                    s.config.icpswap_icusd_icp_is_token0 = icp_is_token0;
-                    s.icusd_token_ordering_resolved = true;
-                });
-            }
-            Err(e) => {
-                let mut result = arb::DryRunResult::default();
-                result.message = format!("Failed to resolve icUSD pool token ordering: {}", e);
-                return result;
-            }
-        }
-    }
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdt_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy P not configured (no PartyDEX ckUSDT pool)".to_string();
-        return result;
-    }
-    let target = build_cross_p(&config);
-    match arb::compute_optimal_cross_pool_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[P] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_p is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_q() -> arb::DryRunResult {
     require_admin();
-
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdc_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy Q not configured (no PartyDEX ckUSDC pool)".to_string();
-        return result;
-    }
-    let target = arb::IcpswapTarget {
-        pool: config.partydex_ckusdc_pool,
-        icp_is_token0: true,
-        label: "PartyDEX-ckUSDC",
-        strategy_tag: "Q",
-        stable_token_name: "ckUSDC",
-        stable_fee: CKUSDC_FEE,
-        stable_ledger: config.ckusdc_ledger,
-        pool_enum: state::Pool::PartyDexIcpCkusdc,
-        stable_decimals: 6,
-        uses_vp: false,
-        venue: state::Venue::PartyDex,
-        fee_pips: config.partydex_ckusdc_fee_pips,
-    };
-    match arb::compute_optimal_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[Q] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_q is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_r() -> arb::DryRunResult {
     require_admin();
-
-    let config = state::read_state(|s| s.config.clone());
-    if config.partydex_ckusdt_pool == Principal::anonymous() {
-        let mut result = arb::DryRunResult::default();
-        result.message = "Strategy R not configured (no PartyDEX ckUSDT pool)".to_string();
-        return result;
-    }
-    let target = arb::IcpswapTarget {
-        pool: config.partydex_ckusdt_pool,
-        icp_is_token0: true,
-        label: "PartyDEX-ckUSDT",
-        strategy_tag: "R",
-        stable_token_name: "ckUSDT",
-        stable_fee: CKUSDT_FEE,
-        stable_ledger: config.ckusdt_ledger,
-        pool_enum: state::Pool::PartyDexIcpCkusdt,
-        stable_decimals: 6,
-        uses_vp: false,
-        venue: state::Venue::PartyDex,
-        fee_pips: config.partydex_ckusdt_fee_pips,
-    };
-    match arb::compute_optimal_trade(&config, &target).await {
-        Ok(dr) => dr,
-        Err(e) => {
-            let mut result = arb::DryRunResult::default();
-            result.message = format!("[R] Computation failed: {}", e);
-            result
-        }
+    arb::DryRunResult {
+        message: "retired: dry_run_strategy_r is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string(),
+        ..Default::default()
     }
 }
 
 #[update]
 async fn dry_run_strategy_t() -> strategy_t::StrategyTDryRunResult {
     require_admin();
-
-    let config = state::read_state(|s| s.config.clone());
-    if config.strategy_t_icusd_ckusdc_pool == Principal::anonymous()
-        || config.strategy_t_icusd_ckusdt_pool == Principal::anonymous()
-        || config.strategy_t_ckusdt_ckusdc_pool == Principal::anonymous()
-    {
-        return strategy_t::StrategyTDryRunResult {
-            candidates: vec![],
-            best_economic: None,
-            best_executable: None,
-        };
+    // Strategy T's own report type carries no message field; an empty
+    // result set is the honest "retired, nothing evaluated" value —
+    // never a fabricated candidate.
+    strategy_t::StrategyTDryRunResult {
+        candidates: Vec::new(),
+        best_economic: None,
+        best_executable: None,
     }
-
-    let this_canister = ic_cdk::id();
-    let pools = strategy_t::PoolPrincipals {
-        icusd_ckusdc: config.strategy_t_icusd_ckusdc_pool,
-        icusd_ckusdt: config.strategy_t_icusd_ckusdt_pool,
-        ckusdt_ckusdc: config.strategy_t_ckusdt_ckusdc_pool,
-    };
-    let ledgers = strategy_t::TokenLedgers {
-        icusd: config.icusd_ledger,
-        ckusdt: config.ckusdt_ledger,
-        ckusdc: config.ckusdc_ledger,
-    };
-
-    let (icusd_bal, ckusdt_bal, ckusdc_bal) = futures::future::join3(
-        swaps::icrc1_balance_of_default(config.icusd_ledger),
-        swaps::icrc1_balance_of_default(config.ckusdt_ledger),
-        swaps::icrc1_balance_of_default(config.ckusdc_ledger),
-    ).await;
-    // A failed balance fetch must fail eligibility closed, not silently
-    // become a zero balance — a zero START balance is conservative, but a
-    // zero END balance is permissive (it can never trip a ceiling check).
-    // `balance_known` carries which fetches actually succeeded; `evaluate`
-    // forces `inventory_eligible = false` with an explicit diagnostic for
-    // any candidate touching a token whose balance is unknown this cycle.
-    let balance_known = strategy_t::TokenKnown {
-        icusd: icusd_bal.is_ok(),
-        ckusdt: ckusdt_bal.is_ok(),
-        ckusdc: ckusdc_bal.is_ok(),
-    };
-    let balances = strategy_t::TokenAmounts {
-        icusd: icusd_bal.unwrap_or(0),
-        ckusdt: ckusdt_bal.unwrap_or(0),
-        ckusdc: ckusdc_bal.unwrap_or(0),
-    };
-    let floors = strategy_t::TokenAmounts {
-        icusd: config.strategy_t_icusd_floor,
-        ckusdt: config.strategy_t_ckusdt_floor,
-        ckusdc: config.strategy_t_ckusdc_floor,
-    };
-    let ceilings = strategy_t::TokenAmounts {
-        icusd: config.strategy_t_icusd_ceiling,
-        ckusdt: config.strategy_t_ckusdt_ceiling,
-        ckusdc: config.strategy_t_ckusdc_ceiling,
-    };
-
-    let max_trade_usd = config.strategy_t_max_trade_size_usd;
-    let start_amount_native = move |token: strategy_t::StableToken| -> u64 {
-        strategy_t::native_from_par_usd_6dec(max_trade_usd, token)
-    };
-
-    strategy_t::evaluate(
-        config.rumi_3pool,
-        pools,
-        this_canister,
-        ledgers,
-        start_amount_native,
-        config.strategy_t_min_profit_usd,
-        config.strategy_t_min_profit_bps,
-        balances,
-        balance_known,
-        floors,
-        ceilings,
-    ).await
 }
 
 // ─── Cross-pool target builders ───
@@ -1907,6 +1108,19 @@ fn resume_volume() {
 #[update]
 async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        return Err(reason);
+    }
     let three_usd = state::read_state(|s| s.config.three_usd_ledger);
     if token_ledger == three_usd {
         // 3USD ledger ignores subaccounts — funds are already in default account
@@ -1921,6 +1135,19 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
 #[update]
 async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        return Err(reason);
+    }
     let three_usd = state::read_state(|s| s.config.three_usd_ledger);
     if token_ledger == three_usd {
         // 3USD ledger ignores subaccounts — funds are already in default account
@@ -1935,7 +1162,7 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
 #[update]
 async fn trigger_volume_cycle() -> String {
     require_admin();
-    let outcomes = volume::run_volume_cycle().await;
+    let outcomes = run_volume_cycle_if_unfrozen().await;
     if outcomes.is_empty() {
         "cycle ran, no outcomes".to_string()
     } else {
@@ -1944,18 +1171,9 @@ async fn trigger_volume_cycle() -> String {
 }
 
 #[update]
-fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
+fn set_arb_interval_secs(_interval_secs: u64) -> Result<(), String> {
     require_admin();
-    if interval_secs < 30 {
-        return Err("interval_secs must be >= 30".to_string());
-    }
-    if interval_secs > 86_400 {
-        return Err("interval_secs must be <= 86400 (1 day)".to_string());
-    }
-    state::mutate_state(|s| { s.config.arb_interval_secs = interval_secs; });
-    setup_timer();
-    state::log_activity("admin", &format!("arb_interval_secs set to {}", interval_secs));
-    Ok(())
+    Err("retired: set_arb_interval_secs is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the ICP inventory band (e8s) the drain uses in place of the old fixed
@@ -1963,40 +1181,18 @@ fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
 /// steady-state skim threshold. Single method so the pair can't pass through
 /// an invalid intermediate state (e.g. floor temporarily above ceiling).
 #[update]
-fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+fn set_icp_inventory_band(_floor_e8s: u64, _ceiling_e8s: u64) -> Result<(), String> {
     require_admin();
-    if floor_e8s < 100_000_000 {
-        return Err("floor must be >= 1 ICP".into());
-    }
-    if ceiling_e8s <= floor_e8s {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.icp_inventory_floor_e8s = floor_e8s;
-        s.config.icp_inventory_ceiling_e8s = ceiling_e8s;
-    });
-    state::log_activity("admin", &format!("icp inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
-    Ok(())
+    Err("retired: set_icp_inventory_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the BOB inventory band (e8s, 8 decimals). Mirrors
 /// `set_icp_inventory_band` exactly: stored/settable/displayed config only —
 /// not wired into any trading or drain logic.
 #[update]
-fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+fn set_bob_inventory_band(_floor_e8s: u64, _ceiling_e8s: u64) -> Result<(), String> {
     require_admin();
-    if floor_e8s < 100_000_000 {
-        return Err("floor must be >= 1 BOB".into());
-    }
-    if ceiling_e8s <= floor_e8s {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.bob_inventory_floor_e8s = floor_e8s;
-        s.config.bob_inventory_ceiling_e8s = ceiling_e8s;
-    });
-    state::log_activity("admin", &format!("bob inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
-    Ok(())
+    Err("retired: set_bob_inventory_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the three Strategy T ICPSwap closing-pool principals.
@@ -2014,24 +1210,9 @@ fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
 /// is out of scope here — re-pointing to different pools requires updating
 /// `strategy_t.rs` to match.
 #[update]
-fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt_ckusdc: Principal) -> Result<(), String> {
+fn set_strategy_t_pools(_icusd_ckusdc: Principal, _icusd_ckusdt: Principal, _ckusdt_ckusdc: Principal) -> Result<(), String> {
     require_admin();
-    if icusd_ckusdc == Principal::anonymous()
-        || icusd_ckusdt == Principal::anonymous()
-        || ckusdt_ckusdc == Principal::anonymous()
-    {
-        return Err("strategy T pool principals must not be anonymous".into());
-    }
-    if icusd_ckusdc == icusd_ckusdt || icusd_ckusdc == ckusdt_ckusdc || icusd_ckusdt == ckusdt_ckusdc {
-        return Err("strategy T pool principals must be pairwise distinct".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_icusd_ckusdc_pool = icusd_ckusdc;
-        s.config.strategy_t_icusd_ckusdt_pool = icusd_ckusdt;
-        s.config.strategy_t_ckusdt_ckusdc_pool = ckusdt_ckusdc;
-    });
-    state::log_activity("admin", "strategy T pool principals updated");
-    Ok(())
+    Err("retired: set_strategy_t_pools is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Master enable switch for Strategy T. Dry-run evaluation (`dry_run_strategy_t`)
@@ -2040,77 +1221,39 @@ fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt
 /// This flag and `strategy_t_dry_run` exist for a future live-execution PR;
 /// this build has no live-trade path regardless of either value.
 #[update]
-fn set_strategy_t_enabled(enabled: bool) {
+fn set_strategy_t_enabled(_enabled: bool) {
     require_admin();
-    state::mutate_state(|s| s.config.strategy_t_enabled = enabled);
-    state::log_activity("admin", &format!("strategy_t_enabled set to {}", enabled));
+    ic_cdk::trap("retired: set_strategy_t_enabled is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 #[update]
-fn set_strategy_t_dry_run(dry_run: bool) {
+fn set_strategy_t_dry_run(_dry_run: bool) {
     require_admin();
-    state::mutate_state(|s| s.config.strategy_t_dry_run = dry_run);
-    state::log_activity("admin", &format!("strategy_t_dry_run set to {}", dry_run));
+    ic_cdk::trap("retired: set_strategy_t_dry_run is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 #[update]
-fn set_strategy_t_thresholds(min_profit_usd: i64, min_profit_bps: u32, max_trade_size_usd: u64) -> Result<(), String> {
+fn set_strategy_t_thresholds(_min_profit_usd: i64, _min_profit_bps: u32, _max_trade_size_usd: u64) -> Result<(), String> {
     require_admin();
-    if max_trade_size_usd == 0 {
-        return Err("max_trade_size_usd must be > 0".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_min_profit_usd = min_profit_usd;
-        s.config.strategy_t_min_profit_bps = min_profit_bps;
-        s.config.strategy_t_max_trade_size_usd = max_trade_size_usd;
-    });
-    state::log_activity(
-        "admin",
-        &format!("strategy T thresholds set: min_profit_usd={} min_profit_bps={} max_trade_size_usd={}", min_profit_usd, min_profit_bps, max_trade_size_usd),
-    );
-    Ok(())
+    Err("retired: set_strategy_t_thresholds is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_icusd_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_icusd_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_icusd_floor = floor;
-        s.config.strategy_t_icusd_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T icUSD band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_icusd_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_ckusdt_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_ckusdt_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_ckusdt_floor = floor;
-        s.config.strategy_t_ckusdt_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T ckUSDT band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_ckusdt_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_ckusdc_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_ckusdc_floor = floor;
-        s.config.strategy_t_ckusdc_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T ckUSDC band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_ckusdc_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets both Strategy S pool principals in one call. Resets the resolved-
@@ -2118,203 +1261,38 @@ fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
 /// re-pointed pool gets its token ordering re-probed on the next cycle
 /// instead of running with stale `icp_is_token0`/`icusd_is_token0` bits.
 #[update]
-fn set_bob_pools(bob_icp_pool: Principal, icusd_bob_pool: Principal) -> Result<(), String> {
+fn set_bob_pools(_bob_icp_pool: Principal, _icusd_bob_pool: Principal) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| {
-        if s.config.icpswap_bob_icp_pool != bob_icp_pool {
-            s.config.icpswap_bob_icp_pool = bob_icp_pool;
-            s.bob_icp_ordering_resolved = false;
-        }
-        if s.config.icpswap_icusd_bob_pool != icusd_bob_pool {
-            s.config.icpswap_icusd_bob_pool = icusd_bob_pool;
-            s.icusd_bob_ordering_resolved = false;
-        }
-    });
-    state::log_activity("admin", &format!(
-        "bob pools set: bob/icp={}, icusd/bob={}", bob_icp_pool, icusd_bob_pool
-    ));
-    Ok(())
+    Err("retired: set_bob_pools is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets Strategy S's sizing/gating knobs. Single method so the pair can't
 /// pass through an invalid intermediate state.
 #[update]
-fn set_bob_params(max_trade_size_usd: u64, min_spread_bps: u64) -> Result<(), String> {
+fn set_bob_params(_max_trade_size_usd: u64, _min_spread_bps: u64) -> Result<(), String> {
     require_admin();
-    // $500 cap: BOB/ICP (~$53K depth) moves ~1% per ~$265 of volume — larger
-    // clips would eat their own edge and lean on a thin reference.
-    if max_trade_size_usd == 0 || max_trade_size_usd > 500_000_000 {
-        return Err("max_trade_size_usd must be 1..=500000000 ($500 cap, 6-dec USD)".to_string());
-    }
-    // 100 bps floor: the 2-3 leg 0.3%-fee route costs ~60-90 bps before
-    // slippage, so any spread gate below 100 bps trades at a loss to fees
-    // (fat-finger guard).
-    if min_spread_bps < 100 || min_spread_bps > 10_000 {
-        return Err("min_spread_bps must be 100..=10000".to_string());
-    }
-    state::mutate_state(|s| {
-        s.config.bob_max_trade_size_usd = max_trade_size_usd;
-        s.config.bob_min_spread_bps = min_spread_bps;
-    });
-    state::log_activity("admin", &format!(
-        "bob params set: max_trade_size_usd={}, min_spread_bps={}", max_trade_size_usd, min_spread_bps
-    ));
-    Ok(())
+    Err("retired: set_bob_params is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Execution kill switch for Strategy S. Dry-run evaluation + dashboard
 /// surfacing run regardless of this flag once both BOB pools are configured;
 /// this only gates whether Strategy S can actually execute trades.
 #[update]
-fn set_bob_execution_enabled(enabled: bool) -> Result<(), String> {
+fn set_bob_execution_enabled(_enabled: bool) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| { s.config.bob_execution_enabled = enabled; });
-    state::log_activity("admin", &format!(
-        "bob_execution_enabled set to {} by {}", enabled, ic_cdk::api::caller()
-    ));
-    Ok(())
+    Err("retired: set_bob_execution_enabled is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
+fn set_slippage_bps(_slippage_bps: u64) -> Result<(), String> {
     require_admin();
-    if slippage_bps > 10_000 {
-        return Err("slippage_bps must be <= 10000 (100%)".to_string());
-    }
-    state::mutate_state(|s| { s.config.slippage_bps = slippage_bps; });
-    state::log_activity("admin", &format!("slippage_bps set to {}", slippage_bps));
-    Ok(())
+    Err("retired: set_slippage_bps is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
 async fn get_bot_health() -> state::BotHealthReport {
     require_admin();
-
-    let (bot_config, volume_config, pending_exit, pending_bob_exit, arb_paused, stranded, stranded_bob) = state::read_state(|s| (
-        s.config.clone(),
-        s.volume.clone(),
-        s.pending_exit.clone(),
-        s.pending_bob_exit.clone(),
-        s.config.paused,
-        s.volume_stranded_icp,
-        s.volume_stranded_bob,
-    ));
-
-    let arb_in_progress = arb::is_cycle_in_progress();
-    let volume_in_progress = volume::is_volume_cycle_in_progress();
-
-    // Strategy S visibility: BOB balance (0 if the query fails — health must
-    // never trap on a flaky ledger).
-    let balance_bob = arb::fetch_balance(bot_config.bob_ledger).await.unwrap_or(0);
-
-    let pools_to_check = [
-        state::VolumePool::IcusdIcp,
-        state::VolumePool::ThreeUsdIcp,
-        state::VolumePool::IcusdBob,
-    ];
-
-    let mut pool_reports: Vec<state::PoolHealth> = Vec::new();
-
-    for pool in pools_to_check {
-        let (pool_config, pool_state) = match &pool {
-            state::VolumePool::IcusdIcp => (volume_config.icusd_icp.clone(), volume_config.icusd_icp_state.clone()),
-            state::VolumePool::ThreeUsdIcp => (volume_config.three_usd_icp.clone(), volume_config.three_usd_icp_state.clone()),
-            state::VolumePool::IcusdBob => (volume_config.icusd_bob.clone(), volume_config.icusd_bob_state.clone()),
-        };
-
-        // For icUSD/BOB, "current_price" is the external reference
-        // (ref_icusd_per_bob) — see volume::run_volume_cycle for why (BOB is
-        // NOT $1-pegged and its own thin pool is manipulable).
-        let current_price = match &pool {
-            state::VolumePool::IcusdIcp => prices::fetch_icpswap_price(bot_config.icpswap_icusd_pool, bot_config.icpswap_icusd_icp_is_token0).await.ok(),
-            state::VolumePool::ThreeUsdIcp => prices::fetch_icpswap_price(bot_config.icpswap_3usd_pool, bot_config.icpswap_3usd_icp_is_token0).await.ok(),
-            state::VolumePool::IcusdBob => volume::ref_icusd_per_bob(&bot_config).await.ok(),
-        };
-
-        let input_token = match (&pool_state.next_direction, &pool) {
-            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp) => bot_config.icusd_ledger,
-            (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp) => bot_config.three_usd_ledger,
-            (state::VolumeDirection::SellIcp, _) => bot_config.icp_ledger,
-            (state::VolumeDirection::BuyBob, _) => bot_config.icusd_ledger,
-            (state::VolumeDirection::SellBob, _) => bot_config.bob_ledger,
-            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdBob) => unreachable!("BuyIcp never paired with IcusdBob"),
-        };
-
-        // 3USD ledger ignores subaccounts — check default account
-        let input_balance = if input_token == bot_config.three_usd_ledger {
-            swaps::icrc1_balance_of_default(input_token).await.ok()
-        } else {
-            swaps::icrc1_balance_of_subaccount(input_token, swaps::VOLUME_SUBACCOUNT).await.ok()
-        };
-
-        let min_required_native: Option<u64> = match (&pool_state.next_direction, &pool, current_price) {
-            (state::VolumeDirection::BuyIcp, state::VolumePool::IcusdIcp, _) => Some(pool_config.trade_size_usd * 100),
-            (state::VolumeDirection::BuyIcp, state::VolumePool::ThreeUsdIcp, _) => Some(pool_config.trade_size_usd * 100), // 3USD is 8 decimals
-            (state::VolumeDirection::SellIcp, state::VolumePool::IcusdIcp, Some(p))
-            | (state::VolumeDirection::SellIcp, state::VolumePool::ThreeUsdIcp, Some(p)) if p > 0 => {
-                let stable_native = pool_config.trade_size_usd * 100; // icUSD/3USD are 8 decimals
-                Some((stable_native as u128 * 100_000_000u128 / p as u128) as u64)
-            }
-            // BuyBob spends icUSD ($1-pegged) — flat ×100, same as BuyIcp.
-            (state::VolumeDirection::BuyBob, _, _) => Some(pool_config.trade_size_usd * 100),
-            // SellBob spends BOB (NOT $1-pegged) — size via the reference price.
-            (state::VolumeDirection::SellBob, _, Some(p)) if p > 0 => {
-                let icusd_target_native = pool_config.trade_size_usd * 100;
-                Some((icusd_target_native as u128 * 100_000_000u128 / p as u128) as u64)
-            }
-            _ => None,
-        };
-
-        let skip_reason: Option<String> = if volume_config.volume_paused {
-            Some("volume_paused=true".to_string())
-        } else if !pool_config.enabled {
-            Some("pool disabled".to_string())
-        } else if pool_state.daily_cost_usd >= pool_config.daily_cost_cap_usd as i64 {
-            Some(format!("daily cost cap hit: {} >= {}", pool_state.daily_cost_usd, pool_config.daily_cost_cap_usd))
-        } else if current_price.is_none() {
-            Some("price fetch failed".to_string())
-        } else if input_balance.is_none() {
-            Some("balance fetch failed".to_string())
-        } else if min_required_native.is_none() {
-            Some("zero price (cannot compute min_native for SellIcp)".to_string())
-        } else if input_balance.unwrap() < min_required_native.unwrap() {
-            Some(format!(
-                "insufficient balance: {} < {} (need {:?} of {})",
-                input_balance.unwrap(), min_required_native.unwrap(), pool_state.next_direction, input_token
-            ))
-        } else {
-            None
-        };
-
-        pool_reports.push(state::PoolHealth {
-            pool: pool.clone(),
-            enabled: pool_config.enabled,
-            trade_size_usd: pool_config.trade_size_usd,
-            daily_cost_usd: pool_state.daily_cost_usd,
-            daily_cost_cap_usd: pool_config.daily_cost_cap_usd,
-            last_price: pool_state.last_price,
-            current_price,
-            next_direction: pool_state.next_direction.clone(),
-            input_balance,
-            min_required_native,
-            skip_reason,
-        });
-    }
-
-    state::BotHealthReport {
-        arb_cycle_in_progress: arb_in_progress,
-        arb_cycle_started_at_ns: arb::cycle_started_at_ns(),
-        volume_cycle_in_progress: volume_in_progress,
-        volume_paused: volume_config.volume_paused,
-        arb_paused,
-        volume_stranded_icp: stranded,
-        volume_stranded_bob: stranded_bob,
-        pending_exit,
-        pending_bob_exit,
-        balance_bob,
-        slippage_bps: bot_config.slippage_bps,
-        pools: pool_reports,
-    }
+    ic_cdk::trap("retired: get_bot_health is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md");
 }
 
 /// Anonymous-safe stuck-state flags for the logged-out dashboard wedge
@@ -2333,6 +1311,12 @@ fn get_public_health() -> state::PublicHealth {
 #[update]
 async fn trigger_volume_rebalance() {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        ic_cdk::trap(&reason);
+    }
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)) {
+        ic_cdk::trap(&reason);
+    }
     let config = state::read_state(|s| s.config.clone());
     volume::run_rebalance(&config).await;
 }
