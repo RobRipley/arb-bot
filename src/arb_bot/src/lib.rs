@@ -306,13 +306,9 @@ fn clear_cycle_lock() {
 /// (every strategy that trades against `rumi_amm`) without touching the
 /// other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
 #[update]
-fn set_rumi_amm_paused(paused: bool) -> Result<(), String> {
+fn set_rumi_amm_paused(_paused: bool) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| { s.config.rumi_amm_paused = paused; });
-    state::log_activity("admin", &format!(
-        "rumi_amm_paused set to {} by {}", paused, ic_cdk::api::caller()
-    ));
-    Ok(())
+    Err("retired: set_rumi_amm_paused is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 // 3pool underlying token ledgers (icUSD=0, ckUSDT=1, ckUSDC=2)
@@ -1766,18 +1762,9 @@ async fn trigger_volume_cycle() -> String {
 }
 
 #[update]
-fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
+fn set_arb_interval_secs(_interval_secs: u64) -> Result<(), String> {
     require_admin();
-    if interval_secs < 30 {
-        return Err("interval_secs must be >= 30".to_string());
-    }
-    if interval_secs > 86_400 {
-        return Err("interval_secs must be <= 86400 (1 day)".to_string());
-    }
-    state::mutate_state(|s| { s.config.arb_interval_secs = interval_secs; });
-    setup_timer();
-    state::log_activity("admin", &format!("arb_interval_secs set to {}", interval_secs));
-    Ok(())
+    Err("retired: set_arb_interval_secs is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the ICP inventory band (e8s) the drain uses in place of the old fixed
@@ -1785,40 +1772,18 @@ fn set_arb_interval_secs(interval_secs: u64) -> Result<(), String> {
 /// steady-state skim threshold. Single method so the pair can't pass through
 /// an invalid intermediate state (e.g. floor temporarily above ceiling).
 #[update]
-fn set_icp_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+fn set_icp_inventory_band(_floor_e8s: u64, _ceiling_e8s: u64) -> Result<(), String> {
     require_admin();
-    if floor_e8s < 100_000_000 {
-        return Err("floor must be >= 1 ICP".into());
-    }
-    if ceiling_e8s <= floor_e8s {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.icp_inventory_floor_e8s = floor_e8s;
-        s.config.icp_inventory_ceiling_e8s = ceiling_e8s;
-    });
-    state::log_activity("admin", &format!("icp inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
-    Ok(())
+    Err("retired: set_icp_inventory_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the BOB inventory band (e8s, 8 decimals). Mirrors
 /// `set_icp_inventory_band` exactly: stored/settable/displayed config only —
 /// not wired into any trading or drain logic.
 #[update]
-fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String> {
+fn set_bob_inventory_band(_floor_e8s: u64, _ceiling_e8s: u64) -> Result<(), String> {
     require_admin();
-    if floor_e8s < 100_000_000 {
-        return Err("floor must be >= 1 BOB".into());
-    }
-    if ceiling_e8s <= floor_e8s {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.bob_inventory_floor_e8s = floor_e8s;
-        s.config.bob_inventory_ceiling_e8s = ceiling_e8s;
-    });
-    state::log_activity("admin", &format!("bob inventory band set to [{}, {}] e8s", floor_e8s, ceiling_e8s));
-    Ok(())
+    Err("retired: set_bob_inventory_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets the three Strategy T ICPSwap closing-pool principals.
@@ -1836,24 +1801,9 @@ fn set_bob_inventory_band(floor_e8s: u64, ceiling_e8s: u64) -> Result<(), String
 /// is out of scope here — re-pointing to different pools requires updating
 /// `strategy_t.rs` to match.
 #[update]
-fn set_strategy_t_pools(icusd_ckusdc: Principal, icusd_ckusdt: Principal, ckusdt_ckusdc: Principal) -> Result<(), String> {
+fn set_strategy_t_pools(_icusd_ckusdc: Principal, _icusd_ckusdt: Principal, _ckusdt_ckusdc: Principal) -> Result<(), String> {
     require_admin();
-    if icusd_ckusdc == Principal::anonymous()
-        || icusd_ckusdt == Principal::anonymous()
-        || ckusdt_ckusdc == Principal::anonymous()
-    {
-        return Err("strategy T pool principals must not be anonymous".into());
-    }
-    if icusd_ckusdc == icusd_ckusdt || icusd_ckusdc == ckusdt_ckusdc || icusd_ckusdt == ckusdt_ckusdc {
-        return Err("strategy T pool principals must be pairwise distinct".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_icusd_ckusdc_pool = icusd_ckusdc;
-        s.config.strategy_t_icusd_ckusdt_pool = icusd_ckusdt;
-        s.config.strategy_t_ckusdt_ckusdc_pool = ckusdt_ckusdc;
-    });
-    state::log_activity("admin", "strategy T pool principals updated");
-    Ok(())
+    Err("retired: set_strategy_t_pools is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Master enable switch for Strategy T. Dry-run evaluation (`dry_run_strategy_t`)
@@ -1874,63 +1824,27 @@ fn set_strategy_t_dry_run(_dry_run: bool) {
 }
 
 #[update]
-fn set_strategy_t_thresholds(min_profit_usd: i64, min_profit_bps: u32, max_trade_size_usd: u64) -> Result<(), String> {
+fn set_strategy_t_thresholds(_min_profit_usd: i64, _min_profit_bps: u32, _max_trade_size_usd: u64) -> Result<(), String> {
     require_admin();
-    if max_trade_size_usd == 0 {
-        return Err("max_trade_size_usd must be > 0".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_min_profit_usd = min_profit_usd;
-        s.config.strategy_t_min_profit_bps = min_profit_bps;
-        s.config.strategy_t_max_trade_size_usd = max_trade_size_usd;
-    });
-    state::log_activity(
-        "admin",
-        &format!("strategy T thresholds set: min_profit_usd={} min_profit_bps={} max_trade_size_usd={}", min_profit_usd, min_profit_bps, max_trade_size_usd),
-    );
-    Ok(())
+    Err("retired: set_strategy_t_thresholds is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_icusd_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_icusd_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_icusd_floor = floor;
-        s.config.strategy_t_icusd_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T icUSD band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_icusd_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_ckusdt_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_ckusdt_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_ckusdt_floor = floor;
-        s.config.strategy_t_ckusdt_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T ckUSDT band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_ckusdt_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
+fn set_strategy_t_ckusdc_band(_floor: u64, _ceiling: u64) -> Result<(), String> {
     require_admin();
-    if ceiling <= floor {
-        return Err("ceiling must be > floor".into());
-    }
-    state::mutate_state(|s| {
-        s.config.strategy_t_ckusdc_floor = floor;
-        s.config.strategy_t_ckusdc_ceiling = ceiling;
-    });
-    state::log_activity("admin", &format!("strategy T ckUSDC band set to [{}, {}]", floor, ceiling));
-    Ok(())
+    Err("retired: set_strategy_t_ckusdc_band is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets both Strategy S pool principals in one call. Resets the resolved-
@@ -1938,72 +1852,32 @@ fn set_strategy_t_ckusdc_band(floor: u64, ceiling: u64) -> Result<(), String> {
 /// re-pointed pool gets its token ordering re-probed on the next cycle
 /// instead of running with stale `icp_is_token0`/`icusd_is_token0` bits.
 #[update]
-fn set_bob_pools(bob_icp_pool: Principal, icusd_bob_pool: Principal) -> Result<(), String> {
+fn set_bob_pools(_bob_icp_pool: Principal, _icusd_bob_pool: Principal) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| {
-        if s.config.icpswap_bob_icp_pool != bob_icp_pool {
-            s.config.icpswap_bob_icp_pool = bob_icp_pool;
-            s.bob_icp_ordering_resolved = false;
-        }
-        if s.config.icpswap_icusd_bob_pool != icusd_bob_pool {
-            s.config.icpswap_icusd_bob_pool = icusd_bob_pool;
-            s.icusd_bob_ordering_resolved = false;
-        }
-    });
-    state::log_activity("admin", &format!(
-        "bob pools set: bob/icp={}, icusd/bob={}", bob_icp_pool, icusd_bob_pool
-    ));
-    Ok(())
+    Err("retired: set_bob_pools is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Sets Strategy S's sizing/gating knobs. Single method so the pair can't
 /// pass through an invalid intermediate state.
 #[update]
-fn set_bob_params(max_trade_size_usd: u64, min_spread_bps: u64) -> Result<(), String> {
+fn set_bob_params(_max_trade_size_usd: u64, _min_spread_bps: u64) -> Result<(), String> {
     require_admin();
-    // $500 cap: BOB/ICP (~$53K depth) moves ~1% per ~$265 of volume — larger
-    // clips would eat their own edge and lean on a thin reference.
-    if max_trade_size_usd == 0 || max_trade_size_usd > 500_000_000 {
-        return Err("max_trade_size_usd must be 1..=500000000 ($500 cap, 6-dec USD)".to_string());
-    }
-    // 100 bps floor: the 2-3 leg 0.3%-fee route costs ~60-90 bps before
-    // slippage, so any spread gate below 100 bps trades at a loss to fees
-    // (fat-finger guard).
-    if min_spread_bps < 100 || min_spread_bps > 10_000 {
-        return Err("min_spread_bps must be 100..=10000".to_string());
-    }
-    state::mutate_state(|s| {
-        s.config.bob_max_trade_size_usd = max_trade_size_usd;
-        s.config.bob_min_spread_bps = min_spread_bps;
-    });
-    state::log_activity("admin", &format!(
-        "bob params set: max_trade_size_usd={}, min_spread_bps={}", max_trade_size_usd, min_spread_bps
-    ));
-    Ok(())
+    Err("retired: set_bob_params is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 /// Execution kill switch for Strategy S. Dry-run evaluation + dashboard
 /// surfacing run regardless of this flag once both BOB pools are configured;
 /// this only gates whether Strategy S can actually execute trades.
 #[update]
-fn set_bob_execution_enabled(enabled: bool) -> Result<(), String> {
+fn set_bob_execution_enabled(_enabled: bool) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| { s.config.bob_execution_enabled = enabled; });
-    state::log_activity("admin", &format!(
-        "bob_execution_enabled set to {} by {}", enabled, ic_cdk::api::caller()
-    ));
-    Ok(())
+    Err("retired: set_bob_execution_enabled is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
-fn set_slippage_bps(slippage_bps: u64) -> Result<(), String> {
+fn set_slippage_bps(_slippage_bps: u64) -> Result<(), String> {
     require_admin();
-    if slippage_bps > 10_000 {
-        return Err("slippage_bps must be <= 10000 (100%)".to_string());
-    }
-    state::mutate_state(|s| { s.config.slippage_bps = slippage_bps; });
-    state::log_activity("admin", &format!("slippage_bps set to {}", slippage_bps));
-    Ok(())
+    Err("retired: set_slippage_bps is retired under Stage-1 — see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md".to_string())
 }
 
 #[update]
