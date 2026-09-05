@@ -73,3 +73,13 @@ It does three things:
 All three must pass (exit 0). Use `scripts/check-candid.sh --no-cargo` to
 skip the cargo test (faster, no build) — the grep-diff and didc checks still
 run. No CI / GitHub Actions is involved — this is a purely local command.
+
+## Stage-1 disposition inventory
+
+Before any change to `lib.rs`'s public method set (new methods, reclassifications, or retirements), run the Stage-1 disposition inventory check alongside `check-candid.sh`:
+
+```sh
+scripts/check-stage1-disposition.sh
+```
+
+This script verifies that every public `#[update]`/`#[query]` method in the code has an explicit Stage-1 retirement disposition — one of five categories: fail-closed (compatibility stubs), read-only (local/query only), volume-config (configuration operations), volume-op (volume operation participants), or generic-recovery (recovery operations). The check fails if any method is unclassified or if a classification lists a method that no longer exists. This enforces PR #22's Stage-1 acceptance criterion: an unclassified mutator is not acceptable.
