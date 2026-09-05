@@ -78,9 +78,27 @@ fn setup_volume_timer() {
     let interval = state::read_state(|s| s.volume.interval_secs).max(1);
     let new_id = ic_cdk_timers::set_timer_interval(
         std::time::Duration::from_secs(interval),
-        || ic_cdk::spawn(async { let _ = volume::run_volume_cycle().await; }),
+        || {
+            ic_cdk::spawn(async {
+                let _ = run_volume_cycle_if_unfrozen().await;
+            })
+        },
     );
     VOLUME_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
+}
+
+async fn run_volume_cycle_if_unfrozen() -> Vec<String> {
+    if let Some(reason) = state::read_state(|s| {
+        state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)
+    }) {
+        return vec![reason];
+    }
+    if let Some(reason) = state::read_state(|s| {
+        state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)
+    }) {
+        return vec![reason];
+    }
+    volume::run_volume_cycle().await
 }
 
 fn require_admin() {
@@ -1144,13 +1162,7 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
 #[update]
 async fn trigger_volume_cycle() -> String {
     require_admin();
-    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
-        return reason;
-    }
-    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Bob)) {
-        return reason;
-    }
-    let outcomes = volume::run_volume_cycle().await;
+    let outcomes = run_volume_cycle_if_unfrozen().await;
     if outcomes.is_empty() {
         "cycle ran, no outcomes".to_string()
     } else {
