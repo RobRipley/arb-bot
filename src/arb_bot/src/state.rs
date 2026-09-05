@@ -903,12 +903,43 @@ pub enum BobPool {
 }
 
 /// Records the pool Strategy S acquired BOB through after a successful
-/// leg 1, so `drain_residual_bob` never sells back into the entry pool.
+/// leg 1. Stage-1 retirement: this field's presence now triggers
+/// `legacy_route_freeze_reason`'s freeze on ICP/BOB spending until an
+/// operator resolves the incident manually (see Section 11).
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
 pub struct PendingBobExit {
     pub entry_pool: BobPool,
     /// BOB received by leg 1 (8 dec).
     pub bob_amount: u64,
+}
+
+/// Which asset a Stage-1 legacy-incident freeze check is being asked
+/// about. Covers exactly the two assets `pending_exit`/`pending_bob_exit`
+/// can encumber.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LegacyFreezeAsset {
+    Icp,
+    Bob,
+}
+
+/// Returns `Some(reason)` if `asset` is frozen by an unresolved legacy
+/// `pending_exit`/`pending_bob_exit` incident, `None` if it's clear to
+/// spend. Per the spec (Section 11): presence alone freezes the asset —
+/// a zero or unknown amount is NOT treated as "no exposure." This checks
+/// presence only; it does not attempt to prove the referenced funds are
+/// in a structurally disjoint account (that proof, and the full durable
+/// reservation ledger for an arbitrary future held position, is Stage 4
+/// scope — there is no live execution yet to create one).
+pub fn legacy_route_freeze_reason(state: &BotState, asset: LegacyFreezeAsset) -> Option<String> {
+    match asset {
+        LegacyFreezeAsset::Icp if state.pending_exit.is_some() => Some(
+            "asset frozen: unresolved legacy pending_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
+        ),
+        LegacyFreezeAsset::Bob if state.pending_bob_exit.is_some() => Some(
+            "asset frozen: unresolved legacy pending_bob_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
+        ),
+        _ => None,
+    }
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -949,7 +980,9 @@ pub struct BotState {
     #[serde(default)]
     pub pending_exit: Option<PendingExit>,
     /// Strategy S: BOB acquired by leg 1 whose leg 2 has not completed.
-    /// `drain_residual_bob` recovers it next cycle.
+    /// Stage-1 retirement: presence of this field now freezes ICP/BOB
+    /// spending via `legacy_route_freeze_reason` until an operator
+    /// resolves the incident manually.
     #[serde(default)]
     pub pending_bob_exit: Option<PendingBobExit>,
     #[serde(default)]
@@ -960,8 +993,11 @@ pub struct BotState {
     pub volume_stranded_icp: u64,
     /// BOB amount stranded in the default account after a volume bot
     /// icUSD/BOB transfer-to-subaccount failure (BuyBob leg only — SellBob
-    /// receives icUSD, which `drain_residual_bob` never touches). Mirrors
-    /// `volume_stranded_icp`; `drain_residual_bob` must not sweep this.
+    /// receives icUSD, which never mixed with this balance). Mirrors
+    /// `volume_stranded_icp`; the automatic drain that once had to avoid
+    /// sweeping this was deleted under Stage-1 retirement, so the
+    /// invariant is now moot — this balance is untouched by any
+    /// surviving automated method.
     #[serde(default)]
     pub volume_stranded_bob: u64,
 }

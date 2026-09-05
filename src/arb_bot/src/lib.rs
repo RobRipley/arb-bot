@@ -341,6 +341,20 @@ async fn setup_approvals() -> String {
 async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     require_admin();
 
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        ic_cdk::trap(&reason);
+    }
+
     let transfer_args = icrc_ledger_types::icrc1::transfer::TransferArg {
         from_subaccount: None,
         to: icrc_ledger_types::icrc1::account::Account { owner: to, subaccount: None },
@@ -382,6 +396,9 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
 #[update]
 async fn recover_partydex_balance(pool: Principal) -> Result<(u64, u64), String> {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        return Err(reason);
+    }
     let result = partydex::withdraw_all(pool).await;
     match &result {
         Ok((base_out, quote_out)) => state::log_activity("recover", &format!(
@@ -477,6 +494,9 @@ const VOL_ICUSD_FEE: u64 = 100_000;
 #[update]
 async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        ic_cdk::trap(&reason);
+    }
     let (rumi_amm, icp_ledger, three_usd_ledger, icusd_ledger, rumi_3pool) = state::read_state(|s| {
         (s.config.rumi_amm, s.config.icp_ledger, s.config.three_usd_ledger,
          Principal::from_text("t6bor-paaaa-aaaap-qrd5q-cai").unwrap(),
@@ -1070,6 +1090,19 @@ fn resume_volume() {
 #[update]
 async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        return Err(reason);
+    }
     let three_usd = state::read_state(|s| s.config.three_usd_ledger);
     if token_ledger == three_usd {
         // 3USD ledger ignores subaccounts — funds are already in default account
@@ -1084,6 +1117,19 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
 #[update]
 async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    let freeze_reason = state::read_state(|s| {
+        let asset = if token_ledger == s.config.icp_ledger {
+            Some(state::LegacyFreezeAsset::Icp)
+        } else if token_ledger == s.config.bob_ledger {
+            Some(state::LegacyFreezeAsset::Bob)
+        } else {
+            None
+        };
+        asset.and_then(|a| state::legacy_route_freeze_reason(s, a))
+    });
+    if let Some(reason) = freeze_reason {
+        return Err(reason);
+    }
     let three_usd = state::read_state(|s| s.config.three_usd_ledger);
     if token_ledger == three_usd {
         // 3USD ledger ignores subaccounts — funds are already in default account
@@ -1098,6 +1144,9 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
 #[update]
 async fn trigger_volume_cycle() -> String {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        return reason;
+    }
     let outcomes = volume::run_volume_cycle().await;
     if outcomes.is_empty() {
         "cycle ran, no outcomes".to_string()
@@ -1247,6 +1296,9 @@ fn get_public_health() -> state::PublicHealth {
 #[update]
 async fn trigger_volume_rebalance() {
     require_admin();
+    if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
+        ic_cdk::trap(&reason);
+    }
     let config = state::read_state(|s| s.config.clone());
     volume::run_rebalance(&config).await;
 }
