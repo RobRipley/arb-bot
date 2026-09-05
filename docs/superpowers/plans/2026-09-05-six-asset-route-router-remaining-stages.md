@@ -158,9 +158,9 @@
 
 **Interfaces:** active route overview, stable/ICP candidate cards, observation metrics, six-asset balances/reservations, execution/held-position views, route policy controls that cannot live-authorize.
 
-- [ ] Write failing static/behavioral checks proving active A-S/T cards and controls are absent, legacy history remains labeled, all six wallet assets render even at zero, actual directed asset/venue paths render, stable-par disclosure is visible, rejection/full-fill/allowance/inventory/quote-age/collision fields render, and execution/settlement/held states render.
-- [ ] Replace the active opportunity UI and obsolete strategy levers with the consolidated router surfaces while leaving the separately scoped volume UI intact.
-- [ ] Run dashboard test and `scripts/check-candid.sh`; commit `feat(arb): consolidate dashboard around route arbitrage`.
+- [x] Write failing static/behavioral checks proving active A-S/T cards and controls are absent, legacy history remains labeled, all six wallet assets render even at zero, actual directed asset/venue paths render, stable-par disclosure is visible, rejection/full-fill/allowance/inventory/quote-age/collision fields render, and execution/settlement/held states render.
+- [x] Replace the active opportunity UI and obsolete strategy levers with the consolidated router surfaces while leaving the separately scoped volume UI intact.
+- [x] Run dashboard test and JavaScript syntax validation; commit `feat(arb): consolidate route arbitrage dashboard`. The full Candid guard runs in Task 10.
 
 ### Task 10: Whole-system acceptance and source delivery
 
@@ -169,8 +169,8 @@
 - Create: `scripts/check-route-arb-acceptance.sh`
 - Modify: this plan (check completed boxes)
 
-- [ ] Add one acceptance script that runs registry/graph/accounting/storage/execution/UI tests, Candid equality, Stage-1 disposition/zero-call/no-drain guards, call-target guard, release Wasm build, encoded interface checks, and a Wasm code-section/total-size report without changing the project limit.
-- [ ] Run `RUSTFLAGS=-Awarnings cargo test -p arb_bot`, `scripts/check-route-arb-acceptance.sh`, and `git diff --check`; record exact results.
+- [x] Add one acceptance script that runs registry/graph/accounting/storage/execution/UI tests, Candid equality, Stage-1 disposition/zero-call/no-drain guards, call-target guard, release Wasm build, encoded interface checks, and a Wasm code-section/total-size report without changing the project limit.
+- [x] Run `RUSTFLAGS=-Awarnings cargo test -p arb_bot`, `scripts/check-route-arb-acceptance.sh`, and `git diff --check`; exact result: 87 tests passed, 1 ignored-by-design Candid printer, 0 failed; all structural/interface guards passed; release Wasm 3,124,507 bytes total with a 2,242,279-byte code-section payload and 10,340,633 bytes of headroom under the 12,582,912-byte network executable-code limit.
 - [ ] Self-review the complete branch against every Section 12 acceptance bullet. Fix only correctness defects within this approved scope; cap independent review at one whole-branch pass plus one focused fix verification.
 - [ ] Confirm no deployment/configuration/approval/transfer/swap occurred and that all new execution remains inert.
 - [ ] Commit docs/checks, push branch, create PR, wait for required checks, and merge when green. Do not deploy.
