@@ -3114,6 +3114,8 @@
       if (route.type === 'invalid') return;
       const amtStr = document.getElementById('swap-from-amount').value.trim();
       if (!amtStr || isNaN(Number(amtStr)) || Number(amtStr) <= 0) { document.getElementById('swap-to-amount-display').textContent = '—'; document.getElementById('swap-quote-info').textContent = ''; return; }
+      toast('Manual Rumi/3pool swaps are retired (Stage 1 of the six-asset route-arbitrage policy) — this action is disabled', 'error');
+      return;
       const fromKey = document.getElementById('swap-from-token').value, toKey = document.getElementById('swap-to-token').value;
       const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
       const raw = humanToRaw(amtStr, fromInfo.decimals);
@@ -3154,6 +3156,8 @@
       });
     };
     async function swapExecute(amtStr, fromKey, toKey, route) {
+      toast('Manual Rumi/3pool swaps are retired (Stage 1 of the six-asset route-arbitrage policy) — this action is disabled', 'error');
+      return;
       const fromInfo = TOKEN_INFO[fromKey], toInfo = TOKEN_INFO[toKey];
       const raw = humanToRaw(amtStr, fromInfo.decimals);
       const minOut = BigInt(0);
@@ -3646,6 +3650,8 @@
     };
     window.doSetupApprovals = async function (btn) {
       if (!requireAuth()) return;
+      toast('setup_approvals is retired (Stage 1 of the six-asset route-arbitrage policy) — this action is disabled', 'error');
+      return;
       btnLoading(btn, 'Running…');
       try {
         const result = await authenticatedActor.setup_approvals();
