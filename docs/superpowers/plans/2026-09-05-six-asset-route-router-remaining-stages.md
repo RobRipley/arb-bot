@@ -61,10 +61,10 @@
 
 **Interfaces:** `par_usd_6dec_checked`, `net_profit_bps_checked`, `QuoteLeg`, `RouteQuote`, `CandidateEvaluation`, `ReservationTotals`, `available_native`, `evaluate_candidate`, `rank_book`.
 
-- [ ] Write failing boundary tests for decimals, checked overflow/underflow, signed bps truncation, zero principal, all ledger-fee recurrence points, stable/ICP profit domains, dual thresholds, per-asset floors/ceilings, unknown balances/allowances, held/active/non-route reservations, changed stable terminal, volatile exposure, book separation, and deterministic tie-breaks.
-- [ ] Run the scoped test and observe failure.
-- [ ] Implement checked native arithmetic and pure eligibility/ranking.
-- [ ] Re-run tests and commit `feat(arb): add route accounting and ranking invariants`.
+- [x] Write failing boundary tests for decimals, checked overflow/underflow, signed bps truncation, zero principal, all ledger-fee recurrence points, stable/ICP profit domains, dual thresholds, per-asset floors/ceilings, unknown balances/allowances, held/active/non-route reservations, changed stable terminal, volatile exposure, book separation, and deterministic tie-breaks.
+- [x] Run the scoped test and observe failure.
+- [x] Implement checked native arithmetic and pure eligibility/ranking.
+- [x] Re-run tests and commit `feat(arb): add route accounting and ranking invariants`.
 
 ### Task 4: Versioned inert policy and six-asset wallet reporting
 

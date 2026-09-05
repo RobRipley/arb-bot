@@ -32,6 +32,21 @@ impl Asset {
     pub fn is_stable(self) -> bool {
         matches!(self, Asset::IcUsd | Asset::CkUsdt | Asset::CkUsdc)
     }
+
+    pub fn index(self) -> usize {
+        match self {
+            Asset::IcUsd => 0,
+            Asset::CkUsdt => 1,
+            Asset::CkUsdc => 2,
+            Asset::Icp => 3,
+            Asset::CkBtc => 4,
+            Asset::CkEth => 5,
+        }
+    }
+
+    pub fn decimals(self) -> u8 {
+        asset_pins()[self.index()].decimals
+    }
 }
 
 #[derive(
@@ -272,4 +287,296 @@ pub fn enumerate_routes(max_legs: u8) -> Result<Vec<Route>, String> {
     }
     routes.sort_by(|left, right| left.route_id.cmp(&right.route_id));
     Ok(routes)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetAmounts {
+    values: [Option<u128>; 6],
+}
+
+impl AssetAmounts {
+    pub fn unknown() -> Self {
+        Self { values: [None; 6] }
+    }
+
+    pub fn zero() -> Self {
+        Self { values: [Some(0); 6] }
+    }
+
+    pub fn get(&self, asset: Asset) -> Option<u128> {
+        self.values[asset.index()]
+    }
+
+    pub fn set(&mut self, asset: Asset, value: Option<u128>) {
+        self.values[asset.index()] = value;
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReservationTotals {
+    pub held: AssetAmounts,
+    pub active: AssetAmounts,
+    pub non_route: AssetAmounts,
+}
+
+impl Default for ReservationTotals {
+    fn default() -> Self {
+        Self {
+            held: AssetAmounts::zero(),
+            active: AssetAmounts::zero(),
+            non_route: AssetAmounts::zero(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InventoryBands {
+    floors: [u128; 6],
+    ceilings: [u128; 6],
+}
+
+impl InventoryBands {
+    pub fn unbounded() -> Self {
+        Self { floors: [0; 6], ceilings: [u128::MAX; 6] }
+    }
+
+    pub fn set(&mut self, asset: Asset, floor: u128, ceiling: u128) {
+        self.floors[asset.index()] = floor;
+        self.ceilings[asset.index()] = ceiling;
+    }
+
+    pub fn floor(&self, asset: Asset) -> u128 {
+        self.floors[asset.index()]
+    }
+
+    pub fn ceiling(&self, asset: Asset) -> u128 {
+        self.ceilings[asset.index()]
+    }
+}
+
+pub fn available_native(
+    asset: Asset,
+    ledger_balance: Option<u128>,
+    reservations: &ReservationTotals,
+) -> Result<u128, String> {
+    let mut available = ledger_balance.ok_or_else(|| format!("unknown {:?} ledger balance", asset))?;
+    for (name, values) in [
+        ("held", &reservations.held),
+        ("active", &reservations.active),
+        ("non-route", &reservations.non_route),
+    ] {
+        let reserved = values.get(asset).ok_or_else(|| format!("unknown {name} reservation for {:?}", asset))?;
+        available = available
+            .checked_sub(reserved)
+            .ok_or_else(|| format!("{name} reservation exceeds {:?} ledger balance", asset))?;
+    }
+    Ok(available)
+}
+
+pub fn par_usd_6dec_checked(amount_native: u128, decimals: u8) -> Result<i128, String> {
+    let amount = if decimals >= 6 {
+        let exponent = u32::from(decimals - 6);
+        let divisor = 10u128.checked_pow(exponent).ok_or("unsupported decimal exponent")?;
+        amount_native / divisor
+    } else {
+        let exponent = u32::from(6 - decimals);
+        let multiplier = 10u128.checked_pow(exponent).ok_or("unsupported decimal exponent")?;
+        amount_native.checked_mul(multiplier).ok_or("stable-par multiplication overflow")?
+    };
+    i128::try_from(amount).map_err(|_| "stable-par result exceeds signed P&L range".to_string())
+}
+
+pub fn net_profit_bps_checked(net_profit: i128, principal: u128) -> Result<i64, String> {
+    if principal == 0 {
+        return Err("principal must be greater than zero".to_string());
+    }
+    let principal = i128::try_from(principal).map_err(|_| "principal exceeds signed P&L range")?;
+    let numerator = net_profit.checked_mul(10_000).ok_or("profit-bps multiplication overflow")?;
+    i64::try_from(numerator / principal).map_err(|_| "profit-bps result exceeds report range".to_string())
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub enum ProfitDomain {
+    StableParUsd6Dec,
+    IcpE8s,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuoteLeg {
+    pub edge_id: String,
+    pub from: Asset,
+    pub to: Asset,
+    pub wallet_before: u128,
+    pub entry_ledger_fee: u128,
+    pub venue_input: u128,
+    pub gross_output: u128,
+    pub output_ledger_fee: u128,
+    pub wallet_after: u128,
+    pub dex_fee_native: u128,
+    pub full_fill: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteQuote {
+    pub route_id: String,
+    pub canonical_cycle_id: Option<String>,
+    pub start_asset: Asset,
+    pub end_asset: Asset,
+    pub asset_path: Vec<Asset>,
+    pub principal_native: u128,
+    pub legs: Vec<QuoteLeg>,
+    pub allowance_sufficient: Option<bool>,
+    pub quoted_at_ns: u64,
+    pub size_ladder_index: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CandidateEvaluation {
+    pub route_id: String,
+    pub canonical_cycle_id: Option<String>,
+    pub start_asset: Asset,
+    pub end_asset: Asset,
+    pub profit_domain: ProfitDomain,
+    pub principal_native: u128,
+    pub net_profit_native: i128,
+    pub net_profit_bps: i64,
+    pub leg_count: u8,
+    pub size_ladder_index: u8,
+    pub par_assumption: bool,
+    pub eligible: bool,
+    pub rejection_reason: Option<String>,
+}
+
+fn rejected(quote: &RouteQuote, domain: ProfitDomain, reason: impl Into<String>) -> CandidateEvaluation {
+    CandidateEvaluation {
+        route_id: quote.route_id.clone(),
+        canonical_cycle_id: quote.canonical_cycle_id.clone(),
+        start_asset: quote.start_asset,
+        end_asset: quote.end_asset,
+        profit_domain: domain,
+        principal_native: quote.principal_native,
+        net_profit_native: 0,
+        net_profit_bps: 0,
+        leg_count: quote.legs.len().try_into().unwrap_or(u8::MAX),
+        size_ladder_index: quote.size_ladder_index,
+        par_assumption: quote.start_asset != quote.end_asset,
+        eligible: false,
+        rejection_reason: Some(reason.into()),
+    }
+}
+
+fn quote_profit(quote: &RouteQuote) -> Result<(ProfitDomain, i128, i64), String> {
+    let final_amount = quote.legs.last().ok_or("route has no quoted legs")?.wallet_after;
+    let (domain, profit, principal) = if quote.start_asset.is_stable() && quote.end_asset.is_stable() {
+        let start = par_usd_6dec_checked(quote.principal_native, quote.start_asset.decimals())?;
+        let end = par_usd_6dec_checked(final_amount, quote.end_asset.decimals())?;
+        (ProfitDomain::StableParUsd6Dec, end.checked_sub(start).ok_or("stable profit overflow")?, u128::try_from(start).map_err(|_| "invalid stable principal")?)
+    } else if quote.start_asset == Asset::Icp && quote.end_asset == Asset::Icp {
+        let final_amount = i128::try_from(final_amount).map_err(|_| "ICP output exceeds signed P&L range")?;
+        let principal = i128::try_from(quote.principal_native).map_err(|_| "ICP principal exceeds signed P&L range")?;
+        (ProfitDomain::IcpE8s, final_amount.checked_sub(principal).ok_or("ICP profit overflow")?, quote.principal_native)
+    } else {
+        return Err("candidate endpoints do not share an admitted profit domain".to_string());
+    };
+    let bps = net_profit_bps_checked(profit, principal)?;
+    Ok((domain, profit, bps))
+}
+
+pub fn evaluate_candidate(
+    quote: &RouteQuote,
+    balances: &AssetAmounts,
+    reservations: &ReservationTotals,
+    bands: &InventoryBands,
+    min_stable_profit_usd_6dec: i128,
+    min_stable_profit_bps: i64,
+    min_icp_profit_e8s: i128,
+    min_icp_profit_bps: i64,
+) -> CandidateEvaluation {
+    let fallback_domain = if quote.start_asset == Asset::Icp { ProfitDomain::IcpE8s } else { ProfitDomain::StableParUsd6Dec };
+    if quote.principal_native == 0 {
+        return rejected(quote, fallback_domain, "principal must be greater than zero");
+    }
+    if quote.allowance_sufficient != Some(true) {
+        return rejected(quote, fallback_domain, "allowance unknown or insufficient");
+    }
+    let mut expected_before = quote.principal_native;
+    let mut expected_from = quote.start_asset;
+    for (leg_index, leg) in quote.legs.iter().enumerate() {
+        if !leg.full_fill {
+            return rejected(quote, fallback_domain, "route contains a non-full-fill leg");
+        }
+        if leg.from != expected_from || leg.wallet_before != expected_before {
+            return rejected(quote, fallback_domain, "quoted legs do not form an exact native-unit chain");
+        }
+        if leg.wallet_before.checked_sub(leg.entry_ledger_fee) != Some(leg.venue_input)
+            || leg.gross_output.checked_sub(leg.output_ledger_fee) != Some(leg.wallet_after)
+        {
+            return rejected(quote, fallback_domain, "ledger-fee recurrence mismatch");
+        }
+        let current = match balances.get(leg.to) {
+            Some(value) => value,
+            None => return rejected(quote, fallback_domain, format!("unknown {:?} ledger balance", leg.to)),
+        };
+        let current_after_start_debit = if leg_index + 1 == quote.legs.len() && leg.to == quote.start_asset {
+            match current.checked_sub(quote.principal_native) {
+                Some(value) => value,
+                None => return rejected(quote, fallback_domain, "starting debit exceeds ledger balance"),
+            }
+        } else {
+            current
+        };
+        let exposure = match current_after_start_debit.checked_add(leg.wallet_after) {
+            Some(value) => value,
+            None => return rejected(quote, fallback_domain, "inventory exposure overflow"),
+        };
+        if exposure > bands.ceiling(leg.to) {
+            return rejected(quote, fallback_domain, format!("{:?} inventory ceiling exceeded", leg.to));
+        }
+        expected_before = leg.wallet_after;
+        expected_from = leg.to;
+    }
+    if expected_from != quote.end_asset {
+        return rejected(quote, fallback_domain, "quoted terminal asset does not match route");
+    }
+    let available = match available_native(quote.start_asset, balances.get(quote.start_asset), reservations) {
+        Ok(value) => value,
+        Err(reason) => return rejected(quote, fallback_domain, reason),
+    };
+    let remaining = match available.checked_sub(quote.principal_native) {
+        Some(value) => value,
+        None => return rejected(quote, fallback_domain, "insufficient unencumbered starting balance"),
+    };
+    if remaining < bands.floor(quote.start_asset) {
+        return rejected(quote, fallback_domain, "starting asset inventory floor breached");
+    }
+    let (domain, profit, bps) = match quote_profit(quote) {
+        Ok(value) => value,
+        Err(reason) => return rejected(quote, fallback_domain, reason),
+    };
+    let threshold_reason = match domain {
+        ProfitDomain::StableParUsd6Dec if profit < min_stable_profit_usd_6dec => Some("below stable absolute-profit threshold"),
+        ProfitDomain::StableParUsd6Dec if bps < min_stable_profit_bps => Some("below stable bps threshold"),
+        ProfitDomain::IcpE8s if profit < min_icp_profit_e8s => Some("below ICP absolute-profit threshold"),
+        ProfitDomain::IcpE8s if bps < min_icp_profit_bps => Some("below ICP bps threshold"),
+        _ => None,
+    };
+    CandidateEvaluation {
+        route_id: quote.route_id.clone(), canonical_cycle_id: quote.canonical_cycle_id.clone(),
+        start_asset: quote.start_asset, end_asset: quote.end_asset, profit_domain: domain,
+        principal_native: quote.principal_native, net_profit_native: profit, net_profit_bps: bps,
+        leg_count: quote.legs.len().try_into().unwrap_or(u8::MAX), size_ladder_index: quote.size_ladder_index,
+        par_assumption: quote.start_asset != quote.end_asset, eligible: threshold_reason.is_none(),
+        rejection_reason: threshold_reason.map(str::to_string),
+    }
+}
+
+pub fn rank_book(candidates: &mut [CandidateEvaluation]) {
+    candidates.sort_by(|left, right| {
+        right.net_profit_native.cmp(&left.net_profit_native)
+            .then_with(|| right.net_profit_bps.cmp(&left.net_profit_bps))
+            .then_with(|| left.leg_count.cmp(&right.leg_count))
+            .then_with(|| left.route_id.cmp(&right.route_id))
+            .then_with(|| left.size_ladder_index.cmp(&right.size_ladder_index))
+            .then_with(|| left.principal_native.cmp(&right.principal_native))
+    });
 }
