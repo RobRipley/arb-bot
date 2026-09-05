@@ -236,6 +236,43 @@ type WalletAssetBalanceV1 = record {
   metadata_valid: bool;
   error: opt text;
 };
+type CandidateClass = variant { IcpReturning; StablePar; StableSettledCrossAsset };
+type QuoteLegReportV1 = record {
+  to: Asset; wallet_before: nat; wallet_after: nat; gross_output: nat;
+  venue_input: nat; from: Asset; entry_ledger_fee: nat;
+  output_ledger_fee: nat; full_fill: bool; edge_id: text;
+};
+type RouteCandidateReportV1 = record {
+  asset_path: vec Asset; size_ladder_index: nat8; end_asset: Asset;
+  net_profit_bps: int64; legs: vec QuoteLegReportV1; allowance_status: text;
+  route_id: text; principal_native: nat; par_assumption: bool;
+  start_asset: Asset; candidate_class: CandidateClass;
+  canonical_cycle_id: opt text; quote_timestamp_ns: nat64; eligible: bool;
+  rejection_reason: opt text; inventory_effect: text; venue_edges: vec text;
+  full_fill: bool; net_profit_native: int64;
+};
+type ObservationAccumulatorV1 = record {
+  quote_call_budget_sufficient: bool; observation_id: text; started_at_ns: nat64;
+  candidates_evaluated: nat64; completed_at_ns: opt nat64; total_work_items: nat64;
+  best_icp_candidate: opt RouteCandidateReportV1;
+  provisional_best_stable_candidate: opt RouteCandidateReportV1;
+  incident: opt text; next_cursor: nat64; quote_calls_made: nat64;
+  route_count: nat32; full_fill_rejections: nat64;
+  best_stable_candidate: opt RouteCandidateReportV1; required_quote_calls: nat64;
+  provisional_best_icp_candidate: opt RouteCandidateReportV1; scan_complete: bool;
+};
+type ObservationStartV1 = record {
+  quote_call_budget_sufficient: bool; observation_id: text;
+  route_size_count: nat64; next_cursor: nat64; route_count: nat32;
+  required_quote_calls: nat64;
+};
+type ObservationBatchResultV1 = record {
+  observation: ObservationAccumulatorV1; candidates: vec RouteCandidateReportV1;
+};
+type BestRouteCandidatesV1 = record {
+  icp: opt RouteCandidateReportV1; stable: opt RouteCandidateReportV1;
+  observation_id: opt text; scan_complete: bool;
+};
 
 type Direction = variant {
   RumiToIcpswap;
@@ -491,6 +528,11 @@ service : (InitArgs) -> {
   set_route_arb_config_v1: (RouteArbConfigV1) -> (variant { Ok; Err: text });
   get_route_arb_status_v1: () -> (RouteArbStatusV1) query;
   get_route_wallet_balances_v1: () -> (vec WalletAssetBalanceV1);
+  start_route_observation_v1: () -> (variant { Ok: ObservationStartV1; Err: text });
+  quote_route_observation_batch_v1: (nat64, nat16) -> (variant { Ok: ObservationBatchResultV1; Err: text });
+  get_route_observation_v1: () -> (opt ObservationAccumulatorV1) query;
+  get_route_observations_v1: (nat64, nat64) -> (variant { Ok: vec ObservationAccumulatorV1; Err: text }) query;
+  get_best_route_candidates_v1: () -> (BestRouteCandidatesV1) query;
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;

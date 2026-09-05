@@ -167,7 +167,13 @@ fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
 fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
     require_admin();
     route_arb::validate_route_config(&config)?;
-    state::mutate_state(|s| s.route_arb = config);
+    state::mutate_state(|s| {
+        s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
+            .ok_or_else(|| "route config generation exhausted".to_string())?;
+        s.route_arb = config;
+        s.route_observation = None;
+        Ok::<(), String>(())
+    })?;
     Ok(())
 }
 
@@ -180,6 +186,103 @@ fn get_route_arb_status_v1() -> route_arb::RouteArbStatusV1 {
 async fn get_route_wallet_balances_v1() -> Vec<route_arb::WalletAssetBalanceV1> {
     require_admin();
     route_arb::read_wallet_balances(ic_cdk::id()).await
+}
+
+#[update]
+fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String> {
+    require_admin();
+    let (config, generation) = state::read_state(|s| (s.route_arb.clone(), s.route_arb_config_generation));
+    let universe = route_arb::build_work_universe(&config)?;
+    let now = ic_cdk::api::time();
+    let observation_id = format!("route-observation-{}-{}", generation, now);
+    let mut accumulator = route_arb::ObservationAccumulatorV1::new(
+        observation_id.clone(), now, 0, universe.items.len() as u64,
+        universe.required_quote_calls,
+        universe.required_quote_calls <= u64::from(config.max_quote_calls_per_observation),
+    );
+    accumulator.route_count = universe.route_count as u32;
+    let result = route_arb::ObservationStartV1 {
+        observation_id,
+        route_count: universe.route_count as u32,
+        route_size_count: universe.items.len() as u64,
+        required_quote_calls: universe.required_quote_calls,
+        quote_call_budget_sufficient: accumulator.quote_call_budget_sufficient,
+        next_cursor: 0,
+    };
+    state::mutate_state(|s| s.route_observation = Some(accumulator));
+    Ok(result)
+}
+
+#[update]
+async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<route_arb::ObservationBatchResultV1, String> {
+    require_admin();
+    if limit == 0 || limit > route_arb::HARD_MAX_PAGE_SIZE {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    let (config, generation, active) = state::read_state(|s| {
+        (s.route_arb.clone(), s.route_arb_config_generation, s.route_observation.clone())
+    });
+    let active = active.ok_or_else(|| "no active route observation".to_string())?;
+    if active.scan_complete {
+        return Err("route observation is already complete".to_string());
+    }
+    if active.next_cursor != cursor {
+        return Err(format!("cursor mismatch: expected {}, got {}", active.next_cursor, cursor));
+    }
+    let universe = route_arb::build_work_universe(&config)?;
+    if active.total_work_items != universe.items.len() as u64 {
+        return Err("route universe changed; start a new observation".to_string());
+    }
+    let start = usize::try_from(cursor).map_err(|_| "cursor exceeds platform range")?;
+    let end = start.saturating_add(usize::from(limit)).min(universe.items.len());
+    let quoted = route_arb::quote_observation_items(&config, &universe.items[start..end]).await;
+    let candidates: Vec<_> = quoted.iter().map(|(candidate, _, _)| candidate.clone()).collect();
+    let quote_calls = quoted.iter().map(|(_, calls, _)| *calls).sum();
+    let full_fill_rejections = quoted.iter().filter(|(_, _, rejected)| *rejected).count() as u64;
+    let completed_at = ic_cdk::api::time();
+    let observation = state::mutate_state(|s| -> Result<_, String> {
+        if s.route_arb_config_generation != generation {
+            return Err("route config changed while batch was quoting; results discarded".to_string());
+        }
+        let current = s.route_observation.as_mut().ok_or_else(|| "route observation disappeared while batch was quoting".to_string())?;
+        if current.observation_id != active.observation_id || current.next_cursor != cursor {
+            return Err("route observation advanced concurrently; results discarded".to_string());
+        }
+        route_arb::accumulate_observation_batch(current, cursor, candidates.clone(), quote_calls, full_fill_rejections)?;
+        if current.scan_complete {
+            current.completed_at_ns = Some(completed_at);
+        }
+        Ok(current.clone())
+    })?;
+    if observation.scan_complete {
+        state::append_route_observation(observation.clone())?;
+    }
+    Ok(route_arb::ObservationBatchResultV1 { observation, candidates })
+}
+
+#[query]
+fn get_route_observation_v1() -> Option<route_arb::ObservationAccumulatorV1> {
+    state::read_state(|s| s.route_observation.clone())
+}
+
+#[query]
+fn get_route_observations_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::ObservationAccumulatorV1>, String> {
+    state::get_route_observations_page(offset, limit)
+}
+
+#[query]
+fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
+    state::read_state(|s| match &s.route_observation {
+        Some(observation) => route_arb::BestRouteCandidatesV1 {
+            observation_id: Some(observation.observation_id.clone()),
+            scan_complete: observation.scan_complete,
+            stable: observation.best_stable_candidate.clone(),
+            icp: observation.best_icp_candidate.clone(),
+        },
+        None => route_arb::BestRouteCandidatesV1 {
+            observation_id: None, scan_complete: false, stable: None, icp: None,
+        },
+    })
 }
 
 #[query]

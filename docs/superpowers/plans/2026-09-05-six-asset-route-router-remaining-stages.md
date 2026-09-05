@@ -95,10 +95,10 @@
 
 **Interfaces:** `start_route_observation_v1`, `quote_route_observation_batch_v1(cursor, limit)`, `get_route_observations_v1(cursor, limit)`, `get_best_route_candidates_v1`, `ObservationV1`, `ObservationMetricsV1`.
 
-- [ ] Write failing adapter tests proving ICPSwap uses full-fill semantics, Rumi uses `calc_swap`, downstream input is net of both relevant ledger movements, prefix reuse only on exact edge/native-input identity, partial/error quotes reject, and no fund-moving method is reachable.
-- [ ] Write failing boundedness tests for deterministic cursors, maximum page/call/concurrency/age limits, complete-universe winner gating, route/size/call counts, quote latency/cycle metrics, rotation collisions, and incomplete observations.
-- [ ] Implement query-only adapters and a resumable observation builder. Persist only bounded completed summaries in new stable memory IDs.
-- [ ] Run scoped tests, Candid guard, and Stage-1 zero-call guards; commit `feat(arb): add bounded route quote observations`.
+- [x] Write failing adapter tests proving ICPSwap uses full-fill semantics, Rumi uses `calc_swap`, downstream input is net of both relevant ledger movements, prefix reuse only on exact edge/native-input identity, partial/error quotes reject, and no fund-moving method is reachable.
+- [x] Write failing boundedness tests for deterministic cursors, maximum page/call/concurrency/age limits, complete-universe winner gating, route/size/call counts, quote latency/cycle metrics, rotation collisions, and incomplete observations.
+- [x] Implement query-only adapters and a resumable observation builder. Persist only bounded completed summaries in new stable memory IDs.
+- [x] Run scoped tests, Candid guard, and Stage-1 zero-call guards; commit `feat(arb): add bounded route quote observations`.
 
 ### Task 6: Durable reservations, held positions, history, and global lock
 

@@ -838,6 +838,42 @@
         observed_decimals: I.Opt(I.Nat8), ledger_fee_native: I.Opt(I.Nat),
         balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
       });
+      const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null });
+      const QuoteLegReportV1 = I.Record({
+        to: RouteAsset, wallet_before: I.Nat, wallet_after: I.Nat, gross_output: I.Nat,
+        venue_input: I.Nat, from: RouteAsset, entry_ledger_fee: I.Nat,
+        output_ledger_fee: I.Nat, full_fill: I.Bool, edge_id: I.Text,
+      });
+      const RouteCandidateReportV1 = I.Record({
+        asset_path: I.Vec(RouteAsset), size_ladder_index: I.Nat8, end_asset: RouteAsset,
+        net_profit_bps: I.Int64, legs: I.Vec(QuoteLegReportV1), allowance_status: I.Text,
+        route_id: I.Text, principal_native: I.Nat, par_assumption: I.Bool,
+        start_asset: RouteAsset, candidate_class: CandidateClass,
+        canonical_cycle_id: I.Opt(I.Text), quote_timestamp_ns: I.Nat64,
+        eligible: I.Bool, rejection_reason: I.Opt(I.Text), inventory_effect: I.Text,
+        venue_edges: I.Vec(I.Text), full_fill: I.Bool, net_profit_native: I.Int64,
+      });
+      const ObservationAccumulatorV1 = I.Record({
+        quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
+        started_at_ns: I.Nat64, candidates_evaluated: I.Nat64,
+        completed_at_ns: I.Opt(I.Nat64), total_work_items: I.Nat64,
+        best_icp_candidate: I.Opt(RouteCandidateReportV1),
+        provisional_best_stable_candidate: I.Opt(RouteCandidateReportV1),
+        incident: I.Opt(I.Text), next_cursor: I.Nat64, quote_calls_made: I.Nat64,
+        route_count: I.Nat32, full_fill_rejections: I.Nat64,
+        best_stable_candidate: I.Opt(RouteCandidateReportV1), required_quote_calls: I.Nat64,
+        provisional_best_icp_candidate: I.Opt(RouteCandidateReportV1), scan_complete: I.Bool,
+      });
+      const ObservationStartV1 = I.Record({
+        quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
+        route_size_count: I.Nat64, next_cursor: I.Nat64, route_count: I.Nat32,
+        required_quote_calls: I.Nat64,
+      });
+      const ObservationBatchResultV1 = I.Record({ observation: ObservationAccumulatorV1, candidates: I.Vec(RouteCandidateReportV1) });
+      const BestRouteCandidatesV1 = I.Record({
+        icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
+        observation_id: I.Opt(I.Text), scan_complete: I.Bool,
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -887,6 +923,11 @@
         set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
         get_route_wallet_balances_v1: I.Func([], [I.Vec(WalletAssetBalanceV1)], []),
+        start_route_observation_v1: I.Func([], [I.Variant({ Ok: ObservationStartV1, Err: I.Text })], []),
+        quote_route_observation_batch_v1: I.Func([I.Nat64, I.Nat16], [I.Variant({ Ok: ObservationBatchResultV1, Err: I.Text })], []),
+        get_route_observation_v1: I.Func([], [I.Opt(ObservationAccumulatorV1)], ['query']),
+        get_route_observations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ObservationAccumulatorV1), Err: I.Text })], ['query']),
+        get_best_route_candidates_v1: I.Func([], [BestRouteCandidatesV1], ['query']),
         get_config: I.Func([], [BotConfig], ['query']),
         set_config: I.Func([BotConfigInput], [], []),
         get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),

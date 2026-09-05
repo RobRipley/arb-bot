@@ -661,7 +661,9 @@ impl Default for RouteArbConfigV1 {
             pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
             stable_size_ladder: vec![1_000_000, 5_000_000, 10_000_000, 40_000_000],
             icp_size_ladder: vec![100_000_000, 500_000_000, 1_000_000_000],
-            max_route_legs: 4,
+            // Three-leg routes are the measured default universe. Four-leg
+            // routes remain supported but require an explicit expansion.
+            max_route_legs: 3,
             max_quote_calls_per_observation: 4_096,
             max_concurrent_quote_calls: 8,
             max_stable_principal_usd_6dec: 40_000_000,
@@ -845,4 +847,588 @@ pub async fn read_wallet_balances(owner: Principal) -> Vec<WalletAssetBalanceV1>
     let reads = futures::future::join_all(pins.iter().map(|pin| read_ledger(pin, owner))).await;
     let reads: [LedgerReadResult; 6] = reads.try_into().expect("asset registry is compile-time fixed at six entries");
     wallet_rows_from_results(reads)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerFeeTable {
+    values: [Option<u128>; 6],
+}
+
+impl LedgerFeeTable {
+    pub fn zero() -> Self {
+        Self { values: [Some(0); 6] }
+    }
+
+    pub fn unknown() -> Self {
+        Self { values: [None; 6] }
+    }
+
+    pub fn set(&mut self, asset: Asset, fee: u128) {
+        self.values[asset.index()] = Some(fee);
+    }
+
+    pub fn get(&self, asset: Asset) -> Result<u128, String> {
+        self.values[asset.index()].ok_or_else(|| format!("unknown {:?} ledger fee", asset))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteWorkItem {
+    pub work_id: String,
+    pub route: Route,
+    pub size_ladder_index: u8,
+    pub principal_native: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkUniverse {
+    pub route_count: usize,
+    pub required_quote_calls: u64,
+    pub items: Vec<RouteWorkItem>,
+}
+
+fn native_stable_principal(usd_6dec: u64, asset: Asset) -> Result<u64, String> {
+    let decimals = asset.decimals();
+    if decimals >= 6 {
+        let factor = 10u64.checked_pow(u32::from(decimals - 6)).ok_or("unsupported decimal exponent")?;
+        usd_6dec.checked_mul(factor).ok_or_else(|| "stable principal conversion overflow".to_string())
+    } else {
+        let divisor = 10u64.checked_pow(u32::from(6 - decimals)).ok_or("unsupported decimal exponent")?;
+        Ok(usd_6dec / divisor)
+    }
+}
+
+pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, String> {
+    validate_route_config(config)?;
+    let enabled_assets: std::collections::BTreeSet<_> = config.asset_controls.iter().filter(|item| item.enabled).map(|item| item.asset).collect();
+    let enabled_pools: std::collections::BTreeSet<_> = config.pool_controls.iter().filter(|item| item.enabled).map(|item| item.pool_id.as_str()).collect();
+    let routes = enumerate_routes(config.max_route_legs)?
+        .into_iter()
+        .filter(|route| route.asset_path.iter().all(|asset| enabled_assets.contains(asset)))
+        .filter(|route| route.edges.iter().all(|edge| enabled_pools.contains(edge.pool_id)))
+        .filter(|route| match route.candidate_class {
+            CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => config.stable_book_enabled,
+            CandidateClass::IcpReturning => config.icp_book_enabled,
+        })
+        .collect::<Vec<_>>();
+    let route_count = routes.len();
+    let mut items = Vec::new();
+    for route in routes {
+        let ladder = if route.candidate_class == CandidateClass::IcpReturning {
+            &config.icp_size_ladder
+        } else {
+            &config.stable_size_ladder
+        };
+        for (index, configured_size) in ladder.iter().enumerate() {
+            let principal_native = if route.candidate_class == CandidateClass::IcpReturning {
+                *configured_size
+            } else {
+                native_stable_principal(*configured_size, route.start_asset())?
+            };
+            items.push(RouteWorkItem {
+                work_id: format!("{}#s{:02}", route.route_id, index),
+                route: route.clone(),
+                size_ladder_index: index as u8,
+                principal_native,
+            });
+        }
+    }
+    items.sort_by(|left, right| left.work_id.cmp(&right.work_id));
+    let required_quote_calls = items.iter().map(|item| item.route.edges.len() as u64).sum();
+    Ok(WorkUniverse { route_count, required_quote_calls, items })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuoteMethod {
+    RumiCalcSwap { coin_in: u8, coin_out: u8 },
+    IcpSwapQuoteForAll { zero_for_one: bool },
+}
+
+fn rumi_index(asset: Asset) -> Result<u8, String> {
+    match asset {
+        Asset::IcUsd => Ok(0),
+        Asset::CkUsdt => Ok(1),
+        Asset::CkUsdc => Ok(2),
+        _ => Err("Rumi 3pool edge contains a non-stable asset".to_string()),
+    }
+}
+
+pub fn quote_method(edge: &DirectedEdge, observed_token0: Option<Asset>) -> Result<QuoteMethod, String> {
+    match edge.venue {
+        VenueKind::Rumi3Pool => Ok(QuoteMethod::RumiCalcSwap {
+            coin_in: rumi_index(edge.from)?,
+            coin_out: rumi_index(edge.to)?,
+        }),
+        VenueKind::IcpSwap => {
+            let token0 = observed_token0.ok_or("ICPSwap token ordering is unverified")?;
+            if token0 != edge.from && token0 != edge.to {
+                return Err("ICPSwap token0 is not an admitted edge asset".to_string());
+            }
+            Ok(QuoteMethod::IcpSwapQuoteForAll { zero_for_one: token0 == edge.from })
+        }
+    }
+}
+
+pub fn build_quote_from_outputs(
+    route: &Route,
+    principal_native: u64,
+    fees: &LedgerFeeTable,
+    gross_outputs: &[u64],
+    quoted_at_ns: u64,
+    size_ladder_index: u8,
+) -> Result<RouteQuote, String> {
+    if route.edges.len() != gross_outputs.len() || route.edges.is_empty() {
+        return Err("gross output count must match a non-empty route".to_string());
+    }
+    let mut wallet_before = u128::from(principal_native);
+    let mut legs = Vec::with_capacity(route.edges.len());
+    for (edge, gross_output) in route.edges.iter().zip(gross_outputs) {
+        let entry_ledger_fee = fees.get(edge.from)?;
+        let output_ledger_fee = fees.get(edge.to)?;
+        let venue_input = wallet_before.checked_sub(entry_ledger_fee).ok_or("entry fee consumes route input")?;
+        let gross_output = u128::from(*gross_output);
+        let wallet_after = gross_output.checked_sub(output_ledger_fee).ok_or("output fee consumes route output")?;
+        legs.push(QuoteLeg {
+            edge_id: edge.edge_id.clone(),
+            from: edge.from,
+            to: edge.to,
+            wallet_before,
+            entry_ledger_fee,
+            venue_input,
+            gross_output,
+            output_ledger_fee,
+            wallet_after,
+            dex_fee_native: 0,
+            full_fill: true,
+        });
+        wallet_before = wallet_after;
+    }
+    Ok(RouteQuote {
+        route_id: route.route_id.clone(),
+        canonical_cycle_id: route.canonical_cycle_id.clone(),
+        start_asset: route.start_asset(),
+        end_asset: route.end_asset(),
+        asset_path: route.asset_path.clone(),
+        principal_native: u128::from(principal_native),
+        legs,
+        allowance_sufficient: Some(true),
+        quoted_at_ns,
+        size_ladder_index,
+    })
+}
+
+pub fn checked_quote_age(now_ns: u64, quoted_at_ns: u64, max_age_ns: u64) -> Result<u64, String> {
+    if max_age_ns == 0 || max_age_ns > HARD_MAX_QUOTE_AGE_NS {
+        return Err("invalid quote age bound".to_string());
+    }
+    let age = now_ns.checked_sub(quoted_at_ns).ok_or("clock regression while checking quote age")?;
+    if age >= max_age_ns {
+        return Err("quote is stale".to_string());
+    }
+    Ok(age)
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct QuoteLegReportV1 {
+    pub edge_id: String,
+    pub from: Asset,
+    pub to: Asset,
+    pub wallet_before: u128,
+    pub entry_ledger_fee: u128,
+    pub venue_input: u128,
+    pub gross_output: u128,
+    pub output_ledger_fee: u128,
+    pub wallet_after: u128,
+    pub full_fill: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RouteCandidateReportV1 {
+    pub route_id: String,
+    pub canonical_cycle_id: Option<String>,
+    pub candidate_class: CandidateClass,
+    pub asset_path: Vec<Asset>,
+    pub venue_edges: Vec<String>,
+    pub start_asset: Asset,
+    pub end_asset: Asset,
+    pub principal_native: u128,
+    pub net_profit_native: i64,
+    pub net_profit_bps: i64,
+    pub size_ladder_index: u8,
+    pub par_assumption: bool,
+    pub full_fill: bool,
+    pub allowance_status: String,
+    pub inventory_effect: String,
+    pub quote_timestamp_ns: u64,
+    pub legs: Vec<QuoteLegReportV1>,
+    pub eligible: bool,
+    pub rejection_reason: Option<String>,
+}
+
+impl RouteCandidateReportV1 {
+    /// Deterministic constructor used by pure observation-state tests.
+    pub fn fixture(id: &str, class: CandidateClass, profit: i64, eligible: bool) -> Self {
+        let (start, end) = if class == CandidateClass::IcpReturning {
+            (Asset::Icp, Asset::Icp)
+        } else {
+            (Asset::CkUsdc, Asset::CkUsdc)
+        };
+        Self {
+            route_id: id.to_string(), canonical_cycle_id: None, candidate_class: class,
+            asset_path: vec![start, end], venue_edges: Vec::new(), start_asset: start,
+            end_asset: end, principal_native: 1, net_profit_native: profit,
+            net_profit_bps: profit, size_ladder_index: 0, par_assumption: false,
+            full_fill: true, allowance_status: "sufficient".to_string(),
+            inventory_effect: "within bands".to_string(), quote_timestamp_ns: 0,
+            legs: Vec::new(), eligible, rejection_reason: None,
+        }
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ObservationAccumulatorV1 {
+    pub observation_id: String,
+    pub started_at_ns: u64,
+    pub next_cursor: u64,
+    pub total_work_items: u64,
+    pub route_count: u32,
+    pub required_quote_calls: u64,
+    pub quote_call_budget_sufficient: bool,
+    pub quote_calls_made: u64,
+    pub full_fill_rejections: u64,
+    pub candidates_evaluated: u64,
+    pub scan_complete: bool,
+    pub completed_at_ns: Option<u64>,
+    pub provisional_best_stable_candidate: Option<RouteCandidateReportV1>,
+    pub provisional_best_icp_candidate: Option<RouteCandidateReportV1>,
+    pub best_stable_candidate: Option<RouteCandidateReportV1>,
+    pub best_icp_candidate: Option<RouteCandidateReportV1>,
+    pub incident: Option<String>,
+}
+
+impl ObservationAccumulatorV1 {
+    pub fn new(
+        observation_id: String,
+        started_at_ns: u64,
+        next_cursor: u64,
+        total_work_items: u64,
+        required_quote_calls: u64,
+        quote_call_budget_sufficient: bool,
+    ) -> Self {
+        Self {
+            observation_id, started_at_ns, next_cursor, total_work_items,
+            route_count: 0, required_quote_calls, quote_call_budget_sufficient,
+            quote_calls_made: 0, full_fill_rejections: 0, candidates_evaluated: 0,
+            scan_complete: false, completed_at_ns: None,
+            provisional_best_stable_candidate: None, provisional_best_icp_candidate: None,
+            best_stable_candidate: None, best_icp_candidate: None, incident: None,
+        }
+    }
+}
+
+fn replace_best(slot: &mut Option<RouteCandidateReportV1>, candidate: &RouteCandidateReportV1) {
+    if !candidate.eligible {
+        return;
+    }
+    let replace = slot.as_ref().map(|prior| {
+        candidate.net_profit_native > prior.net_profit_native
+            || (candidate.net_profit_native == prior.net_profit_native
+                && (candidate.net_profit_bps > prior.net_profit_bps
+                    || (candidate.net_profit_bps == prior.net_profit_bps
+                        && (candidate.legs.len() < prior.legs.len()
+                            || (candidate.legs.len() == prior.legs.len()
+                                && (candidate.route_id < prior.route_id
+                                    || (candidate.route_id == prior.route_id
+                                        && candidate.size_ladder_index < prior.size_ladder_index)))))))
+    }).unwrap_or(true);
+    if replace {
+        *slot = Some(candidate.clone());
+    }
+}
+
+pub fn accumulate_observation_batch(
+    state: &mut ObservationAccumulatorV1,
+    cursor: u64,
+    candidates: Vec<RouteCandidateReportV1>,
+    quote_calls: u64,
+    full_fill_rejections: u64,
+) -> Result<(), String> {
+    if state.scan_complete {
+        return Err("observation is already complete".to_string());
+    }
+    if cursor != state.next_cursor {
+        return Err(format!("cursor mismatch: expected {}, got {}", state.next_cursor, cursor));
+    }
+    let next = cursor.checked_add(candidates.len() as u64).ok_or("observation cursor overflow")?;
+    if next > state.total_work_items {
+        return Err("batch exceeds observation universe".to_string());
+    }
+    state.next_cursor = next;
+    state.quote_calls_made = state.quote_calls_made.checked_add(quote_calls).ok_or("quote-call counter overflow")?;
+    state.full_fill_rejections = state.full_fill_rejections.checked_add(full_fill_rejections).ok_or("rejection counter overflow")?;
+    state.candidates_evaluated = state.candidates_evaluated.checked_add(candidates.len() as u64).ok_or("candidate counter overflow")?;
+    for candidate in &candidates {
+        match candidate.candidate_class {
+            CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => replace_best(&mut state.provisional_best_stable_candidate, candidate),
+            CandidateClass::IcpReturning => replace_best(&mut state.provisional_best_icp_candidate, candidate),
+        }
+    }
+    if next == state.total_work_items {
+        state.scan_complete = true;
+        if state.quote_call_budget_sufficient {
+            state.best_stable_candidate = state.provisional_best_stable_candidate.clone();
+            state.best_icp_candidate = state.provisional_best_icp_candidate.clone();
+        } else {
+            state.incident = Some("complete route-and-size universe exceeds configured quote-call budget".to_string());
+        }
+    }
+    Ok(())
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ObservationStartV1 {
+    pub observation_id: String,
+    pub route_count: u32,
+    pub route_size_count: u64,
+    pub required_quote_calls: u64,
+    pub quote_call_budget_sufficient: bool,
+    pub next_cursor: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ObservationBatchResultV1 {
+    pub observation: ObservationAccumulatorV1,
+    pub candidates: Vec<RouteCandidateReportV1>,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct BestRouteCandidatesV1 {
+    pub observation_id: Option<String>,
+    pub scan_complete: bool,
+    pub stable: Option<RouteCandidateReportV1>,
+    pub icp: Option<RouteCandidateReportV1>,
+}
+
+fn asset_for_ledger_text(address: &str) -> Option<Asset> {
+    asset_pins().into_iter().find(|pin| pin.ledger.to_text() == address).map(|pin| pin.asset)
+}
+
+async fn load_pool_orderings(items: &[RouteWorkItem]) -> std::collections::BTreeMap<String, Result<Option<Asset>, String>> {
+    let needed: std::collections::BTreeSet<_> = items.iter()
+        .flat_map(|item| item.route.edges.iter().map(|edge| edge.pool_id.to_string()))
+        .collect();
+    let mut result = std::collections::BTreeMap::new();
+    for pool in pool_pins().into_iter().filter(|pool| needed.contains(pool.pool_id)) {
+        let admission = match pool.venue {
+            VenueKind::Rumi3Pool => {
+                match crate::prices::fetch_rumi_pool_status(pool.principal).await {
+                    Ok(status) => {
+                        let actual: Vec<_> = status.tokens.iter().map(|token| token.ledger_id).collect();
+                        let expected: Vec<_> = pool.assets.iter().map(|asset| asset_pins()[asset.index()].ledger).collect();
+                        if actual == expected
+                            && status.tokens.iter().zip(pool.assets.iter()).all(|(token, asset)| {
+                                token.symbol == asset.symbol() && token.decimals == asset.decimals()
+                            })
+                        {
+                            Ok(None)
+                        } else {
+                            Err("Rumi 3pool token identity or ordering does not match immutable registry".to_string())
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            VenueKind::IcpSwap => {
+                match crate::prices::fetch_icpswap_pool_metadata(pool.principal).await {
+                    Ok(metadata) => {
+                        let token0 = asset_for_ledger_text(&metadata.token0.address);
+                        let token1 = asset_for_ledger_text(&metadata.token1.address);
+                        match (token0, token1) {
+                            (Some(token0), Some(token1))
+                                if pool.assets.len() == 2
+                                    && ((pool.assets[0] == token0 && pool.assets[1] == token1)
+                                        || (pool.assets[0] == token1 && pool.assets[1] == token0)) => Ok(Some(token0)),
+                            _ => Err("ICPSwap token identity or pair does not match immutable registry".to_string()),
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+        };
+        result.insert(pool.pool_id.to_string(), admission);
+    }
+    result
+}
+
+fn tables_from_wallet_rows(rows: &[WalletAssetBalanceV1]) -> (LedgerFeeTable, AssetAmounts) {
+    let mut fees = LedgerFeeTable::unknown();
+    let mut balances = AssetAmounts::unknown();
+    for row in rows {
+        if row.metadata_valid {
+            if let Some(fee) = row.ledger_fee_native {
+                fees.set(row.asset, fee);
+            }
+            balances.set(row.asset, row.balance_native);
+        }
+    }
+    (fees, balances)
+}
+
+fn inventory_bands_from_config(config: &RouteArbConfigV1) -> InventoryBands {
+    let mut bands = InventoryBands::unbounded();
+    for band in &config.inventory_bands {
+        bands.set(band.asset, u128::from(band.floor_native), u128::from(band.ceiling_native));
+    }
+    bands
+}
+
+fn rejection_report(item: &RouteWorkItem, timestamp: u64, reason: String) -> RouteCandidateReportV1 {
+    RouteCandidateReportV1 {
+        route_id: item.route.route_id.clone(),
+        canonical_cycle_id: item.route.canonical_cycle_id.clone(),
+        candidate_class: item.route.candidate_class,
+        asset_path: item.route.asset_path.clone(),
+        venue_edges: item.route.edges.iter().map(|edge| edge.edge_id.clone()).collect(),
+        start_asset: item.route.start_asset(), end_asset: item.route.end_asset(),
+        principal_native: u128::from(item.principal_native), net_profit_native: 0,
+        net_profit_bps: 0, size_ladder_index: item.size_ladder_index,
+        par_assumption: item.route.start_asset() != item.route.end_asset(),
+        full_fill: false, allowance_status: "unknown".to_string(),
+        inventory_effect: "not evaluated".to_string(), quote_timestamp_ns: timestamp,
+        legs: Vec::new(), eligible: false, rejection_reason: Some(reason),
+    }
+}
+
+fn candidate_report(
+    item: &RouteWorkItem,
+    quote: &RouteQuote,
+    evaluation: CandidateEvaluation,
+    allowance_sufficient: bool,
+) -> RouteCandidateReportV1 {
+    let profit = i64::try_from(evaluation.net_profit_native);
+    let inventory_blocked = evaluation.rejection_reason.as_deref().is_some_and(|reason| {
+        reason.contains("inventory") || reason.contains("balance")
+    });
+    let mut rejection_reason = evaluation.rejection_reason;
+    let eligible = evaluation.eligible && profit.is_ok();
+    if profit.is_err() {
+        rejection_reason = Some("native profit exceeds report representation".to_string());
+    }
+    RouteCandidateReportV1 {
+        route_id: evaluation.route_id,
+        canonical_cycle_id: evaluation.canonical_cycle_id,
+        candidate_class: item.route.candidate_class,
+        asset_path: item.route.asset_path.clone(),
+        venue_edges: item.route.edges.iter().map(|edge| edge.edge_id.clone()).collect(),
+        start_asset: evaluation.start_asset,
+        end_asset: evaluation.end_asset,
+        principal_native: evaluation.principal_native,
+        net_profit_native: profit.unwrap_or(0),
+        net_profit_bps: evaluation.net_profit_bps,
+        size_ladder_index: evaluation.size_ladder_index,
+        par_assumption: evaluation.par_assumption,
+        full_fill: quote.legs.iter().all(|leg| leg.full_fill),
+        allowance_status: if allowance_sufficient { "sufficient" } else { "unknown_or_insufficient" }.to_string(),
+        inventory_effect: if inventory_blocked {
+            "blocked".to_string()
+        } else {
+            "within configured bands".to_string()
+        },
+        quote_timestamp_ns: quote.quoted_at_ns,
+        legs: quote.legs.iter().map(|leg| QuoteLegReportV1 {
+            edge_id: leg.edge_id.clone(), from: leg.from, to: leg.to,
+            wallet_before: leg.wallet_before, entry_ledger_fee: leg.entry_ledger_fee,
+            venue_input: leg.venue_input, gross_output: leg.gross_output,
+            output_ledger_fee: leg.output_ledger_fee, wallet_after: leg.wallet_after,
+            full_fill: leg.full_fill,
+        }).collect(),
+        eligible,
+        rejection_reason,
+    }
+}
+
+async fn quote_work_item_live(
+    item: &RouteWorkItem,
+    config: &RouteArbConfigV1,
+    fees: &LedgerFeeTable,
+    balances: &AssetAmounts,
+    admissions: &std::collections::BTreeMap<String, Result<Option<Asset>, String>>,
+) -> (RouteCandidateReportV1, u64, bool) {
+    let mut wallet_before = item.principal_native;
+    let mut gross_outputs = Vec::with_capacity(item.route.edges.len());
+    let mut allowance_sufficient = true;
+    let mut quote_calls = 0u64;
+    for edge in &item.route.edges {
+        let ordering = match admissions.get(edge.pool_id) {
+            Some(Ok(ordering)) => *ordering,
+            Some(Err(error)) => return (rejection_report(item, ic_cdk::api::time(), error.clone()), quote_calls, false),
+            None => return (rejection_report(item, ic_cdk::api::time(), "pool admission evidence unavailable".to_string()), quote_calls, false),
+        };
+        let entry_fee = match fees.get(edge.from).and_then(|fee| u64::try_from(fee).map_err(|_| "ledger fee exceeds u64".to_string())) {
+            Ok(fee) => fee,
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, false),
+        };
+        let venue_input = match wallet_before.checked_sub(entry_fee) {
+            Some(value) if value > 0 => value,
+            _ => return (rejection_report(item, ic_cdk::api::time(), "entry fee consumes route input".to_string()), quote_calls, false),
+        };
+        let ledger = asset_pins()[edge.from.index()].ledger;
+        match crate::swaps::query_allowance(ledger, ic_cdk::id(), edge.pool_principal).await {
+            Ok((allowance, expires_at)) => {
+                let expired = expires_at.is_some_and(|expiry| expiry <= ic_cdk::api::time());
+                if allowance < venue_input || expired { allowance_sufficient = false; }
+            }
+            Err(_) => allowance_sufficient = false,
+        }
+        quote_calls += 1;
+        let gross = match quote_method(edge, ordering) {
+            Ok(QuoteMethod::RumiCalcSwap { coin_in, coin_out }) => {
+                crate::swaps::pool_calc_swap(edge.pool_principal, coin_in, coin_out, venue_input).await
+            }
+            Ok(QuoteMethod::IcpSwapQuoteForAll { zero_for_one }) => {
+                crate::prices::fetch_icpswap_quote_for_all(edge.pool_principal, venue_input, zero_for_one).await
+            }
+            Err(error) => Err(error),
+        };
+        let gross = match gross {
+            Ok(value) => value,
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, true),
+        };
+        let output_fee = match fees.get(edge.to).and_then(|fee| u64::try_from(fee).map_err(|_| "ledger fee exceeds u64".to_string())) {
+            Ok(fee) => fee,
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, false),
+        };
+        wallet_before = match gross.checked_sub(output_fee) {
+            Some(value) if value > 0 => value,
+            _ => return (rejection_report(item, ic_cdk::api::time(), "output fee consumes route output".to_string()), quote_calls, false),
+        };
+        gross_outputs.push(gross);
+    }
+    let quoted_at = ic_cdk::api::time();
+    let mut quote = match build_quote_from_outputs(&item.route, item.principal_native, fees, &gross_outputs, quoted_at, item.size_ladder_index) {
+        Ok(quote) => quote,
+        Err(error) => return (rejection_report(item, quoted_at, error), quote_calls, false),
+    };
+    quote.allowance_sufficient = Some(allowance_sufficient);
+    let bands = inventory_bands_from_config(config);
+    let evaluation = evaluate_candidate(
+        &quote, balances, &ReservationTotals::default(), &bands,
+        i128::from(config.min_stable_profit_usd_6dec), i64::from(config.min_stable_profit_bps),
+        i128::from(config.min_icp_profit_e8s), i64::from(config.min_icp_profit_bps),
+    );
+    (candidate_report(item, &quote, evaluation, allowance_sufficient), quote_calls, false)
+}
+
+pub async fn quote_observation_items(
+    config: &RouteArbConfigV1,
+    items: &[RouteWorkItem],
+) -> Vec<(RouteCandidateReportV1, u64, bool)> {
+    let wallet_rows = read_wallet_balances(ic_cdk::id()).await;
+    let (fees, balances) = tables_from_wallet_rows(&wallet_rows);
+    let admissions = load_pool_orderings(items).await;
+    let mut reports = Vec::with_capacity(items.len());
+    for item in items {
+        reports.push(quote_work_item_live(item, config, &fees, &balances, &admissions).await);
+    }
+    reports
 }

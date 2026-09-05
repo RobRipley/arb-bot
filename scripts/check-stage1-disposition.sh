@@ -108,6 +108,9 @@ get_config
 get_route_arb_config_v1
 get_route_arb_status_v1
 get_route_wallet_balances_v1
+get_route_observation_v1
+get_route_observations_v1
+get_best_route_candidates_v1
 get_trade_history
 get_trade_legs
 get_activity_log
@@ -133,6 +136,12 @@ pause_volume
 resume_volume
 '
 
+# ── Route-observation updates: query-only inter-canister calls, no mutation ──
+ROUTE_OBSERVATION='
+start_route_observation_v1
+quote_route_observation_batch_v1
+'
+
 # ── Surviving volume operation (Stage-4 global lock participant) ──
 VOLUME_OPERATION='
 volume_swap
@@ -149,8 +158,8 @@ recover_partydex_balance
 '
 
 all_classified() {
-  printf '%s\n%s\n%s\n%s\n%s\n' \
-    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$ROUTE_OBSERVATION" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" \
     | grep -v '^[[:space:]]*$' | sort -u
 }
 
@@ -177,7 +186,7 @@ fi
 
 if [[ "$fail" -eq 0 ]]; then
   n=$(printf '%s\n' "$ACTUAL" | grep -c .)
-  echo "PASS: all $n public methods have an exact Stage-1 disposition (fail-closed: $(printf '%s\n' "$FAIL_CLOSED" | grep -c .), read-only: $(printf '%s\n' "$READ_ONLY" | grep -c .), volume-config: $(printf '%s\n' "$VOLUME_CONFIG" | grep -c .), volume-op: $(printf '%s\n' "$VOLUME_OPERATION" | grep -c .), generic-recovery: $(printf '%s\n' "$GENERIC_RECOVERY" | grep -c .))."
+  echo "PASS: all $n public methods have an exact Stage-1 disposition (fail-closed: $(printf '%s\n' "$FAIL_CLOSED" | grep -c .), read-only: $(printf '%s\n' "$READ_ONLY" | grep -c .), volume-config: $(printf '%s\n' "$VOLUME_CONFIG" | grep -c .), route-observation: $(printf '%s\n' "$ROUTE_OBSERVATION" | grep -c .), volume-op: $(printf '%s\n' "$VOLUME_OPERATION" | grep -c .), generic-recovery: $(printf '%s\n' "$GENERIC_RECOVERY" | grep -c .))."
 fi
 
 exit "$fail"

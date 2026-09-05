@@ -967,6 +967,10 @@ pub struct BotState {
     #[serde(default)]
     pub route_arb: crate::route_arb::RouteArbConfigV1,
     #[serde(default)]
+    pub route_arb_config_generation: u64,
+    #[serde(default)]
+    pub route_observation: Option<crate::route_arb::ObservationAccumulatorV1>,
+    #[serde(default)]
     pub token_ordering_resolved: bool,
     #[serde(default)]
     pub icusd_token_ordering_resolved: bool,
@@ -1070,6 +1074,8 @@ impl Default for BotState {
                 strategy_t_ckusdc_ceiling: default_strategy_t_ckusdc_ceiling(),
             },
             route_arb: crate::route_arb::RouteArbConfigV1::default(),
+            route_arb_config_generation: 0,
+            route_observation: None,
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
@@ -1134,6 +1140,7 @@ json_storable!(ActivityRecord);
 json_storable!(TradeLeg);
 json_storable!(CycleSnapshot);
 json_storable!(VolumeTradeLeg);
+json_storable!(crate::route_arb::ObservationAccumulatorV1);
 
 // ─── Stable memory layout ───
 //
@@ -1144,6 +1151,7 @@ json_storable!(VolumeTradeLeg);
 // MemoryId 7,8:     TRADE_LEGS log
 // MemoryId 9,10:    SNAPSHOTS log
 // MemoryId 11,12:   VOLUME_TRADES log
+// MemoryId 13,14:   ROUTE_OBSERVATIONS log
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -1198,6 +1206,13 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(11))),
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(12))),
         ).expect("init VOLUME_TRADES"),
+    );
+
+    static ROUTE_OBSERVATIONS: RefCell<StableLog<crate::route_arb::ObservationAccumulatorV1, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(13))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(14))),
+        ).expect("init ROUTE_OBSERVATIONS"),
     );
 
     // Heap cache mirroring META_CELL for fast reads.
@@ -1407,6 +1422,42 @@ pub fn volume_trades_count() -> u64 {
     VOLUME_TRADES.with(|t| t.borrow().len())
 }
 
+pub fn append_route_observation(
+    observation: crate::route_arb::ObservationAccumulatorV1,
+) -> Result<(), String> {
+    if !observation.scan_complete || observation.completed_at_ns.is_none() {
+        return Err("only completed observations may enter terminal history".to_string());
+    }
+    ROUTE_OBSERVATIONS.with(|log| {
+        let log = log.borrow_mut();
+        if log.len() >= 10_000 {
+            return Err("route observation history reached its 10,000-record cap".to_string());
+        }
+        log.append(&observation)
+            .map(|_| ())
+            .map_err(|error| format!("failed to append route observation: {error:?}"))
+    })
+}
+
+pub fn get_route_observations_page(
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<crate::route_arb::ObservationAccumulatorV1>, String> {
+    if limit == 0 || limit > u64::from(crate::route_arb::HARD_MAX_PAGE_SIZE) {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    ROUTE_OBSERVATIONS.with(|log| {
+        let log = log.borrow();
+        let total = log.len();
+        if offset >= total {
+            return Ok(Vec::new());
+        }
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        Ok((start..end).filter_map(|index| log.get(index)).collect())
+    })
+}
+
 // ─── log_activity (same signature as before) ───
 
 pub fn log_activity(category: &str, message: &str) {
@@ -1493,6 +1544,8 @@ pub fn load_from_stable_memory() {
         let new_state = BotState {
             config: legacy.config,
             route_arb: crate::route_arb::RouteArbConfigV1::default(),
+            route_arb_config_generation: 0,
+            route_observation: None,
             token_ordering_resolved: legacy.token_ordering_resolved,
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
