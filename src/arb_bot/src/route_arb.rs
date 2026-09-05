@@ -6,6 +6,7 @@
 
 use candid::{CandidType, Deserialize, Principal};
 use candid::Nat;
+use futures::StreamExt;
 use icrc_ledger_types::icrc1::account::Account;
 use num_traits::ToPrimitive;
 use serde::Serialize;
@@ -1779,9 +1780,10 @@ pub async fn quote_observation_items(
     let wallet_rows = read_wallet_balances(ic_cdk::id()).await;
     let (fees, balances) = tables_from_wallet_rows(&wallet_rows);
     let admissions = load_pool_orderings(items).await;
-    let mut reports = Vec::with_capacity(items.len());
-    for item in items {
-        reports.push(quote_work_item_live(item, config, &fees, &balances, reservations, &admissions).await);
-    }
-    reports
+    futures::stream::iter(items.iter().map(|item| {
+        quote_work_item_live(item, config, &fees, &balances, reservations, &admissions)
+    }))
+    .buffered(usize::from(config.max_concurrent_quote_calls))
+    .collect()
+    .await
 }
