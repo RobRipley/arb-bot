@@ -3312,6 +3312,8 @@
       if (route.type === 'invalid') return;
       const amtStr = document.getElementById('vol-swap-from-amount').value.trim();
       if (!amtStr || isNaN(Number(amtStr)) || Number(amtStr) <= 0) { document.getElementById('vol-swap-to-amount-display').textContent = '—'; return; }
+      toast('Manual Rumi/3pool swaps are retired (Stage 1 of the six-asset route-arbitrage policy) — this action is disabled', 'error');
+      return;
       const fromKey = document.getElementById('vol-swap-from-token').value, toKey = document.getElementById('vol-swap-to-token').value;
       const fromInfo = VOL_SWAP_TOKENS[fromKey], toInfo = VOL_SWAP_TOKENS[toKey];
       const raw = humanToRaw(amtStr, fromInfo.decimals);
