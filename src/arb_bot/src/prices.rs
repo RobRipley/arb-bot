@@ -347,6 +347,23 @@ pub enum IcpSwapMetadataResult {
     Err(IcpSwapError),
 }
 
+pub async fn fetch_icpswap_pool_metadata(icpswap_pool: Principal) -> Result<PoolMetadata, String> {
+    let result: Result<(IcpSwapMetadataResult,), _> =
+        ic_cdk::call(icpswap_pool, "metadata", ()).await;
+    match result {
+        Ok((IcpSwapMetadataResult::Ok(metadata),)) => Ok(metadata),
+        Ok((IcpSwapMetadataResult::Err(error),)) => Err(format!("ICPSwap metadata error: {:?}", error)),
+        Err((code, message)) => Err(format!("ICPSwap metadata call failed ({:?}): {}", code, message)),
+    }
+}
+
+pub async fn fetch_rumi_pool_status(rumi_3pool: Principal) -> Result<PoolStatus, String> {
+    let result: Result<(PoolStatus,), _> = ic_cdk::call(rumi_3pool, "get_pool_status", ()).await;
+    result.map(|(status,)| status).map_err(|(code, message)| {
+        format!("Rumi 3pool status call failed ({:?}): {}", code, message)
+    })
+}
+
 /// Query ICPSwap pool metadata to determine if ICP is token0 or token1
 pub async fn fetch_icpswap_token_ordering(
     icpswap_pool: Principal,

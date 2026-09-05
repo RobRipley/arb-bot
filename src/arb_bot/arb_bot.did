@@ -182,6 +182,137 @@ type PublicHealth = record {
   volume_paused: bool;
 };
 
+type Asset = variant { Icp; IcUsd; CkUsdc; CkUsdt; CkBtc; CkEth };
+type AssetControlV1 = record { asset: Asset; enabled: bool };
+type PoolControlV1 = record { pool_id: text; enabled: bool };
+type AssetInventoryBandV1 = record {
+  asset: Asset;
+  floor_native: nat64;
+  ceiling_native: nat64;
+};
+type RouteArbConfigV1 = record {
+  enabled: bool;
+  dry_run: bool;
+  stable_book_enabled: bool;
+  icp_book_enabled: bool;
+  asset_controls: vec AssetControlV1;
+  pool_controls: vec PoolControlV1;
+  stable_size_ladder: vec nat64;
+  icp_size_ladder: vec nat64;
+  max_route_legs: nat8;
+  max_quote_calls_per_observation: nat16;
+  max_concurrent_quote_calls: nat8;
+  max_stable_principal_usd_6dec: nat64;
+  max_icp_principal_e8s: nat64;
+  min_stable_profit_usd_6dec: nat64;
+  min_stable_profit_bps: nat32;
+  min_icp_profit_e8s: nat64;
+  min_icp_profit_bps: nat32;
+  inventory_bands: vec AssetInventoryBandV1;
+  quote_max_age_ns: nat64;
+  settlement_timeout_ns: nat64;
+  reconciliation_queries_per_cycle: nat8;
+  max_open_held_positions: nat16;
+  max_open_non_route_reservations: nat16;
+  max_terminal_execution_records: nat32;
+  max_execution_record_bytes: nat32;
+  max_reconciliation_evidence_items: nat8;
+};
+type RouteArbStatusV1 = record {
+  config_valid: bool;
+  config_incident: opt text;
+  execution_compiled_in: bool;
+  live_execution_authorized: bool;
+  route_count: nat32;
+};
+type WalletAssetBalanceV1 = record {
+  asset: Asset;
+  symbol: text;
+  ledger: principal;
+  expected_decimals: nat8;
+  observed_decimals: opt nat8;
+  ledger_fee_native: opt nat;
+  balance_native: opt nat;
+  metadata_valid: bool;
+  error: opt text;
+};
+type CandidateClass = variant { IcpReturning; StablePar; StableSettledCrossAsset };
+type QuoteLegReportV1 = record {
+  to: Asset; wallet_before: nat; wallet_after: nat; gross_output: nat;
+  venue_input: nat; from: Asset; entry_ledger_fee: nat;
+  output_ledger_fee: nat; full_fill: bool; edge_id: text;
+};
+type RouteCandidateReportV1 = record {
+  asset_path: vec Asset; size_ladder_index: nat8; end_asset: Asset;
+  net_profit_bps: int64; legs: vec QuoteLegReportV1; allowance_status: text;
+  route_id: text; principal_native: nat; par_assumption: bool;
+  start_asset: Asset; candidate_class: CandidateClass;
+  canonical_cycle_id: opt text; quote_timestamp_ns: nat64; eligible: bool;
+  rejection_reason: opt text; inventory_effect: text; venue_edges: vec text;
+  full_fill: bool; net_profit_native: int64;
+};
+type ObservationAccumulatorV1 = record {
+  quote_call_budget_sufficient: bool; observation_id: text; started_at_ns: nat64;
+  candidates_evaluated: nat64; completed_at_ns: opt nat64; total_work_items: nat64;
+  best_icp_candidate: opt RouteCandidateReportV1;
+  provisional_best_stable_candidate: opt RouteCandidateReportV1;
+  incident: opt text; next_cursor: nat64; quote_calls_made: nat64;
+  route_count: nat32; full_fill_rejections: nat64;
+  best_stable_candidate: opt RouteCandidateReportV1; required_quote_calls: nat64;
+  provisional_best_icp_candidate: opt RouteCandidateReportV1; scan_complete: bool;
+};
+type ObservationStartV1 = record {
+  quote_call_budget_sufficient: bool; observation_id: text;
+  route_size_count: nat64; next_cursor: nat64; route_count: nat32;
+  required_quote_calls: nat64;
+};
+type ObservationBatchResultV1 = record {
+  observation: ObservationAccumulatorV1; candidates: vec RouteCandidateReportV1;
+};
+type BestRouteCandidatesV1 = record {
+  icp: opt RouteCandidateReportV1; stable: opt RouteCandidateReportV1;
+  observation_id: opt text; scan_complete: bool;
+};
+type MutationOwnerV1 = variant { RouteExecution; VolumeOperation; GenericWithdrawal; RetiredVenueRecovery; LegacyMigration };
+type MutationLockV1 = record {
+  operation_id: text; owner: MutationOwnerV1; acquired_at_ns: nat64;
+  reconciliation_required: bool;
+};
+type ReservationKindV1 = variant { ActiveRoute; HeldPosition; NonRoute; LegacyFreeze };
+type OwnershipReservationV1 = record {
+  reservation_id: text; asset: Asset; amount_native: nat64;
+  whole_asset_freeze: bool; kind: ReservationKindV1; owner: MutationOwnerV1;
+  operation_id: text; reconciled_at_ns: nat64; active: bool;
+};
+type HeldBasisV1 = variant {
+  StablePar: record { start_asset: Asset; principal_native: nat64; principal_usd_6dec: nat64 };
+  IcpNative: record { principal_icp_e8s: nat64 };
+  LegacyUnknown: record { preserved_pending_fields: text };
+};
+type HeldLotV1 = record {
+  asset: Asset; native_amount: nat64; attributable_fees_native: nat64; reserved_native: nat64;
+};
+type HeldPositionV1 = record {
+  position_id: text; originating_execution_id: text; originating_route_id: text;
+  basis: HeldBasisV1; lots: vec HeldLotV1; reason: text;
+  first_held_timestamp_ns: nat64; last_reconciled_timestamp_ns: nat64;
+};
+type ExecutionPhaseV1 = variant {
+  Planned; LegPrepared; LegSubmitted; AwaitingSettlement; ReconciliationRequired;
+  LegSettled; RemainingRouteRequoted; Completed; Aborted; HeldInventory;
+};
+type ReconciliationEvidenceV1 = record {
+  evidence_kind: text; source_reference: text; amount_native: nat64; observed_at_ns: nat64;
+};
+type ExecutionRecordV1 = record {
+  execution_id: text; route_id: text; canonical_cycle_id: opt text;
+  candidate_class: CandidateClass; phase: ExecutionPhaseV1; current_leg_index: nat8;
+  planned_input_native: nat64; required_min_output_native: nat64;
+  quote_timestamp_ns: nat64; submission_started_at_ns: opt nat64;
+  adapter_request_fingerprint: opt text; evidence: vec ReconciliationEvidenceV1;
+  reconciliation_query_count: nat8; incident: opt text; updated_at_ns: nat64;
+};
+
 type Direction = variant {
   RumiToIcpswap;
   IcpswapToRumi;
@@ -432,6 +563,23 @@ type VolumeTradeLeg = record {
 };
 
 service : (InitArgs) -> {
+  get_route_arb_config_v1: () -> (RouteArbConfigV1) query;
+  set_route_arb_config_v1: (RouteArbConfigV1) -> (variant { Ok; Err: text });
+  get_route_arb_status_v1: () -> (RouteArbStatusV1) query;
+  get_route_wallet_balances_v1: () -> (vec WalletAssetBalanceV1);
+  start_route_observation_v1: () -> (variant { Ok: ObservationStartV1; Err: text });
+  quote_route_observation_batch_v1: (nat64, nat16) -> (variant { Ok: ObservationBatchResultV1; Err: text });
+  get_route_observation_v1: () -> (opt ObservationAccumulatorV1) query;
+  get_route_observations_v1: (nat64, nat64) -> (variant { Ok: vec ObservationAccumulatorV1; Err: text }) query;
+  get_best_route_candidates_v1: () -> (BestRouteCandidatesV1) query;
+  get_route_mutation_lock_v1: () -> (opt MutationLockV1) query;
+  get_route_reservations_v1: (nat64, nat64) -> (variant { Ok: vec OwnershipReservationV1; Err: text }) query;
+  get_held_positions_v1: (nat64, nat64) -> (variant { Ok: vec HeldPositionV1; Err: text }) query;
+  get_current_route_execution_v1: () -> (opt ExecutionRecordV1) query;
+  get_terminal_route_executions_v1: (nat64, nat64) -> (variant { Ok: vec ExecutionRecordV1; Err: text }) query;
+  prepare_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
+  advance_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
+  reconcile_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;

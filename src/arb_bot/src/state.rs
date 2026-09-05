@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::{Bound, Storable},
-    DefaultMemoryImpl, StableCell, StableLog,
+    DefaultMemoryImpl, StableBTreeMap, StableCell, StableLog,
 };
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -935,11 +935,16 @@ pub fn legacy_route_freeze_reason(state: &BotState, asset: LegacyFreezeAsset) ->
         LegacyFreezeAsset::Icp if state.pending_exit.is_some() => Some(
             "asset frozen: unresolved legacy pending_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
         ),
-        LegacyFreezeAsset::Bob if state.pending_bob_exit.is_some() => Some(
-            "asset frozen: unresolved legacy pending_bob_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
+        LegacyFreezeAsset::Bob
+            if state.pending_bob_exit.is_some() || legacy_bob_freeze_marker() => Some(
+            "asset frozen: unresolved legacy pending_bob_exit incident (durable whole-asset freeze; Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
         ),
         _ => None,
     }
+}
+
+fn legacy_bob_freeze_marker() -> bool {
+    LEGACY_BOB_ASSET_FROZEN.with(|cell| *cell.borrow().get())
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -962,6 +967,14 @@ pub struct TradeLeg {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BotState {
     pub config: BotConfig,
+    /// Versioned six-asset route policy. Serde default keeps upgrades from
+    /// every pre-router schema inert and dry-run-only.
+    #[serde(default)]
+    pub route_arb: crate::route_arb::RouteArbConfigV1,
+    #[serde(default)]
+    pub route_arb_config_generation: u64,
+    #[serde(default)]
+    pub route_observation: Option<crate::route_arb::ObservationAccumulatorV1>,
     #[serde(default)]
     pub token_ordering_resolved: bool,
     #[serde(default)]
@@ -1065,6 +1078,9 @@ impl Default for BotState {
                 strategy_t_ckusdc_floor: default_strategy_t_ckusdc_floor(),
                 strategy_t_ckusdc_ceiling: default_strategy_t_ckusdc_ceiling(),
             },
+            route_arb: crate::route_arb::RouteArbConfigV1::default(),
+            route_arb_config_generation: 0,
+            route_observation: None,
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
@@ -1105,6 +1121,16 @@ struct LegacyBotState {
     snapshots: Vec<CycleSnapshot>,
     #[serde(default)]
     pending_exit: Option<PendingExit>,
+    #[serde(default)]
+    pending_bob_exit: Option<PendingBobExit>,
+}
+
+#[doc(hidden)]
+pub fn legacy_pending_bob_survives_decode_for_test(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<LegacyBotState>(bytes)
+        .ok()
+        .and_then(|state| state.pending_bob_exit)
+        .is_some()
 }
 
 // ─── Storable impls (JSON encoding) ───
@@ -1129,6 +1155,12 @@ json_storable!(ActivityRecord);
 json_storable!(TradeLeg);
 json_storable!(CycleSnapshot);
 json_storable!(VolumeTradeLeg);
+json_storable!(crate::route_arb::ObservationAccumulatorV1);
+json_storable!(crate::route_arb::MutationLockSlotV1);
+json_storable!(crate::route_arb::OwnershipReservationV1);
+json_storable!(crate::route_arb::HeldPositionV1);
+json_storable!(crate::route_arb::ExecutionSlotV1);
+json_storable!(crate::route_arb::ExecutionRecordV1);
 
 // ─── Stable memory layout ───
 //
@@ -1139,6 +1171,15 @@ json_storable!(VolumeTradeLeg);
 // MemoryId 7,8:     TRADE_LEGS log
 // MemoryId 9,10:    SNAPSHOTS log
 // MemoryId 11,12:   VOLUME_TRADES log
+// MemoryId 13,14:   ROUTE_OBSERVATIONS log
+// MemoryId 15:      ROUTE_MUTATION_LOCK cell
+// MemoryId 16,17:   OWNERSHIP_RESERVATIONS event log
+// MemoryId 18,19:   HELD_POSITIONS log
+// MemoryId 20:      CURRENT_ROUTE_EXECUTION cell
+// MemoryId 21,22:   TERMINAL_ROUTE_EXECUTIONS log
+// MemoryId 23:      OWNERSHIP_RESERVATION_INDEX (bounded current-state map)
+// MemoryId 24:      OWNERSHIP_RESERVATION_MIGRATED marker
+// MemoryId 25:      LEGACY_BOB_ASSET_FROZEN marker
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -1193,6 +1234,78 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(11))),
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(12))),
         ).expect("init VOLUME_TRADES"),
+    );
+
+    static ROUTE_OBSERVATIONS: RefCell<StableLog<crate::route_arb::ObservationAccumulatorV1, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(13))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(14))),
+        ).expect("init ROUTE_OBSERVATIONS"),
+    );
+
+    static ROUTE_MUTATION_LOCK: RefCell<StableCell<crate::route_arb::MutationLockSlotV1, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(15))),
+            crate::route_arb::MutationLockSlotV1::default(),
+        ).expect("init ROUTE_MUTATION_LOCK"),
+    );
+
+    static OWNERSHIP_RESERVATIONS: RefCell<StableLog<crate::route_arb::OwnershipReservationV1, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(16))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(17))),
+        ).expect("init OWNERSHIP_RESERVATIONS"),
+    );
+
+    static HELD_POSITIONS: RefCell<StableLog<crate::route_arb::HeldPositionV1, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(18))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(19))),
+        ).expect("init HELD_POSITIONS"),
+    );
+
+    static CURRENT_ROUTE_EXECUTION: RefCell<StableCell<crate::route_arb::ExecutionSlotV1, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(20))),
+            crate::route_arb::ExecutionSlotV1::default(),
+        ).expect("init CURRENT_ROUTE_EXECUTION"),
+    );
+
+    static TERMINAL_ROUTE_EXECUTIONS: RefCell<StableLog<crate::route_arb::ExecutionRecordV1, Memory, Memory>> = RefCell::new(
+        StableLog::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(21))),
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(22))),
+        ).expect("init TERMINAL_ROUTE_EXECUTIONS"),
+    );
+
+    // Current-state index for ownership reservations. Unlike the historical
+    // event log previously used here, replacing a reservation updates the
+    // existing key in place and releasing one removes it. This keeps durable
+    // growth bounded by the 256-open-reservation ceiling.
+    static OWNERSHIP_RESERVATION_INDEX: RefCell<StableBTreeMap<String, crate::route_arb::OwnershipReservationV1, Memory>> = RefCell::new(
+        StableBTreeMap::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(23))),
+        ),
+    );
+
+    // Migration marker for the old append-only reservation event log. The old
+    // log remains read-only for compatibility, while all future writes use
+    // OWNERSHIP_RESERVATION_INDEX.
+    static OWNERSHIP_RESERVATION_MIGRATED: RefCell<StableCell<bool, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(24))),
+            false,
+        ).expect("init OWNERSHIP_RESERVATION_MIGRATED"),
+    );
+
+    // BOB is a retired legacy asset and is not represented by the active
+    // six-asset enum. Keep its whole-asset incident freeze in its own durable
+    // cell so decoding/clearing the legacy pending field cannot release it.
+    static LEGACY_BOB_ASSET_FROZEN: RefCell<StableCell<bool, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(25))),
+            false,
+        ).expect("init LEGACY_BOB_ASSET_FROZEN"),
     );
 
     // Heap cache mirroring META_CELL for fast reads.
@@ -1402,6 +1515,369 @@ pub fn volume_trades_count() -> u64 {
     VOLUME_TRADES.with(|t| t.borrow().len())
 }
 
+pub fn append_route_observation(
+    observation: crate::route_arb::ObservationAccumulatorV1,
+) -> Result<(), String> {
+    if !observation.scan_complete || observation.completed_at_ns.is_none() {
+        return Err("only completed observations may enter terminal history".to_string());
+    }
+    ROUTE_OBSERVATIONS.with(|log| {
+        let log = log.borrow_mut();
+        if log.len() >= 10_000 {
+            return Err("route observation history reached its 10,000-record cap".to_string());
+        }
+        log.append(&observation)
+            .map(|_| ())
+            .map_err(|error| format!("failed to append route observation: {error:?}"))
+    })
+}
+
+pub fn get_route_observations_page(
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<crate::route_arb::ObservationAccumulatorV1>, String> {
+    if limit == 0 || limit > u64::from(crate::route_arb::HARD_MAX_PAGE_SIZE) {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    ROUTE_OBSERVATIONS.with(|log| {
+        let log = log.borrow();
+        let total = log.len();
+        if offset >= total {
+            return Ok(Vec::new());
+        }
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        Ok((start..end).filter_map(|index| log.get(index)).collect())
+    })
+}
+
+fn validate_durable_text(label: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 256 {
+        return Err(format!("{label} must contain 1..=256 bytes"));
+    }
+    Ok(())
+}
+
+pub fn get_mutation_lock() -> Option<crate::route_arb::MutationLockV1> {
+    ROUTE_MUTATION_LOCK.with(|cell| cell.borrow().get().lock.clone())
+}
+
+pub fn acquire_mutation_lock(
+    operation_id: &str,
+    owner: crate::route_arb::MutationOwnerV1,
+    acquired_at_ns: u64,
+) -> Result<crate::route_arb::MutationLockV1, String> {
+    validate_durable_text("operation_id", operation_id)?;
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        if let Some(existing) = &cell.get().lock {
+            return Err(format!(
+                "account mutation lock held by {} ({:?})",
+                existing.operation_id, existing.owner
+            ));
+        }
+        let lock = crate::route_arb::MutationLockV1 {
+            operation_id: operation_id.to_string(), owner, acquired_at_ns,
+            reconciliation_required: false,
+        };
+        cell.set(crate::route_arb::MutationLockSlotV1 { lock: Some(lock.clone()) })
+            .map_err(|error| format!("failed to persist mutation lock: {error:?}"))?;
+        Ok(lock)
+    })
+}
+
+pub fn mark_mutation_lock_reconciliation_required(operation_id: &str) -> Result<(), String> {
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let mut slot = cell.get().clone();
+        let lock = slot.lock.as_mut().ok_or("account mutation lock is not held")?;
+        if lock.operation_id != operation_id {
+            return Err("only the lock owner may retain reconciliation ownership".to_string());
+        }
+        lock.reconciliation_required = true;
+        cell.set(slot).map_err(|error| format!("failed to persist mutation lock: {error:?}"))?;
+        Ok(())
+    })
+}
+
+pub fn release_mutation_lock(operation_id: &str) -> Result<(), String> {
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let slot = cell.get();
+        let lock = slot.lock.as_ref().ok_or("account mutation lock is not held")?;
+        if lock.operation_id != operation_id {
+            return Err("only the lock owner may release the account mutation lock".to_string());
+        }
+        if lock.reconciliation_required {
+            return Err("reconciliation-required ownership cannot be administratively released".to_string());
+        }
+        cell.set(crate::route_arb::MutationLockSlotV1::default())
+            .map_err(|error| format!("failed to persist mutation lock release: {error:?}"))?;
+        Ok(())
+    })
+}
+
+#[doc(hidden)]
+pub fn release_mutation_lock_for_test() {
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let _ = cell.borrow_mut().set(crate::route_arb::MutationLockSlotV1::default());
+    });
+}
+
+fn migrate_legacy_reservation_log_once() {
+    let migrated = OWNERSHIP_RESERVATION_MIGRATED.with(|cell| *cell.borrow().get());
+    if migrated {
+        return;
+    }
+
+    // Preserve the latest row for each ID from the old append-only log, but
+    // never overwrite a row already present in the indexed store. The latter
+    // makes a retry after an interrupted migration safe: a reservation
+    // written by the new code cannot be rolled back to an older log value.
+    let legacy_rows: std::collections::BTreeMap<_, _> = OWNERSHIP_RESERVATIONS.with(|log| {
+        let log = log.borrow();
+        (0..log.len())
+            .filter_map(|index| log.get(index))
+            .map(|row| (row.reservation_id.clone(), row))
+            .collect()
+    });
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        let mut index = index.borrow_mut();
+        for (reservation_id, row) in legacy_rows {
+            if index.get(&reservation_id).is_none() {
+                index.insert(reservation_id, row);
+            }
+        }
+    });
+    let _ = OWNERSHIP_RESERVATION_MIGRATED.with(|cell| cell.borrow_mut().set(true));
+}
+
+fn latest_reservations() -> std::collections::BTreeMap<String, crate::route_arb::OwnershipReservationV1> {
+    migrate_legacy_reservation_log_once();
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        index
+            .borrow()
+            .iter()
+            .map(|entry| entry)
+            .collect()
+    })
+}
+
+pub fn put_ownership_reservation(
+    reservation: crate::route_arb::OwnershipReservationV1,
+) -> Result<(), String> {
+    validate_durable_text("reservation_id", &reservation.reservation_id)?;
+    validate_durable_text("operation_id", &reservation.operation_id)?;
+    let current = latest_reservations();
+    if reservation.active
+        && !current.contains_key(&reservation.reservation_id)
+        && current.values().filter(|row| row.active).count() >= 256
+    {
+        return Err("open ownership-reservation cap reached".to_string());
+    }
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        let mut index = index.borrow_mut();
+        if reservation.active {
+            index.insert(reservation.reservation_id.clone(), reservation);
+        } else {
+            index.remove(&reservation.reservation_id);
+        }
+        Ok(())
+    })
+}
+
+pub fn get_ownership_reservations_page(
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<crate::route_arb::OwnershipReservationV1>, String> {
+    if limit == 0 || limit > 100 {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    let rows: Vec<_> = latest_reservations().into_values().filter(|row| row.active).collect();
+    let start = usize::try_from(offset).unwrap_or(usize::MAX).min(rows.len());
+    let end = start.saturating_add(limit as usize).min(rows.len());
+    Ok(rows[start..end].to_vec())
+}
+
+pub fn reservation_totals_for_asset(asset: crate::route_arb::Asset) -> crate::route_arb::AssetReservationStatusV1 {
+    let mut result = crate::route_arb::AssetReservationStatusV1 { asset: Some(asset), ..Default::default() };
+    for reservation in latest_reservations().into_values().filter(|row| row.active && row.asset == asset) {
+        result.whole_asset_frozen |= reservation.whole_asset_freeze;
+        let target = match reservation.kind {
+            crate::route_arb::ReservationKindV1::HeldPosition => &mut result.held,
+            crate::route_arb::ReservationKindV1::ActiveRoute => &mut result.active_route,
+            crate::route_arb::ReservationKindV1::NonRoute | crate::route_arb::ReservationKindV1::LegacyFreeze => &mut result.non_route,
+        };
+        *target = target.saturating_add(reservation.amount_native);
+    }
+    result
+}
+
+pub fn spendable_native(asset: crate::route_arb::Asset, ledger_balance: u64) -> Result<u64, String> {
+    let totals = reservation_totals_for_asset(asset);
+    if totals.whole_asset_frozen {
+        return Err(format!("{:?} is frozen by an unresolved ownership reservation", asset));
+    }
+    ledger_balance
+        .checked_sub(totals.held)
+        .and_then(|value| value.checked_sub(totals.active_route))
+        .and_then(|value| value.checked_sub(totals.non_route))
+        .ok_or_else(|| format!("{:?} reservations exceed ledger balance", asset))
+}
+
+fn ensure_legacy_route_reservations() {
+    let pending_icp = STATE.with(|state| {
+        state.borrow().as_ref().is_some_and(|state| state.pending_exit.is_some())
+    });
+    let pending_bob = STATE.with(|state| {
+        state.borrow().as_ref().is_some_and(|state| state.pending_bob_exit.is_some())
+    });
+    if pending_bob {
+        // BOB is intentionally outside the active six-asset enum, so its
+        // migration is represented by a durable whole-asset marker rather
+        // than by a route reservation row.
+        let _ = LEGACY_BOB_ASSET_FROZEN.with(|cell| cell.borrow_mut().set(true));
+    }
+    if pending_icp
+        && !latest_reservations().contains_key("legacy-pending-exit-icp-freeze")
+    {
+        let _ = put_ownership_reservation(crate::route_arb::OwnershipReservationV1 {
+            reservation_id: "legacy-pending-exit-icp-freeze".to_string(),
+            asset: crate::route_arb::Asset::Icp,
+            amount_native: 0,
+            whole_asset_freeze: true,
+            kind: crate::route_arb::ReservationKindV1::LegacyFreeze,
+            owner: crate::route_arb::MutationOwnerV1::LegacyMigration,
+            operation_id: "legacy-pending-exit".to_string(),
+            reconciled_at_ns: 0,
+            active: true,
+        });
+    }
+}
+
+pub fn put_held_position(position: crate::route_arb::HeldPositionV1) -> Result<(), String> {
+    validate_durable_text("position_id", &position.position_id)?;
+    validate_durable_text("originating_execution_id", &position.originating_execution_id)?;
+    validate_durable_text("originating_route_id", &position.originating_route_id)?;
+    if position.reason.len() > 512 || position.lots.is_empty() || position.lots.len() > 6 {
+        return Err("held position must have 1..=6 lots and a <=512-byte reason".to_string());
+    }
+    let existing = get_held_positions_page(0, 100)?;
+    if existing.iter().any(|row| row.position_id == position.position_id) {
+        return Err("held position id already exists".to_string());
+    }
+    if HELD_POSITIONS.with(|log| log.borrow().len()) >= 256 {
+        return Err("held-position cap reached".to_string());
+    }
+    for lot in &position.lots {
+        if lot.reserved_native != lot.native_amount {
+            return Err("held lot must reserve its exact native amount".to_string());
+        }
+        put_ownership_reservation(crate::route_arb::OwnershipReservationV1 {
+            reservation_id: format!("held:{}:{:?}", position.position_id, lot.asset),
+            asset: lot.asset,
+            amount_native: lot.reserved_native,
+            whole_asset_freeze: false,
+            kind: crate::route_arb::ReservationKindV1::HeldPosition,
+            owner: crate::route_arb::MutationOwnerV1::RouteExecution,
+            operation_id: position.originating_execution_id.clone(),
+            reconciled_at_ns: position.last_reconciled_timestamp_ns,
+            active: true,
+        })?;
+    }
+    HELD_POSITIONS.with(|log| {
+        log.borrow_mut().append(&position)
+            .map(|_| ())
+            .map_err(|error| format!("failed to persist held position: {error:?}"))
+    })
+}
+
+pub fn get_held_positions_page(offset: u64, limit: u64) -> Result<Vec<crate::route_arb::HeldPositionV1>, String> {
+    if limit == 0 || limit > 100 {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    HELD_POSITIONS.with(|log| {
+        let log = log.borrow();
+        let total = log.len();
+        if offset >= total { return Ok(Vec::new()); }
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        Ok((start..end).filter_map(|index| log.get(index)).collect())
+    })
+}
+
+fn validate_execution_record(record: &crate::route_arb::ExecutionRecordV1) -> Result<(), String> {
+    for (label, value) in [
+        ("execution_id", record.execution_id.as_str()),
+        ("route_id", record.route_id.as_str()),
+    ] {
+        validate_durable_text(label, value)?;
+    }
+    if record.evidence.len() > 64 {
+        return Err("execution evidence exceeds 64-item cap".to_string());
+    }
+    for evidence in &record.evidence {
+        validate_durable_text("evidence_kind", &evidence.evidence_kind)?;
+        validate_durable_text("source_reference", &evidence.source_reference)?;
+    }
+    let encoded = serde_json::to_vec(record).map_err(|error| format!("execution encoding failed: {error}"))?;
+    if encoded.len() > 65_536 {
+        return Err("execution record exceeds 65,536-byte cap".to_string());
+    }
+    Ok(())
+}
+
+pub fn get_current_route_execution() -> Option<crate::route_arb::ExecutionRecordV1> {
+    CURRENT_ROUTE_EXECUTION.with(|cell| cell.borrow().get().execution.clone())
+}
+
+pub fn put_current_route_execution(record: crate::route_arb::ExecutionRecordV1) -> Result<(), String> {
+    validate_execution_record(&record)?;
+    CURRENT_ROUTE_EXECUTION.with(|cell| {
+        cell.borrow_mut().set(crate::route_arb::ExecutionSlotV1 { execution: Some(record) })
+            .map(|_| ())
+            .map_err(|error| format!("failed to persist route execution: {error:?}"))
+    })
+}
+
+pub fn complete_current_route_execution(record: crate::route_arb::ExecutionRecordV1) -> Result<(), String> {
+    validate_execution_record(&record)?;
+    if !record.phase.is_terminal() {
+        return Err("only terminal route executions may enter history".to_string());
+    }
+    TERMINAL_ROUTE_EXECUTIONS.with(|log| {
+        let mut log = log.borrow_mut();
+        if log.len() >= 10_000 {
+            return Err("terminal execution history reached its 10,000-record cap".to_string());
+        }
+        log.append(&record)
+            .map_err(|error| format!("failed to append terminal execution: {error:?}"))?;
+        Ok(())
+    })?;
+    CURRENT_ROUTE_EXECUTION.with(|cell| {
+        cell.borrow_mut().set(crate::route_arb::ExecutionSlotV1::default())
+            .map(|_| ())
+            .map_err(|error| format!("failed to clear current execution: {error:?}"))
+    })
+}
+
+pub fn get_terminal_route_executions_page(
+    offset: u64,
+    limit: u64,
+) -> Result<Vec<crate::route_arb::ExecutionRecordV1>, String> {
+    if limit == 0 || limit > 100 {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    TERMINAL_ROUTE_EXECUTIONS.with(|log| {
+        let log = log.borrow();
+        let total = log.len();
+        if offset >= total { return Ok(Vec::new()); }
+        let end = total.saturating_sub(offset);
+        let start = end.saturating_sub(limit);
+        Ok((start..end).filter_map(|index| log.get(index)).collect())
+    })
+}
+
 // ─── log_activity (same signature as before) ───
 
 pub fn log_activity(category: &str, message: &str) {
@@ -1485,8 +1961,12 @@ pub fn load_from_stable_memory() {
 
     if let Some(legacy) = legacy {
         // Rebuild the new slim BotState from the legacy meta fields.
+        let legacy_bob_frozen = legacy.pending_bob_exit.is_some();
         let new_state = BotState {
             config: legacy.config,
+            route_arb: crate::route_arb::RouteArbConfigV1::default(),
+            route_arb_config_generation: 0,
+            route_observation: None,
             token_ordering_resolved: legacy.token_ordering_resolved,
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,
@@ -1494,7 +1974,7 @@ pub fn load_from_stable_memory() {
             bob_icp_ordering_resolved: false,
             icusd_bob_ordering_resolved: false,
             pending_exit: legacy.pending_exit,
-            pending_bob_exit: None,
+            pending_bob_exit: legacy.pending_bob_exit,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
             volume_stranded_bob: 0,
@@ -1527,6 +2007,10 @@ pub fn load_from_stable_memory() {
         }
 
         init_state(new_state);
+        if legacy_bob_frozen {
+            let _ = LEGACY_BOB_ASSET_FROZEN.with(|cell| cell.borrow_mut().set(true));
+        }
+        ensure_legacy_route_reservations();
 
         // Record the migration in the activity log.
         log_activity(
@@ -1555,4 +2039,5 @@ pub fn load_from_stable_memory() {
             }
         }
     }
+    ensure_legacy_route_reservations();
 }

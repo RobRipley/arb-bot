@@ -639,6 +639,31 @@
   .deposit-addr-row .addr { font-family: var(--font-data); color: var(--text-secondary); cursor: pointer; word-break: break-all; }
 
   .lever-toggle.off-state::after { background: var(--text-tertiary); }
+
+  /* Consolidated route-arbitrage cockpit. Legacy lettered executors remain
+     Candid-compatible but are deliberately absent from the active UI. */
+  .route-toolbar { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3); flex-wrap:wrap; }
+  .route-wallet-grid { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:var(--sp-2); }
+  .route-wallet { background:var(--surface-input); border:1px solid var(--border); border-radius:var(--radius-md); padding:var(--sp-3); }
+  .route-wallet-symbol { font-size:11px; color:var(--text-tertiary); }
+  .route-wallet-value { font-family:var(--font-data); font-size:15px; font-weight:600; margin-top:3px; }
+  .route-wallet-meta { font-size:10px; color:var(--text-muted); margin-top:4px; word-break:break-word; }
+  .route-candidate { background:var(--surface-input); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-md); padding:var(--sp-4); min-height:168px; }
+  .route-candidate.icp { border-left-color:var(--info); }
+  .route-path { font-family:var(--font-data); font-size:13px; line-height:1.6; word-break:break-word; }
+  .route-venues { font-size:11px; color:var(--text-tertiary); margin-top:3px; line-height:1.5; }
+  .route-profit { font-family:var(--font-data); font-size:20px; font-weight:600; margin-top:var(--sp-3); }
+  .route-gates { display:grid; grid-template-columns:repeat(5,minmax(86px,1fr)); gap:var(--sp-2); margin-top:var(--sp-3); }
+  .route-gate { border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; }
+  .route-gate .k { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); }
+  .route-gate .v { display:block; font-family:var(--font-data); font-size:10.5px; margin-top:2px; }
+  .route-empty { color:var(--text-tertiary); font-size:12px; line-height:1.6; padding:var(--sp-4) 0; }
+  .route-list { display:flex; flex-direction:column; gap:var(--sp-2); }
+  .route-list-row { display:grid; grid-template-columns:minmax(140px,1.3fr) minmax(120px,1fr) auto; gap:var(--sp-3); align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:11.5px; }
+  .route-list-row:last-child { border-bottom:none; }
+  .route-disclosure { background:var(--info-dim); border:1px solid rgba(91,138,240,.25); border-radius:var(--radius-md); padding:var(--sp-3) var(--sp-4); color:var(--text-secondary); font-size:11.5px; line-height:1.6; }
+  @media (max-width:1100px) { .route-wallet-grid { grid-template-columns:repeat(3,1fr); } .route-gates { grid-template-columns:repeat(3,1fr); } }
+  @media (max-width:600px) { .route-wallet-grid,.route-gates { grid-template-columns:1fr 1fr; } .route-list-row { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
@@ -811,6 +836,103 @@
         arb_paused: I.Bool,
         volume_paused: I.Bool,
       });
+      const RouteAsset = I.Variant({ Icp: I.Null, IcUsd: I.Null, CkUsdc: I.Null, CkUsdt: I.Null, CkBtc: I.Null, CkEth: I.Null });
+      const AssetControlV1 = I.Record({ asset: RouteAsset, enabled: I.Bool });
+      const PoolControlV1 = I.Record({ pool_id: I.Text, enabled: I.Bool });
+      const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
+      const RouteArbConfigV1 = I.Record({
+        enabled: I.Bool, dry_run: I.Bool, stable_book_enabled: I.Bool, icp_book_enabled: I.Bool,
+        asset_controls: I.Vec(AssetControlV1), pool_controls: I.Vec(PoolControlV1),
+        stable_size_ladder: I.Vec(I.Nat64), icp_size_ladder: I.Vec(I.Nat64),
+        max_route_legs: I.Nat8, max_quote_calls_per_observation: I.Nat16,
+        max_concurrent_quote_calls: I.Nat8, max_stable_principal_usd_6dec: I.Nat64,
+        max_icp_principal_e8s: I.Nat64, min_stable_profit_usd_6dec: I.Nat64,
+        min_stable_profit_bps: I.Nat32, min_icp_profit_e8s: I.Nat64,
+        min_icp_profit_bps: I.Nat32, inventory_bands: I.Vec(AssetInventoryBandV1),
+        quote_max_age_ns: I.Nat64, settlement_timeout_ns: I.Nat64,
+        reconciliation_queries_per_cycle: I.Nat8, max_open_held_positions: I.Nat16,
+        max_open_non_route_reservations: I.Nat16, max_terminal_execution_records: I.Nat32,
+        max_execution_record_bytes: I.Nat32, max_reconciliation_evidence_items: I.Nat8,
+      });
+      const RouteArbStatusV1 = I.Record({
+        config_valid: I.Bool, config_incident: I.Opt(I.Text), execution_compiled_in: I.Bool,
+        live_execution_authorized: I.Bool, route_count: I.Nat32,
+      });
+      const WalletAssetBalanceV1 = I.Record({
+        asset: RouteAsset, symbol: I.Text, ledger: I.Principal, expected_decimals: I.Nat8,
+        observed_decimals: I.Opt(I.Nat8), ledger_fee_native: I.Opt(I.Nat),
+        balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
+      });
+      const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null });
+      const QuoteLegReportV1 = I.Record({
+        to: RouteAsset, wallet_before: I.Nat, wallet_after: I.Nat, gross_output: I.Nat,
+        venue_input: I.Nat, from: RouteAsset, entry_ledger_fee: I.Nat,
+        output_ledger_fee: I.Nat, full_fill: I.Bool, edge_id: I.Text,
+      });
+      const RouteCandidateReportV1 = I.Record({
+        asset_path: I.Vec(RouteAsset), size_ladder_index: I.Nat8, end_asset: RouteAsset,
+        net_profit_bps: I.Int64, legs: I.Vec(QuoteLegReportV1), allowance_status: I.Text,
+        route_id: I.Text, principal_native: I.Nat, par_assumption: I.Bool,
+        start_asset: RouteAsset, candidate_class: CandidateClass,
+        canonical_cycle_id: I.Opt(I.Text), quote_timestamp_ns: I.Nat64,
+        eligible: I.Bool, rejection_reason: I.Opt(I.Text), inventory_effect: I.Text,
+        venue_edges: I.Vec(I.Text), full_fill: I.Bool, net_profit_native: I.Int64,
+      });
+      const ObservationAccumulatorV1 = I.Record({
+        quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
+        started_at_ns: I.Nat64, candidates_evaluated: I.Nat64,
+        completed_at_ns: I.Opt(I.Nat64), total_work_items: I.Nat64,
+        best_icp_candidate: I.Opt(RouteCandidateReportV1),
+        provisional_best_stable_candidate: I.Opt(RouteCandidateReportV1),
+        incident: I.Opt(I.Text), next_cursor: I.Nat64, quote_calls_made: I.Nat64,
+        route_count: I.Nat32, full_fill_rejections: I.Nat64,
+        best_stable_candidate: I.Opt(RouteCandidateReportV1), required_quote_calls: I.Nat64,
+        provisional_best_icp_candidate: I.Opt(RouteCandidateReportV1), scan_complete: I.Bool,
+      });
+      const ObservationStartV1 = I.Record({
+        quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
+        route_size_count: I.Nat64, next_cursor: I.Nat64, route_count: I.Nat32,
+        required_quote_calls: I.Nat64,
+      });
+      const ObservationBatchResultV1 = I.Record({ observation: ObservationAccumulatorV1, candidates: I.Vec(RouteCandidateReportV1) });
+      const BestRouteCandidatesV1 = I.Record({
+        icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
+        observation_id: I.Opt(I.Text), scan_complete: I.Bool,
+      });
+      const MutationOwnerV1 = I.Variant({ RouteExecution: I.Null, VolumeOperation: I.Null, GenericWithdrawal: I.Null, RetiredVenueRecovery: I.Null, LegacyMigration: I.Null });
+      const MutationLockV1 = I.Record({ operation_id: I.Text, owner: MutationOwnerV1, acquired_at_ns: I.Nat64, reconciliation_required: I.Bool });
+      const ReservationKindV1 = I.Variant({ ActiveRoute: I.Null, HeldPosition: I.Null, NonRoute: I.Null, LegacyFreeze: I.Null });
+      const OwnershipReservationV1 = I.Record({
+        reservation_id: I.Text, asset: RouteAsset, amount_native: I.Nat64,
+        whole_asset_freeze: I.Bool, kind: ReservationKindV1, owner: MutationOwnerV1,
+        operation_id: I.Text, reconciled_at_ns: I.Nat64, active: I.Bool,
+      });
+      const HeldBasisV1 = I.Variant({
+        StablePar: I.Record({ start_asset: RouteAsset, principal_native: I.Nat64, principal_usd_6dec: I.Nat64 }),
+        IcpNative: I.Record({ principal_icp_e8s: I.Nat64 }),
+        LegacyUnknown: I.Record({ preserved_pending_fields: I.Text }),
+      });
+      const HeldLotV1 = I.Record({ asset: RouteAsset, native_amount: I.Nat64, attributable_fees_native: I.Nat64, reserved_native: I.Nat64 });
+      const HeldPositionV1 = I.Record({
+        position_id: I.Text, originating_execution_id: I.Text, originating_route_id: I.Text,
+        basis: HeldBasisV1, lots: I.Vec(HeldLotV1), reason: I.Text,
+        first_held_timestamp_ns: I.Nat64, last_reconciled_timestamp_ns: I.Nat64,
+      });
+      const ExecutionPhaseV1 = I.Variant({
+        Planned: I.Null, LegPrepared: I.Null, LegSubmitted: I.Null,
+        AwaitingSettlement: I.Null, ReconciliationRequired: I.Null,
+        LegSettled: I.Null, RemainingRouteRequoted: I.Null,
+        Completed: I.Null, Aborted: I.Null, HeldInventory: I.Null,
+      });
+      const ReconciliationEvidenceV1 = I.Record({ evidence_kind: I.Text, source_reference: I.Text, amount_native: I.Nat64, observed_at_ns: I.Nat64 });
+      const ExecutionRecordV1 = I.Record({
+        execution_id: I.Text, route_id: I.Text, canonical_cycle_id: I.Opt(I.Text),
+        candidate_class: CandidateClass, phase: ExecutionPhaseV1, current_leg_index: I.Nat8,
+        planned_input_native: I.Nat64, required_min_output_native: I.Nat64,
+        quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
+        adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
+        reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -856,6 +978,23 @@
         price_after: I.Nat64,
       });
       return I.Service({
+        get_route_arb_config_v1: I.Func([], [RouteArbConfigV1], ['query']),
+        set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
+        get_route_wallet_balances_v1: I.Func([], [I.Vec(WalletAssetBalanceV1)], []),
+        start_route_observation_v1: I.Func([], [I.Variant({ Ok: ObservationStartV1, Err: I.Text })], []),
+        quote_route_observation_batch_v1: I.Func([I.Nat64, I.Nat16], [I.Variant({ Ok: ObservationBatchResultV1, Err: I.Text })], []),
+        get_route_observation_v1: I.Func([], [I.Opt(ObservationAccumulatorV1)], ['query']),
+        get_route_observations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ObservationAccumulatorV1), Err: I.Text })], ['query']),
+        get_best_route_candidates_v1: I.Func([], [BestRouteCandidatesV1], ['query']),
+        get_route_mutation_lock_v1: I.Func([], [I.Opt(MutationLockV1)], ['query']),
+        get_route_reservations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(OwnershipReservationV1), Err: I.Text })], ['query']),
+        get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
+        get_current_route_execution_v1: I.Func([], [I.Opt(ExecutionRecordV1)], ['query']),
+        get_terminal_route_executions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ExecutionRecordV1), Err: I.Text })], ['query']),
+        prepare_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
+        advance_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
+        reconcile_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         get_config: I.Func([], [BotConfig], ['query']),
         set_config: I.Func([BotConfigInput], [], []),
         get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
@@ -965,6 +1104,8 @@
       '3usd': { decimals: 8, label: '3USD',   getLedger: () => currentConfig?.three_usd_ledger.toText() },
       ckusdt: { decimals: 6, label: 'ckUSDT', getLedger: () => 'cngnf-vqaaa-aaaar-qag4q-cai' },
       icusd:  { decimals: 8, label: 'icUSD',  getLedger: () => 't6bor-paaaa-aaaap-qrd5q-cai' },
+      ckbtc:  { decimals: 8, label: 'ckBTC',  getLedger: () => 'mxzaz-hqaaa-aaaar-qaada-cai' },
+      cketh:  { decimals: 18, label: 'ckETH', getLedger: () => 'ss2fx-dyaaa-aaaar-qacoq-cai' },
       bob:    { decimals: 8, label: 'BOB',    getLedger: () => currentConfig?.bob_ledger.toText() },
     };
 
@@ -1021,7 +1162,7 @@
     partydex: 'data:image/png;base64,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',
   };
 
-    const TOKEN_LOGO_KEYS = { ckUSDC: 'ckusdc', ckUSDT: 'ckusdt', icUSD: 'icusd', '3USD': '3usd', ICP: 'icp', BOB: 'bob' };
+    const TOKEN_LOGO_KEYS = { ckUSDC: 'ckusdc', ckUSDT: 'ckusdt', icUSD: 'icusd', '3USD': '3usd', ICP: 'icp', BOB: 'bob', ckBTC: 'ckbtc', ckETH: 'cketh' };
     const VENUE_LOGO_KEYS = { icpswap: 'icpswap', partydex: 'partydex', rumi: '3usd', bob: 'bob', icp: 'icp' }; // synth: none — dashed slate stays
     const FAMILY_LOGO_KEYS = { 'rumi-cross': ['rumi'], 'icpswap-internal': ['icpswap'], 'partydex-icpswap': ['partydex', 'icpswap'], 'bob': ['bob'], 'volume': [] };
 
@@ -1257,6 +1398,16 @@
     let snapshotsLoaded = false;
     let chartsRefreshInterval = null;
     let latestHealthReport = null;
+    let latestRouteStatus = null;
+    let latestRouteWallet = [];
+    let latestRouteObservation = null;
+    let latestRouteCandidates = null;
+    let latestRouteLock = null;
+    let latestRouteReservations = [];
+    let latestHeldPositions = [];
+    let latestRouteExecution = null;
+    let latestTerminalExecutions = [];
+    let routeDataRequestPromise = null;
     let healthRequestPromise = null;
     let publicHealthRequestPromise = null;
     let latestSnapshot = null;
@@ -1439,7 +1590,6 @@
       isAdmin = adminFlag;
       if (isAdmin && currentConfig) {
         loadMyBalances(currentConfig);
-        swapUpdateBalances();
         volSwapUpdateBalances();
       }
       renderNav();
@@ -1472,7 +1622,7 @@
 
         const admin = await anonymousActor.is_admin(identity.getPrincipal());
         await applyAdminUi(admin);
-        if (admin) { toast('Logged in as admin', 'success'); fetchHealth(); loadVolumeData(); }
+        if (admin) { toast('Logged in as admin', 'success'); fetchHealth(); loadVolumeData(); loadRouteData().then(renderAll); }
         else toast('Not authorized. Add your principal as admin via dfx.', 'error');
       } catch (e) {
         toast('Login failed: ' + (e.message || e), 'error');
@@ -1991,24 +2141,21 @@
     // ═══════ Attention list (Cockpit) ═══════
 
     function attentionItems() {
-      const facts = marketFacts();
       const items = [];
       const stale = !currentConfig || (window._snapAgeStale === true);
-      STRATEGIES.forEach(s => {
-        const live = strategyLive(s, facts);
-        if (live.state === 'BLOCKED' || live.state === 'STUCK') {
-          items.push({ key: 'strat-' + s.id, kind: 'incident',
-            title: `${s.id} ${mirroredPair(s.pair)} — ${live.state === 'STUCK' ? 'cycle stuck ' + live.reason : 'blocked' + (live.reason ? ' · ' + esc(live.reason) : '')}`,
-            meta: `${VENUES[s.vA].name} × ${VENUES[s.vB].name}${stale ? ' · as of ' + new Date().toLocaleTimeString() : ''}`,
-            actionLabel: 'View market', go: () => viewMarket(s.id) });
-          return;
-        }
-        if (live.state === 'LIVE' && live.bps != null && live.bps >= live.thr && !state.dismissedAttn.has(s.id)) {
-          items.push({ key: s.id, kind: 'opportunity',
-            title: `${s.id} ${mirroredPair(s.pair)} — spread ${live.bps} bps ≥ ${live.thr} bps`,
-            meta: `${VENUES[s.vA].name} × ${VENUES[s.vB].name} · ready to force${stale ? ' · as of ' + new Date().toLocaleTimeString() : ''}`,
-            actionLabel: 'View market →', go: () => viewMarket(s.id) });
-        }
+      if (latestRouteLock && latestRouteLock.reconciliation_required) {
+        items.push({ key: 'route-reconciliation', kind: 'incident',
+          title: 'Route execution requires reconciliation', meta: esc(latestRouteLock.operation_id),
+          actionLabel: 'View route', go: () => goTo('markets') });
+      }
+      const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
+      const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
+      [stable, icp].filter(Boolean).forEach(candidate => {
+        if (!candidate.eligible || state.dismissedAttn.has(candidate.route_id)) return;
+        items.push({ key: candidate.route_id, kind: 'opportunity',
+          title: `${candidate.asset_path.map(routeAssetLabel).join(' → ')} · ${Number(candidate.net_profit_bps) >= 0 ? '+' : ''}${Number(candidate.net_profit_bps)} bps`,
+          meta: `Quote-only candidate · ${routeAge(candidate.quote_timestamp_ns)} old`,
+          actionLabel: 'View route →', go: () => goTo('markets') });
       });
       VOLUME_POOLS.forEach(p => {
         const live = volumeLive(p);
@@ -2224,6 +2371,141 @@
         </div>`;
     }
 
+    const ROUTE_ASSET_LABELS = { Icp: 'ICP', IcUsd: 'icUSD', CkUsdc: 'ckUSDC', CkUsdt: 'ckUSDT', CkBtc: 'ckBTC', CkEth: 'ckETH' };
+    const ROUTE_ASSET_DECIMALS = { Icp: 8, IcUsd: 8, CkUsdc: 6, CkUsdt: 6, CkBtc: 8, CkEth: 18 };
+    const ROUTE_ASSET_ORDER = ['IcUsd', 'CkUsdt', 'CkUsdc', 'Icp', 'CkBtc', 'CkEth'];
+
+    function routeAssetKey(asset) { return variantKey(asset); }
+    function routeAssetLabel(asset) { return ROUTE_ASSET_LABELS[routeAssetKey(asset)] || routeAssetKey(asset); }
+    function routePhaseLabel(phase) { return String(variantKey(phase)).replace(/([a-z])([A-Z])/g, '$1 $2'); }
+    function unwrapResult(result) {
+      if (!result || typeof result !== 'object') throw new Error('Malformed canister result');
+      if (Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result.Err);
+      return result.Ok;
+    }
+    function routeOpt(value) { return Array.isArray(value) && value.length ? value[0] : null; }
+    function routeAge(timestampNs) {
+      if (!timestampNs) return '—';
+      const age = Math.max(0, (Date.now() * 1e6 - Number(timestampNs)) / 1e9);
+      return age < 60 ? `${age.toFixed(0)}s` : `${(age / 60).toFixed(1)}m`;
+    }
+    function routeNativeAmount(amount, asset) {
+      const key = routeAssetKey(asset);
+      const decimals = ROUTE_ASSET_DECIMALS[key] == null ? 8 : ROUTE_ASSET_DECIMALS[key];
+      const raw = typeof amount === 'bigint' ? amount : BigInt(amount || 0);
+      const base = 10n ** BigInt(decimals);
+      const whole = raw / base;
+      const frac = (raw % base).toString().padStart(decimals, '0').slice(0, Math.min(decimals, 6)).replace(/0+$/, '');
+      return `${whole.toString()}${frac ? '.' + frac : ''}`;
+    }
+    function routeCandidateHtml(candidate, kind) {
+      if (!candidate) return `<div class="route-empty">No completed eligible ${kind} candidate yet. Run or continue a quote-only observation.</div>`;
+      const path = candidate.asset_path.map(routeAssetLabel).join(' → ');
+      const venues = candidate.venue_edges.join(' → ');
+      const reason = routeOpt(candidate.rejection_reason);
+      const profitBps = Number(candidate.net_profit_bps);
+      const profitNative = candidate.net_profit_native >= 0n ? '+' + candidate.net_profit_native.toString() : candidate.net_profit_native.toString();
+      const collision = routeOpt(candidate.canonical_cycle_id) || 'unique open route';
+      return `<div class="route-candidate ${kind === 'ICP-returning' ? 'icp' : ''}">
+        <div class="route-path">${esc(path)}</div>
+        <div class="route-venues">${esc(venues)}</div>
+        <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}">${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
+        <div class="text-ter" style="font-size:11px">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} principal · native P&amp;L ${esc(profitNative)}</div>
+        <div class="route-gates">
+          <div class="route-gate"><span class="k">Full fill</span><span class="v ${candidate.full_fill ? 'positive' : 'negative'}">${candidate.full_fill ? 'confirmed' : 'rejected'}</span></div>
+          <div class="route-gate"><span class="k">Allowance</span><span class="v">${esc(candidate.allowance_status)}</span></div>
+          <div class="route-gate"><span class="k">Inventory</span><span class="v">${esc(candidate.inventory_effect)}</span></div>
+          <div class="route-gate"><span class="k">Quote age</span><span class="v">${routeAge(candidate.quote_timestamp_ns)}</span></div>
+          <div class="route-gate"><span class="k">Collision</span><span class="v" title="${esc(collision)}">${esc(collision.slice(0, 18))}${collision.length > 18 ? '…' : ''}</span></div>
+        </div>
+        ${reason ? `<div class="negative" style="font-size:11px;margin-top:8px">Rejected: ${esc(reason)}</div>` : ''}
+      </div>`;
+    }
+    function routeWalletHtml() {
+      const byAsset = new Map(latestRouteWallet.map(row => [routeAssetKey(row.asset), row]));
+      return ROUTE_ASSET_ORDER.map(key => {
+        const row = byAsset.get(key);
+        const label = ROUTE_ASSET_LABELS[key];
+        const balance = row && routeOpt(row.balance_native) != null ? routeNativeAmount(routeOpt(row.balance_native), row.asset) : '—';
+        const err = row ? routeOpt(row.error) : null;
+        const metadata = row ? (row.metadata_valid ? 'metadata pinned' : 'metadata mismatch') : (isAdmin ? 'loading…' : 'log in to query');
+        return `<div class="route-wallet"><div class="route-wallet-symbol">${esc(label)}</div><div class="route-wallet-value">${esc(balance)}</div><div class="route-wallet-meta ${err ? 'negative' : ''}">${esc(err || metadata)}</div></div>`;
+      }).join('');
+    }
+    function routeOperationsHtml() {
+      const lock = latestRouteLock;
+      const activeReservations = latestRouteReservations.filter(r => r.active);
+      const heldRows = latestHeldPositions.length ? latestHeldPositions.map(p => `<div class="route-list-row"><span>${esc(p.position_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span><span class="badge badge-blocked">held</span></div>`).join('') : '<div class="route-empty">No held route inventory.</div>';
+      const reservationRows = activeReservations.length ? activeReservations.map(r => `<div class="route-list-row"><span>${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))}</span></div>`).join('') : '<div class="route-empty">No active reservations.</div>';
+      const current = latestRouteExecution;
+      const execHtml = current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span></div>` : '<div class="route-empty">No active route execution. Live execution is not compiled or authorized in this release.</div>';
+      return `<div class="grid g-cols-3" style="margin-top:var(--sp-4)">
+        <div class="card"><div class="card-header">Route lock</div><div id="route-execution-state">${lock ? `<span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${esc(variantKey(lock.owner))}</span><div class="route-wallet-meta">${esc(lock.operation_id)}</div>` : '<span class="badge badge-live">clear</span>'}${execHtml}</div></div>
+        <div class="card"><div class="card-header">Reservations</div><div id="route-reservations" class="route-list">${reservationRows}</div></div>
+        <div class="card"><div class="card-header">Held positions</div><div id="route-held-positions" class="route-list">${heldRows}</div></div>
+      </div>`;
+    }
+    function routeArbitrageHtml() {
+      const status = latestRouteStatus;
+      const obs = latestRouteObservation;
+      const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
+      const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
+      const scanText = !obs ? 'No observation yet' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`;
+      return `<div id="route-arb-panel">
+        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
+          <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
+        <div class="route-disclosure">icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds; live route execution is unavailable in this release.</div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
+        <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
+          <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${routeCandidateHtml(stable, 'stable-returning')}</div></div>
+          <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${routeCandidateHtml(icp, 'ICP-returning')}</div></div>
+        </div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${status.live_execution_authorized ? 'authorized' : 'disabled'}` : 'Loading route status…'}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
+        ${routeOperationsHtml()}
+        <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
+      </div>`;
+    }
+
+    async function loadRouteData() {
+      if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
+      routeDataRequestPromise = (async () => {
+        const safe = async (fn, fallback, label) => { try { return await fn(); } catch (e) { console.error(label, e); return fallback; } };
+        const [status, obs, candidates, lock, reservations, held, current, terminal] = await Promise.all([
+          safe(() => anonymousActor.get_route_arb_status_v1(), null, 'route status'),
+          safe(() => anonymousActor.get_route_observation_v1(), [], 'route observation'),
+          safe(() => anonymousActor.get_best_route_candidates_v1(), null, 'route candidates'),
+          safe(() => anonymousActor.get_route_mutation_lock_v1(), [], 'route lock'),
+          safe(() => anonymousActor.get_route_reservations_v1(0n, 100n), { Ok: [] }, 'route reservations'),
+          safe(() => anonymousActor.get_held_positions_v1(0n, 100n), { Ok: [] }, 'held positions'),
+          safe(() => anonymousActor.get_current_route_execution_v1(), [], 'route execution'),
+          safe(() => anonymousActor.get_terminal_route_executions_v1(0n, 20n), { Ok: [] }, 'terminal executions'),
+        ]);
+        latestRouteStatus = status;
+        latestRouteObservation = routeOpt(obs);
+        latestRouteCandidates = candidates;
+        latestRouteLock = routeOpt(lock);
+        latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
+        latestHeldPositions = held && held.Ok ? held.Ok : [];
+        latestRouteExecution = routeOpt(current);
+        latestTerminalExecutions = terminal && terminal.Ok ? terminal.Ok : [];
+        if (authenticatedActor) latestRouteWallet = await safe(() => authenticatedActor.get_route_wallet_balances_v1(), latestRouteWallet, 'route wallet');
+      })().finally(() => { routeDataRequestPromise = null; });
+      return routeDataRequestPromise;
+    }
+    window.startRouteObservation = async function(btn) {
+      if (!requireAuth()) return;
+      btnLoading(btn, 'Starting…');
+      try { unwrapResult(await authenticatedActor.start_route_observation_v1()); await loadRouteData(); renderCurrentView(); toast('Quote-only observation started', 'success'); }
+      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
+    };
+    window.continueRouteObservation = async function(btn) {
+      if (!requireAuth()) return;
+      if (!latestRouteObservation || latestRouteObservation.scan_complete) { toast('Start a new observation first', 'error'); return; }
+      btnLoading(btn, 'Quoting…');
+      try { unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(latestRouteObservation.next_cursor, 100)); await loadRouteData(); renderCurrentView(); toast('Observation batch complete', 'success'); }
+      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
+    };
+
     function renderCockpit() {
       const el = document.getElementById('view-cockpit');
       const c = currentConfig;
@@ -2255,21 +2537,17 @@
 
       el.innerHTML = `
         <div class="status-strip">
-          <div class="status-chip ${!cf ? '' : cf.paused ? 'warn' : 'ok'}" onclick="goTo('ops')">
-            <span class="status-chip-label">Arb engine</span>
-            <span class="status-chip-value${cycling ? ' chip-cycling' : ''}">${!cf ? '—' : cf.paused ? 'Paused' : (cycling ? (stuckSecs != null ? 'Stuck · ' + Math.floor(stuckSecs / 60) + 'm' : 'Cycling…') : 'Running')}</span>
+          <div class="status-chip info" onclick="goTo('markets')">
+            <span class="status-chip-label">Route arbitrage</span>
+            <span class="status-chip-value">${!latestRouteStatus ? '—' : latestRouteStatus.live_execution_authorized ? 'Live' : 'Quote-only'}</span>
           </div>
           <div class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
             <span class="status-chip-label">Volume engine</span>
             <span class="status-chip-value">${!latestVolumeStats ? '—' : latestVolumeStats.volume_paused ? 'Paused' : 'Running'}</span>
           </div>
-          <div class="status-chip ${!cf ? '' : cf.rumi_amm_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
-            <span class="status-chip-label">Rumi AMM</span>
-            <span class="status-chip-value">${!cf ? '—' : cf.rumi_amm_paused ? 'Paused' : 'Active'}</span>
-          </div>
-          <div class="status-chip ${!cf ? '' : !bobConfigured ? '' : cf.bob_execution_enabled ? 'ok' : 'info'}" onclick="goTo('markets')">
-            <span class="status-chip-label">Strategy S</span>
-            <span class="status-chip-value">${!cf ? '—' : !bobConfigured ? 'Unconfigured' : cf.bob_execution_enabled ? 'Live' : 'Dry-run'}</span>
+          <div class="status-chip warn" onclick="goTo('ledger')">
+            <span class="status-chip-label">Legacy arb</span>
+            <span class="status-chip-value">Retired</span>
           </div>
           <div class="status-chip ${stranded ? 'warn' : ''}" onclick="goTo('ops')">
             <span class="status-chip-label">Stranded funds</span>
@@ -2301,16 +2579,17 @@
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
             <div class="divider"></div>
-            <div style="font-size:11.5px;color:var(--text-tertiary)">${cf ? (cf.rumi_amm_paused ? 'Rumi AMM paused ⇒ A / C / D / Q / R paused. ' : '') + (cf.bob_execution_enabled ? 'Strategy S is live.' : 'Strategy S is dry-run.') : ''}</div>
+            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. The route engine is quote-only until separately reviewed and authorized.</div>
           </div>
           <div class="card">
             <div class="card-header">Bot balances — arb main</div>
             <div class="bal-list">
-              ${arbBal ? ['ICP', 'icUSD', 'ckUSDC', 'ckUSDT', '3USD', 'BOB'].map(sym => {
-                const key = { ICP: 'bIcp', icUSD: 'bIcusd', ckUSDC: 'bCkusdc', ckUSDT: 'bCkusdt', '3USD': 'b3usd', BOB: 'bBob' }[sym];
-                const dec = (sym === 'ckUSDC' || sym === 'ckUSDT') ? 6 : 8;
-                return `<div class="bal-row">${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val">${fmtTok(arbBal[key] || 0, dec)}</span></div>`;
-              }).join('') : '<div class="text-ter" style="font-size:12px">Loading…</div>'}
+              ${ROUTE_ASSET_ORDER.map(key => {
+                const row = latestRouteWallet.find(b => routeAssetKey(b.asset) === key);
+                const amount = row ? routeOpt(row.balance_native) : null;
+                const sym = ROUTE_ASSET_LABELS[key];
+                return `<div class="bal-row">${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val">${amount == null ? '—' : routeNativeAmount(amount, row.asset)}</span></div>`;
+              }).join('')}
             </div>
           </div>
         </div>
@@ -2564,41 +2843,16 @@
 
     function renderMarkets() {
       const el = document.getElementById('view-markets');
-      const facts = marketFacts();
-      const famOrder = ['icpswap-internal', 'partydex-icpswap', 'rumi-cross', 'bob', 'volume'];
-      const rumiPaused = currentConfig && currentConfig.rumi_amm_paused;
       const volumePaused = latestVolumeStats && latestVolumeStats.volume_paused;
       el.innerHTML = `
-        <div class="card-subtitle">One row per strategy, generated from the registry, grouped by shared gating axis. Expand a row for spread history, params, recent trades — and Force, one deliberate click in. Volume pools are cost-center rows: a cost, not a P&amp;L.</div>
-        ${famOrder.map(fam => {
-          const isVolume = fam === 'volume';
-          const rows = isVolume ? VOLUME_POOLS : STRATEGIES.filter(s => s.family === fam);
-          const pausedCount = isVolume ? 0 : rows.filter(s => strategyLive(s, facts).state === 'PAUSED').length;
-          const hidden = !state.hiddenPaused[fam];
-          const html = isVolume ? rows.map(volumeRowHtml).join('') : rows.map(s => marketRowHtml(s, facts)).join('');
-          const killSwitch = fam === 'rumi-cross' && rumiPaused ? ' <span class="badge badge-paused">Kill-switch: Rumi AMM paused — gates all ' + rows.length + '</span>' : '';
-          const volKill = isVolume && volumePaused ? ' <span class="badge badge-paused">Kill-switch: Volume bot paused</span>' : '';
-          return `
-          <div class="market-family">
-            <div class="family-head">
-              <div class="family-title">${familyLogos(fam)}${FAMILIES[fam]} <span class="family-count">(${rows.length})</span>${killSwitch}${volKill}</div>
-              ${pausedCount ? `<button class="family-toggle" onclick="togglePausedGroup('${fam}')">${hidden ? `Show paused (${pausedCount})` : `Hide paused`}</button>` : ''}
-            </div>
-            <div class="market-group">${html}</div>
-          </div>`;
-        }).join('')}
-        <div class="footnote"><span class="mark">*</span> 3USD has no volume subaccount — funding and swap coverage for 3USD is arb-main only.</div>
+        ${routeArbitrageHtml()}
+        <div class="market-family" style="margin-top:var(--sp-6)">
+          <div class="family-head"><div class="family-title">Volume engine <span class="family-count">(${VOLUME_POOLS.length})</span>${volumePaused ? ' <span class="badge badge-paused">Kill-switch: Volume bot paused</span>' : ''}</div></div>
+          <div class="card-subtitle">Volume pools are retained as a separate cost-center system. Their controls and accounting are not part of route-arbitrage ranking.</div>
+          <div class="market-group">${VOLUME_POOLS.map(volumeRowHtml).join('')}</div>
+        </div>
+        <div class="footnote"><span class="mark">*</span> Legacy lettered strategy records remain available in the historical ledger, but no lettered strategy action is rendered here.</div>
       `;
-      famOrder.forEach(fam => {
-        if (fam === 'volume') return;
-        if (!state.hiddenPaused[fam]) {
-          STRATEGIES.filter(s => s.family === fam && strategyLive(s, facts).state === 'PAUSED').forEach(s => {
-            const row = el.querySelector(`.market-row[data-id="${s.id}"]`);
-            if (row) row.classList.add('hidden-paused');
-          });
-        }
-      });
-      state.expandedRows.forEach(id => { if (STRATEGY_BY_ID[id]) drawMiniSpreadChart(id); });
     }
 
     // ═══════ Force confirm (amendment 4/9: live numbers, never generic yes/no) ═══════
@@ -2958,51 +3212,20 @@
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
-            <div class="card-header">Swap</div>
-            <div class="swap-grid">
-              <div>
-                <label>From</label>
-                <div class="swap-token-row">
-                  <img class="token-logo" id="swap-from-logo" src="" alt="">
-                  <select id="swap-from-token" onchange="swapTokenChanged()">
-                    ${MONEY_TOKENS.map(t => `<option value="${t.key}"${t.key === 'icusd' ? ' selected' : ''}>${t.sym}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="swap-bal">Balance: <span id="swap-from-bal">—</span><button class="btn btn-sm btn-ghost" onclick="swapSetMax()">Max</button></div>
-                <input type="number" id="swap-from-amount" placeholder="0.00" min="0" oninput="swapQuote()">
-              </div>
-              <div class="swap-arrow">→</div>
-              <div>
-                <label>To</label>
-                <div class="swap-token-row">
-                  <img class="token-logo" id="swap-to-logo" src="" alt="">
-                  <select id="swap-to-token" onchange="swapTokenChanged()">
-                    ${MONEY_TOKENS.map(t => `<option value="${t.key}"${t.key === 'icp' ? ' selected' : ''}>${t.sym}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="swap-bal">Balance: <span id="swap-to-bal">—</span></div>
-                <div class="swap-est">Receive ≈ <span id="swap-to-amount-display">—</span><input type="hidden" id="swap-to-amount"></div>
-                <div class="swap-route" id="swap-quote-info"></div>
-                <div class="swap-route" id="swap-route-info"></div>
-              </div>
+            <div class="card-header">Move funds — arb main</div>
+            <div class="btn-group" style="margin-bottom:var(--sp-3)">
+              ${MONEY_TOKENS.map(t => `<button class="btn btn-sm" onclick="doDeposit('${t.key}')">Deposit ${t.sym}</button>`).join('')}
             </div>
-            <button class="btn btn-primary" id="swap-execute-btn" style="margin-top:var(--sp-4)" onclick="confirmSwap()">Swap</button>
-            <div class="footnote">Routes match what the server supports today — ICP↔3USD via Rumi AMM, ICP↔icUSD/ckUSDC/ckUSDT via Rumi AMM + 3pool, stable↔stable via 3pool.</div>
+            <label>Withdraw</label>
+            <div class="fund-vol-grid" style="margin-bottom:var(--sp-3)">
+              <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}">${t.sym}</option>`).join('')}</select></div>
+              <div><input type="number" id="w-amount" placeholder="Amount"></div>
+            </div>
+            <input type="text" id="w-to" placeholder="Destination principal" style="margin-bottom:var(--sp-3)">
+            <button class="btn btn-danger btn-block" onclick="confirmWithdraw()">Withdraw</button>
+            <div class="footnote">Manual Rumi/3pool swaps are retired. Quote-only route arbitrage is available from the Markets view; wallet deposits and withdrawals remain separate administrative operations.</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:var(--sp-4)">
-            <div class="card">
-              <div class="card-header">Move funds — arb main</div>
-              <div class="btn-group" style="margin-bottom:var(--sp-3)">
-                ${MONEY_TOKENS.map(t => `<button class="btn btn-sm" onclick="doDeposit('${t.key}')">Deposit ${t.sym}</button>`).join('')}
-              </div>
-              <label>Withdraw</label>
-              <div class="fund-vol-grid" style="margin-bottom:var(--sp-3)">
-                <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}">${t.sym}</option>`).join('')}</select></div>
-                <div><input type="number" id="w-amount" placeholder="Amount"></div>
-              </div>
-              <input type="text" id="w-to" placeholder="Destination principal" style="margin-bottom:var(--sp-3)">
-              <button class="btn btn-danger btn-block" onclick="confirmWithdraw()">Withdraw</button>
-            </div>
             <div class="card">
               <div class="card-header">Deposit address — arb main</div>
               <div class="deposit-addr-row"><span class="addr" onclick="copyToClipboard('${canisterId}', 'Principal copied')">${canisterId}</span><button class="btn btn-sm btn-ghost" onclick="copyToClipboard('${canisterId}', 'Principal copied')">Copy</button></div>
@@ -3045,7 +3268,6 @@
           </div>
         </div>
       `;
-      swapTokenChanged();
       volSwapTokenChanged();
     }
 
@@ -3706,40 +3928,31 @@
       const el = document.getElementById('view-ops');
       const c = currentConfig;
       if (!isAdmin) {
-        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see levers, setup, and the incident toolkit.</div></div>`;
+        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see the volume controls and admin tools.</div></div>`;
         return;
       }
       if (!c) { el.innerHTML = `<div class="card">Loading config…</div>`; return; }
 
-      const health = latestHealthReport;
-      const slipBps = health ? bi(health.slippage_bps) : bi(c.slippage_bps);
       const stats = latestVolumeStats;
+      const routeStatus = latestRouteStatus;
+      const routeConfigState = routeStatus
+        ? `${bi(routeStatus.route_count)} routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}`
+        : 'Loading route policy…';
 
       el.innerHTML = `
         <div class="card" style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Route arbitrage policy</div>
+          <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
+          <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning</span></div>
+          <div class="stat-row"><span>Execution</span><span class="badge badge-dryrun">quote-only · disabled</span></div>
+          <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
+          <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
+        </div>
+        <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Levers <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched weekly</span></div>
           <div class="lever-grid">
-            ${leverHtml('arb', 'Arb engine', 'Master run/pause', !c.paused, 'leverArb()')}
-            ${leverHtml('rumi', 'Rumi AMM', 'Paused ⇒ ' + RUMI_CROSS_IDS.join('/') + ' skip', !c.rumi_amm_paused, 'leverRumiAmm()')}
-            ${leverHtml('s', 'Strategy S', c.bob_execution_enabled ? 'Live (not dry-run)' : 'Dry-run only', c.bob_execution_enabled, 'leverStrategyS()')}
             ${leverHtml('vol', 'Volume engine', 'Master run/pause', !(stats && stats.volume_paused), 'leverVolume()')}
             ${stats ? VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', stats[p.statsKey].config.enabled, `leverVolumePool('${p.id}')`)).join('') : ''}
-          </div>
-          <div class="divider"></div>
-          <label>Slippage (bps)</label>
-          <div class="btn-group" style="margin-bottom:var(--sp-2)">
-            ${[25, 50, 100].map(bps => `<button class="btn btn-sm ${slipBps === bps ? 'btn-primary' : ''}" onclick="setSlipPreset(${bps})">${(bps / 100).toFixed(2)}%</button>`).join('')}
-          </div>
-          <div class="fund-vol-grid">
-            <div><input type="number" id="slip-input" value="${slipBps}" placeholder="bps"></div>
-            <div><button class="btn btn-primary" onclick="saveSlippage(this)">Save slippage</button></div>
-          </div>
-          <div class="divider"></div>
-          <label>Intervals &amp; caps</label>
-          <div class="grid g-cols-3">
-            <div><label>Arb cycle interval (s)</label><input type="number" id="cfg-arb-interval"></div>
-            <div><label>Min spread (bps)</label><input type="number" id="cfg-min-spread"></div>
-            <div><label>Max trade size (USD)</label><input type="number" id="cfg-max-trade" step="0.01"></div>
           </div>
           <div class="divider"></div>
           <label>Volume pool config</label>
@@ -3766,49 +3979,12 @@
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
-            <div class="card-header">Setup <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched once per venue</span></div>
-            <table class="setup-table">${setupTableHtml(c)}</table>
+            <div class="card-header">Admins</div>
+            <div id="admins-list">${renderAdminsHtml()}</div>
             <div class="divider"></div>
-            <div class="grid g-cols-2">
-              <div><label>PartyDEX ckUSDC fee (pips)</label><input type="number" id="cfg-partydex-ckusdc-fee"></div>
-              <div><label>PartyDEX ckUSDT fee (pips)</label><input type="number" id="cfg-partydex-ckusdt-fee"></div>
-              <div><label>Min profit (USD)</label><input type="number" id="cfg-min-profit" step="0.01"></div>
-              <div><label>ICP inventory floor</label><input type="number" id="cfg-icp-floor" step="0.01"></div>
-              <div><label>ICP inventory ceiling</label><input type="number" id="cfg-icp-ceiling" step="0.01"></div>
-              <div><label>BOB inventory floor</label><input type="number" id="cfg-bob-floor" step="0.01"></div>
-              <div><label>BOB inventory ceiling</label><input type="number" id="cfg-bob-ceiling" step="0.01"></div>
-              <div><label>BOB max trade (USD)</label><input type="number" id="cfg-bob-max-trade" step="0.01"></div>
-              <div><label>BOB min spread (bps)</label><input type="number" id="cfg-bob-min-spread"></div>
-            </div>
-            <label style="margin-top:var(--sp-3)">BOB/ICP pool principal</label><input type="text" id="cfg-bob-icp-pool" placeholder="aaaaa-aa">
-            <label style="margin-top:var(--sp-3)">icUSD/BOB pool principal</label><input type="text" id="cfg-icusd-bob-pool" placeholder="aaaaa-aa">
-            <button class="btn btn-primary btn-block" style="margin-top:var(--sp-4)" onclick="saveConfig(this)">Save config</button>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:var(--sp-4)">
-            <div class="card">
-              <div class="card-header">Admins</div>
-              <div id="admins-list">${renderAdminsHtml()}</div>
-              <div class="divider"></div>
-              <div class="fund-vol-grid">
-                <div><input type="text" id="admin-principal" placeholder="New admin principal"></div>
-                <div><button class="btn" onclick="doAddAdmin(this)">Add admin</button></div>
-              </div>
-            </div>
-            <div class="card incident-card${(currentWedgeKey && wedgeDismissedKey !== currentWedgeKey) ? ' hot' : ''}">
-              <div class="card-header">Incident toolkit</div>
-              <div class="incident-actions">
-                <div class="incident-action">
-                  <div><div class="incident-action-label">Clear cycle lock</div><div class="incident-action-cmd">clear_cycle_lock()</div></div>
-                  <button class="btn btn-sm btn-ghost" onclick="doClearCycleLock(this)">Run</button>
-                </div>
-                <div class="incident-action">
-                  <div><div class="incident-action-label">Recover PartyDEX balance</div><input type="text" id="incident-partydex-pool" placeholder="Pool principal" style="margin-top:4px;max-width:220px"></div>
-                  <button class="btn btn-sm btn-ghost" onclick="doRecoverPartydexBalance()">Run</button>
-                </div>
-              </div>
-              <div class="divider"></div>
-              <div class="footnote">Copy dfx for the rest (backfill_trade_legs — one-off manual correction, not a routine button):</div>
-              <div class="m-trade-row" style="border:none;font-size:10.5px;color:var(--text-tertiary);word-break:break-all" id="incident-backfill-cmd"></div>
+            <div class="fund-vol-grid">
+              <div><input type="text" id="admin-principal" placeholder="New admin principal"></div>
+              <div><button class="btn" onclick="doAddAdmin(this)">Add admin</button></div>
             </div>
           </div>
         </div>
@@ -4039,6 +4215,7 @@
       }
       await loadOverviewFromSnapshot();
       await loadVolumeData();
+      await loadRouteData();
       refreshLegAttribution();
       if (authenticatedActor) await loadPrices();
       if (authenticatedActor && currentConfig) await loadMyBalances(currentConfig);

@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 pub mod state; // pub so integration tests can verify serde upgrade defaults
 pub mod strategy_t; // pub so integration tests can reach the pure math
+pub mod route_arb;
 mod prices;
 mod swaps;
 mod partydex;
@@ -75,6 +76,10 @@ fn setup_volume_timer() {
             ic_cdk_timers::clear_timer(prev);
         }
     });
+    if let Err(reason) = state::read_state(validate_volume_registry) {
+        state::log_error(format!("volume timer not armed: {reason}"));
+        return;
+    }
     let interval = state::read_state(|s| s.volume.interval_secs).max(1);
     let new_id = ic_cdk_timers::set_timer_interval(
         std::time::Duration::from_secs(interval),
@@ -98,7 +103,28 @@ async fn run_volume_cycle_if_unfrozen() -> Vec<String> {
     }) {
         return vec![reason];
     }
-    volume::run_volume_cycle().await
+    let config_valid = state::read_state(validate_volume_registry);
+    if let Err(reason) = config_valid {
+        return vec![reason];
+    }
+    let operation_id = format!("volume-cycle-{}", ic_cdk::api::time());
+    if let Err(reason) = state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
+    ) {
+        return vec![format!("volume cycle deferred: {reason}")];
+    }
+    let mut outcomes = volume::run_volume_cycle().await;
+    if let Err(error) = sync_volume_owned_reservations() {
+        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+        outcomes.push(format!(
+            "volume cycle requires reconciliation: stranded-fund reservation failed: {error}"
+        ));
+        return outcomes;
+    }
+    if let Err(error) = state::release_mutation_lock(&operation_id) {
+        outcomes.push(format!("volume cycle could not release account mutation lock: {error}"));
+    }
+    outcomes
 }
 
 fn require_admin() {
@@ -112,6 +138,82 @@ fn require_admin() {
     if !authorized {
         ic_cdk::trap("Unauthorized: only owner or admins can call this");
     }
+}
+
+fn pinned(text: &str) -> Principal {
+    Principal::from_text(text).expect("compile-time principal must be valid")
+}
+
+fn validate_volume_registry(state: &state::BotState) -> Result<(), String> {
+    let config = &state.config;
+    let expected = [
+        ("ICP ledger", config.icp_ledger, "ryjl3-tyaaa-aaaaa-aaaba-cai"),
+        ("icUSD ledger", config.icusd_ledger, "t6bor-paaaa-aaaap-qrd5q-cai"),
+        ("ckUSDT ledger", config.ckusdt_ledger, "cngnf-vqaaa-aaaar-qag4q-cai"),
+        ("ckUSDC ledger", config.ckusdc_ledger, "xevnm-gaaaa-aaaar-qafnq-cai"),
+        ("3USD/3pool", config.three_usd_ledger, "fohh4-yyaaa-aaaap-qtkpa-cai"),
+        ("Rumi AMM", config.rumi_amm, "ijlzs-2yaaa-aaaap-quaaq-cai"),
+        ("ICPSwap ICP/icUSD", config.icpswap_icusd_pool, "nqxwe-hiaaa-aaaar-qb5yq-cai"),
+        ("ICPSwap ICP/3USD", config.icpswap_3usd_pool, "mu2zw-6iaaa-aaaar-qb56q-cai"),
+        ("BOB ledger", config.bob_ledger, "7pail-xaaaa-aaaas-aabmq-cai"),
+        ("ICPSwap BOB/ICP", config.icpswap_bob_icp_pool, "ybilh-nqaaa-aaaag-qkhzq-cai"),
+        ("ICPSwap ICP/ckUSDC", config.icpswap_pool, "mohjv-bqaaa-aaaag-qjyia-cai"),
+        ("ICPSwap ICP/ckUSDT", config.icpswap_ckusdt_pool, "hkstf-6iaaa-aaaag-qkcoq-cai"),
+    ];
+    for (label, actual, expected) in expected {
+        if actual != pinned(expected) {
+            return Err(format!("volume operation disabled: {label} does not match immutable pin"));
+        }
+    }
+    if config.icpswap_icusd_bob_pool != Principal::anonymous()
+        && config.icpswap_icusd_bob_pool != pinned("gxvvw-aiaaa-aaaar-qcada-cai")
+    {
+        return Err("volume operation disabled: ICPSwap icUSD/BOB does not match immutable pin".to_string());
+    }
+    if config.rumi_3pool != pinned("fohh4-yyaaa-aaaap-qtkpa-cai") {
+        return Err("volume operation disabled: Rumi 3pool does not match immutable pin".to_string());
+    }
+    let ordering = [
+        ("ICPSwap ICP/ckUSDC", config.icpswap_icp_is_token0, true, state.token_ordering_resolved),
+        ("ICPSwap ICP/icUSD", config.icpswap_icusd_icp_is_token0, true, state.icusd_token_ordering_resolved),
+        ("ICPSwap ICP/ckUSDT", config.icpswap_ckusdt_icp_is_token0, false, state.ckusdt_token_ordering_resolved),
+        ("ICPSwap ICP/3USD", config.icpswap_3usd_icp_is_token0, false, state.icpswap_3usd_token_ordering_resolved),
+        ("ICPSwap BOB/ICP", config.icpswap_bob_icp_icp_is_token0, false, state.bob_icp_ordering_resolved),
+    ];
+    for (label, actual, expected, resolved) in ordering {
+        if !resolved || actual != expected {
+            return Err(format!(
+                "volume operation disabled: {label} token ordering is unresolved or differs from the immutable registry"
+            ));
+        }
+    }
+    if config.icpswap_icusd_bob_pool != Principal::anonymous()
+        && (!state.icusd_bob_ordering_resolved || config.icpswap_icusd_bob_icusd_is_token0)
+    {
+        return Err("volume operation disabled: ICPSwap icUSD/BOB token ordering is unresolved or differs from the immutable registry".to_string());
+    }
+    Ok(())
+}
+
+fn is_pinned_volume_ledger(ledger: Principal) -> bool {
+    route_arb::asset_for_ledger(ledger).is_some()
+        || ledger == pinned("fohh4-yyaaa-aaaap-qtkpa-cai")
+        || ledger == pinned("7pail-xaaaa-aaaas-aabmq-cai")
+}
+
+fn sync_volume_owned_reservations() -> Result<(), String> {
+    let stranded = state::read_state(|s| s.volume_stranded_icp);
+    state::put_ownership_reservation(route_arb::OwnershipReservationV1 {
+        reservation_id: "volume-stranded-icp".to_string(),
+        asset: route_arb::Asset::Icp,
+        amount_native: stranded,
+        whole_asset_freeze: false,
+        kind: route_arb::ReservationKindV1::NonRoute,
+        owner: route_arb::MutationOwnerV1::VolumeOperation,
+        operation_id: "volume-stranded-recovery".to_string(),
+        reconciled_at_ns: ic_cdk::api::time(),
+        active: stranded > 0,
+    })
 }
 
 /// Check if a principal is an authorized admin (used by dashboard to show/hide controls)
@@ -155,6 +257,211 @@ fn remove_admin(principal: Principal) {
 #[query]
 fn get_config() -> BotConfig {
     state::read_state(|s| s.config.clone())
+}
+
+#[query]
+fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
+    state::read_state(|s| s.route_arb.clone())
+}
+
+#[update]
+fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
+    require_admin();
+    route_arb::validate_route_config(&config)?;
+    state::mutate_state(|s| {
+        s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
+            .ok_or_else(|| "route config generation exhausted".to_string())?;
+        s.route_arb = config;
+        s.route_observation = None;
+        Ok::<(), String>(())
+    })?;
+    Ok(())
+}
+
+#[query]
+fn get_route_arb_status_v1() -> route_arb::RouteArbStatusV1 {
+    state::read_state(|s| route_arb::route_status(&s.route_arb))
+}
+
+#[update]
+async fn get_route_wallet_balances_v1() -> Vec<route_arb::WalletAssetBalanceV1> {
+    require_admin();
+    route_arb::read_wallet_balances(ic_cdk::id()).await
+}
+
+#[update]
+fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String> {
+    require_admin();
+    let (config, generation) = state::read_state(|s| (s.route_arb.clone(), s.route_arb_config_generation));
+    let universe = route_arb::build_work_universe(&config)?;
+    let now = ic_cdk::api::time();
+    let observation_id = format!("route-observation-{}-{}", generation, now);
+    let mut accumulator = route_arb::ObservationAccumulatorV1::new(
+        observation_id.clone(), now, 0, universe.items.len() as u64,
+        universe.required_quote_calls,
+        universe.required_quote_calls <= u64::from(config.max_quote_calls_per_observation),
+    );
+    accumulator.route_count = universe.route_count as u32;
+    let result = route_arb::ObservationStartV1 {
+        observation_id,
+        route_count: universe.route_count as u32,
+        route_size_count: universe.items.len() as u64,
+        required_quote_calls: universe.required_quote_calls,
+        quote_call_budget_sufficient: accumulator.quote_call_budget_sufficient,
+        next_cursor: 0,
+    };
+    state::mutate_state(|s| s.route_observation = Some(accumulator));
+    Ok(result)
+}
+
+#[update]
+async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<route_arb::ObservationBatchResultV1, String> {
+    require_admin();
+    if limit == 0 || limit > route_arb::HARD_MAX_PAGE_SIZE {
+        return Err("limit must be between 1 and 100".to_string());
+    }
+    let (config, generation, active) = state::read_state(|s| {
+        (s.route_arb.clone(), s.route_arb_config_generation, s.route_observation.clone())
+    });
+    let active = active.ok_or_else(|| "no active route observation".to_string())?;
+    if active.scan_complete {
+        return Err("route observation is already complete".to_string());
+    }
+    if active.next_cursor != cursor {
+        return Err(format!("cursor mismatch: expected {}, got {}", active.next_cursor, cursor));
+    }
+    if !active.quote_call_budget_sufficient {
+        return Err(format!(
+            "route observation requires {} quote calls, above configured maximum {}; no quote calls were made",
+            active.required_quote_calls, config.max_quote_calls_per_observation
+        ));
+    }
+    let universe = route_arb::build_work_universe(&config)?;
+    if active.total_work_items != universe.items.len() as u64 {
+        return Err("route universe changed; start a new observation".to_string());
+    }
+    let start = usize::try_from(cursor).map_err(|_| "cursor exceeds platform range")?;
+    let end = start.saturating_add(usize::from(limit)).min(universe.items.len());
+    let requested_quote_calls: u64 = universe.items[start..end]
+        .iter()
+        .map(|item| item.route.edges.len() as u64)
+        .sum();
+    let remaining_quote_calls = u64::from(config.max_quote_calls_per_observation)
+        .checked_sub(active.quote_calls_made)
+        .ok_or_else(|| "route observation has already exceeded its configured quote-call budget".to_string())?;
+    if requested_quote_calls > remaining_quote_calls {
+        return Err(format!(
+            "requested batch could require {requested_quote_calls} quote calls with only {remaining_quote_calls} remaining; no quote calls were made"
+        ));
+    }
+    let reservations = current_route_reservation_totals();
+    let quoted = route_arb::quote_observation_items(
+        &config,
+        &universe.items[start..end],
+        &reservations,
+    ).await;
+    let candidates: Vec<_> = quoted.iter().map(|(candidate, _, _)| candidate.clone()).collect();
+    let quote_calls = quoted.iter().map(|(_, calls, _)| *calls).sum();
+    let full_fill_rejections = quoted.iter().filter(|(_, _, rejected)| *rejected).count() as u64;
+    let completed_at = ic_cdk::api::time();
+    let observation = state::mutate_state(|s| -> Result<_, String> {
+        if s.route_arb_config_generation != generation {
+            return Err("route config changed while batch was quoting; results discarded".to_string());
+        }
+        let current = s.route_observation.as_mut().ok_or_else(|| "route observation disappeared while batch was quoting".to_string())?;
+        if current.observation_id != active.observation_id || current.next_cursor != cursor {
+            return Err("route observation advanced concurrently; results discarded".to_string());
+        }
+        route_arb::accumulate_observation_batch(current, cursor, candidates.clone(), quote_calls, full_fill_rejections)?;
+        if current.scan_complete {
+            current.completed_at_ns = Some(completed_at);
+        }
+        Ok(current.clone())
+    })?;
+    if observation.scan_complete {
+        state::append_route_observation(observation.clone())?;
+    }
+    Ok(route_arb::ObservationBatchResultV1 { observation, candidates })
+}
+
+fn current_route_reservation_totals() -> route_arb::ReservationTotals {
+    let mut totals = route_arb::ReservationTotals::default();
+    for asset in route_arb::Asset::ALL {
+        let current = state::reservation_totals_for_asset(asset);
+        totals.held.set(asset, Some(u128::from(current.held)));
+        totals.active.set(asset, Some(u128::from(current.active_route)));
+        totals.non_route.set(asset, Some(u128::from(current.non_route)));
+        totals.set_whole_asset_frozen(asset, current.whole_asset_frozen);
+    }
+    totals
+}
+
+#[query]
+fn get_route_observation_v1() -> Option<route_arb::ObservationAccumulatorV1> {
+    state::read_state(|s| s.route_observation.clone())
+}
+
+#[query]
+fn get_route_observations_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::ObservationAccumulatorV1>, String> {
+    state::get_route_observations_page(offset, limit)
+}
+
+#[query]
+fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
+    state::read_state(|s| match &s.route_observation {
+        Some(observation) => route_arb::BestRouteCandidatesV1 {
+            observation_id: Some(observation.observation_id.clone()),
+            scan_complete: observation.scan_complete,
+            stable: observation.best_stable_candidate.clone(),
+            icp: observation.best_icp_candidate.clone(),
+        },
+        None => route_arb::BestRouteCandidatesV1 {
+            observation_id: None, scan_complete: false, stable: None, icp: None,
+        },
+    })
+}
+
+#[query]
+fn get_route_mutation_lock_v1() -> Option<route_arb::MutationLockV1> {
+    state::get_mutation_lock()
+}
+
+#[query]
+fn get_route_reservations_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::OwnershipReservationV1>, String> {
+    state::get_ownership_reservations_page(offset, limit)
+}
+
+#[query]
+fn get_held_positions_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::HeldPositionV1>, String> {
+    state::get_held_positions_page(offset, limit)
+}
+
+#[query]
+fn get_current_route_execution_v1() -> Option<route_arb::ExecutionRecordV1> {
+    state::get_current_route_execution()
+}
+
+#[query]
+fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::ExecutionRecordV1>, String> {
+    state::get_terminal_route_executions_page(offset, limit)
+}
+
+#[update]
+fn prepare_route_execution_v1(_route_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; quote observations and durable reporting are available, but no fund-moving call can be prepared".to_string())
+}
+
+#[update]
+fn advance_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; advance cannot submit or replay a fund-moving call".to_string())
+}
+
+#[update]
+fn reconcile_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; no route submission exists to reconcile".to_string())
 }
 
 #[query]
@@ -359,6 +666,13 @@ async fn setup_approvals() -> String {
 async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     require_admin();
 
+    let active_asset = route_arb::asset_for_ledger(token_ledger);
+    let is_legacy_recovery_ledger = token_ledger == pinned("fohh4-yyaaa-aaaap-qtkpa-cai")
+        || token_ledger == pinned("7pail-xaaaa-aaaas-aabmq-cai");
+    if active_asset.is_none() && !is_legacy_recovery_ledger {
+        ic_cdk::trap("withdraw rejected: ledger is not in the immutable active/recovery registry");
+    }
+
     let freeze_reason = state::read_state(|s| {
         let asset = if token_ledger == s.config.icp_ledger {
             Some(state::LegacyFreezeAsset::Icp)
@@ -371,6 +685,26 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     });
     if let Some(reason) = freeze_reason {
         ic_cdk::trap(&reason);
+    }
+
+    let operation_id = format!("withdraw-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::GenericWithdrawal, ic_cdk::api::time(),
+    ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
+    if let Some(asset) = active_asset {
+        let balance = match swaps::icrc1_balance_of_default(token_ledger).await {
+            Ok(balance) => balance,
+            Err(error) => {
+                let _ = state::release_mutation_lock(&operation_id);
+                ic_cdk::trap(&format!("withdraw balance check failed: {error}"));
+            }
+        };
+        let available = state::spendable_native(asset, balance)
+            .unwrap_or_else(|error| ic_cdk::trap(&error));
+        if amount > available {
+            let _ = state::release_mutation_lock(&operation_id);
+            ic_cdk::trap("withdraw rejected: amount would consume reserved inventory");
+        }
     }
 
     let transfer_args = icrc_ledger_types::icrc1::transfer::TransferArg {
@@ -387,17 +721,20 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
 
     match result {
         Ok((Ok(_),)) => {
+            let _ = state::release_mutation_lock(&operation_id);
             state::log_activity("withdraw", &format!(
                 "Withdrew {} from ledger {} to {} by {}",
                 amount, token_ledger, to, ic_cdk::api::caller()
             ));
         }
         Ok((Err(e),)) => {
+            let _ = state::release_mutation_lock(&operation_id);
             let msg = format!("Withdraw failed: {:?} (ledger={}, to={}, amount={})", e, token_ledger, to, amount);
             state::log_activity("withdraw", &msg);
             ic_cdk::trap(&format!("Transfer failed: {:?}", e));
         }
         Err((code, msg)) => {
+            let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
             let detail = format!("Withdraw call failed: {:?} {} (ledger={}, to={}, amount={})", code, msg, token_ledger, to, amount);
             state::log_activity("withdraw", &detail);
             ic_cdk::trap(&format!("Transfer call failed: {:?} {}", code, msg));
@@ -414,18 +751,52 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
 #[update]
 async fn recover_partydex_balance(pool: Principal) -> Result<(u64, u64), String> {
     require_admin();
+    let quote_asset = if pool == pinned("xjiq2-fiaaa-aaaan-q52ra-cai") {
+        route_arb::Asset::CkUsdc
+    } else if pool == pinned("6b2bo-kyaaa-aaaao-qpira-cai") {
+        route_arb::Asset::CkUsdt
+    } else {
+        return Err("PartyDEX recovery rejected: pool is not one of the two immutable retired recovery pins".to_string());
+    };
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         return Err(reason);
     }
+    let operation_id = format!("partydex-recovery-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::RetiredVenueRecovery, ic_cdk::api::time(),
+    )?;
     let result = partydex::withdraw_all(pool).await;
     match &result {
-        Ok((base_out, quote_out)) => state::log_activity("recover", &format!(
-            "recover_partydex_balance({}) swept base={} quote={} by {}",
-            pool, base_out, quote_out, ic_cdk::api::caller()
-        )),
-        Err(e) => state::log_activity("recover", &format!(
-            "recover_partydex_balance({}) failed: {} (by {})", pool, e, ic_cdk::api::caller()
-        )),
+        Ok((base_out, quote_out)) => {
+            for (asset, amount, suffix) in [
+                (route_arb::Asset::Icp, *base_out, "base"),
+                (quote_asset, *quote_out, "quote"),
+            ] {
+                if amount > 0 {
+                    if let Err(error) = state::put_ownership_reservation(route_arb::OwnershipReservationV1 {
+                        reservation_id: format!("{}-{}", operation_id, suffix),
+                        asset, amount_native: amount, whole_asset_freeze: false,
+                        kind: route_arb::ReservationKindV1::NonRoute,
+                        owner: route_arb::MutationOwnerV1::RetiredVenueRecovery,
+                        operation_id: operation_id.clone(), reconciled_at_ns: ic_cdk::api::time(), active: true,
+                    }) {
+                        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+                        return Err(format!("recovery credited funds but reservation failed: {error}"));
+                    }
+                }
+            }
+            state::release_mutation_lock(&operation_id)?;
+            state::log_activity("recover", &format!(
+                "recover_partydex_balance({}) swept base={} quote={} by {}",
+                pool, base_out, quote_out, ic_cdk::api::caller()
+            ));
+        }
+        Err(e) => {
+            let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+            state::log_activity("recover", &format!(
+                "recover_partydex_balance({}) failed: {} (by {})", pool, e, ic_cdk::api::caller()
+            ));
+        }
     }
     result
 }
@@ -512,6 +883,8 @@ const VOL_ICUSD_FEE: u64 = 100_000;
 #[update]
 async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     require_admin();
+    state::read_state(validate_volume_registry)
+        .unwrap_or_else(|reason| ic_cdk::trap(&reason));
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         ic_cdk::trap(&reason);
     }
@@ -521,6 +894,11 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
          s.config.rumi_3pool)
     });
     let caller = ic_cdk::api::caller();
+    let operation_id = format!("volume-swap-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
+    ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
+    let mut settlement_ambiguous = false;
 
     if icp_to_icusd {
         // ICP → 3USD (Rumi) → icUSD (3pool redeem)
@@ -553,6 +931,7 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
         // Step 4: Transfer icUSD back to volume subaccount
         if icusd_out > VOL_ICUSD_FEE {
             if let Err(e) = swaps::transfer_to_subaccount(icusd_ledger, icusd_out - VOL_ICUSD_FEE, swaps::VOLUME_SUBACCOUNT).await {
+                settlement_ambiguous = true;
                 state::log_activity("volume_swap", &format!("WARNING: icUSD transfer back failed: {:?}", e));
             }
         }
@@ -592,12 +971,18 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
         // Step 4: Transfer ICP back to volume subaccount
         if icp_out > ICP_FEE {
             if let Err(e) = swaps::transfer_to_subaccount(icp_ledger, icp_out - ICP_FEE, swaps::VOLUME_SUBACCOUNT).await {
+                settlement_ambiguous = true;
                 state::log_activity("volume_swap", &format!("WARNING: ICP transfer back failed: {:?}", e));
             }
         }
         state::log_activity("volume_swap", &format!(
             "Volume swap: {} icUSD → {} ICP by {}", amount, icp_out, caller
         ));
+    }
+    if settlement_ambiguous {
+        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+    } else {
+        let _ = state::release_mutation_lock(&operation_id);
     }
 }
 
@@ -1108,6 +1493,10 @@ fn resume_volume() {
 #[update]
 async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    state::read_state(validate_volume_registry)?;
+    if !is_pinned_volume_ledger(token_ledger) {
+        return Err("volume funding rejected: ledger is not code-pinned".to_string());
+    }
     let freeze_reason = state::read_state(|s| {
         let asset = if token_ledger == s.config.icp_ledger {
             Some(state::LegacyFreezeAsset::Icp)
@@ -1126,15 +1515,24 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
         // 3USD ledger ignores subaccounts — funds are already in default account
         return Ok(());
     }
-    swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("Failed to fund volume subaccount: {:?}", e))
+    let operation_id = format!("volume-fund-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(&operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time())?;
+    match swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
+        Ok(_) => { state::release_mutation_lock(&operation_id)?; Ok(()) }
+        Err(error) => {
+            let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+            Err(format!("Failed to fund volume subaccount: {:?}; reconciliation required", error))
+        }
+    }
 }
 
 #[update]
 async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
+    state::read_state(validate_volume_registry)?;
+    if !is_pinned_volume_ledger(token_ledger) {
+        return Err("volume withdrawal rejected: ledger is not code-pinned".to_string());
+    }
     let freeze_reason = state::read_state(|s| {
         let asset = if token_ledger == s.config.icp_ledger {
             Some(state::LegacyFreezeAsset::Icp)
@@ -1153,10 +1551,15 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
         // 3USD ledger ignores subaccounts — funds are already in default account
         return Ok(());
     }
-    swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("Failed to withdraw from volume subaccount: {:?}", e))
+    let operation_id = format!("volume-withdraw-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(&operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time())?;
+    match swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
+        Ok(_) => { state::release_mutation_lock(&operation_id)?; Ok(()) }
+        Err(error) => {
+            let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+            Err(format!("Failed to withdraw from volume subaccount: {:?}; reconciliation required", error))
+        }
+    }
 }
 
 #[update]
@@ -1311,6 +1714,8 @@ fn get_public_health() -> state::PublicHealth {
 #[update]
 async fn trigger_volume_rebalance() {
     require_admin();
+    state::read_state(validate_volume_registry)
+        .unwrap_or_else(|reason| ic_cdk::trap(&reason));
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         ic_cdk::trap(&reason);
     }
@@ -1318,7 +1723,21 @@ async fn trigger_volume_rebalance() {
         ic_cdk::trap(&reason);
     }
     let config = state::read_state(|s| s.config.clone());
+    let operation_id = format!("volume-rebalance-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
+    ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
     volume::run_rebalance(&config).await;
+    if let Err(error) = sync_volume_owned_reservations() {
+        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+        state::log_error(format!(
+            "volume rebalance requires reconciliation: stranded-fund reservation failed: {error}"
+        ));
+        return;
+    }
+    if let Err(error) = state::release_mutation_lock(&operation_id) {
+        state::log_error(format!("volume rebalance could not release account mutation lock: {error}"));
+    }
 }
 
 // ─── Volume Bot Queries ───

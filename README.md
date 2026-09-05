@@ -1,7 +1,15 @@
 # rumi-arb-bot
 
-Internet Computer canister that runs arbitrage and volume strategies across
-Rumi, ICPSwap, and PartyDEX pools, with an embedded HTML admin dashboard.
+Internet Computer canister with a six-asset route-arbitrage observer and a
+separate volume engine, plus an embedded HTML admin dashboard. Active route
+assets are icUSD, ckUSDT, ckUSDC, ICP, ckBTC, and ckETH; active route venues
+are the code-pinned Rumi 3pool and ICPSwap pools. Legacy A-S/T arbitrage,
+Rumi AMM arbitrage, PartyDEX arbitrage, and BOB arbitrage are retired.
+
+The route engine is intentionally quote-only in this release. Its public
+execution entrypoints fail closed, and no configuration field or method can
+authorize a live route. Deployment, funding, approvals, activation, and live
+trades are separate operator decisions.
 
 ## Build
 
@@ -83,3 +91,22 @@ scripts/check-stage1-disposition.sh
 ```
 
 This script verifies that every public `#[update]`/`#[query]` method in the code has an explicit Stage-1 retirement disposition — one of five categories: fail-closed (compatibility stubs), read-only (local/query only), volume-config (configuration operations), volume-op (volume operation participants), or generic-recovery (recovery operations). The check fails if any method is unclassified or if a classification lists a method that no longer exists. This enforces PR #22's Stage-1 acceptance criterion: an unclassified mutator is not acceptable.
+
+## Six-asset route acceptance
+
+Run the complete source-level acceptance suite before proposing a release:
+
+```sh
+scripts/check-route-arb-acceptance.sh
+```
+
+It verifies the pinned registry, bounded graph, native-unit accounting,
+quote-only observations, durable reservations and reconciliation state,
+global mutation lock, consolidated dashboard, Candid compatibility, retired
+executor zero-call properties, absence of automatic drain functions, pinned
+call targets, and a release Wasm build. It also reports total Wasm size and
+the executable code-section payload against the current 12 MiB network limit.
+
+Passing this script proves the local source and artifact gates only. It does
+not prove deployment, live configuration, approvals, funding, execution,
+settlement, realized profitability, or operational readiness for a live trial.

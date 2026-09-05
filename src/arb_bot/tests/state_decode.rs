@@ -5,7 +5,10 @@
 //! serialize a current BotState, strip the new fields to simulate an old
 //! blob, and assert the defaults come back.
 
-use arb_bot::state::{BotState, CycleSnapshot};
+use arb_bot::state::{
+    legacy_pending_bob_survives_decode_for_test, BobPool, BotState, CycleSnapshot,
+    PendingBobExit,
+};
 use candid::Principal;
 
 #[test]
@@ -21,6 +24,17 @@ fn old_state_without_band_fields_decodes_with_defaults() {
     let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
     assert_eq!(decoded.config.icp_inventory_floor_e8s, 200_000_000, "floor default = 2 ICP");
     assert_eq!(decoded.config.icp_inventory_ceiling_e8s, 2_000_000_000, "ceiling default = 20 ICP");
+}
+
+#[test]
+fn raw_legacy_migration_shape_preserves_pending_bob_exit() {
+    let mut state = BotState::default();
+    state.pending_bob_exit = Some(PendingBobExit {
+        entry_pool: BobPool::BobIcp,
+        bob_amount: 0,
+    });
+    let bytes = serde_json::to_vec(&state).expect("serialize legacy-compatible state");
+    assert!(legacy_pending_bob_survives_decode_for_test(&bytes));
 }
 
 /// Same guard for the BOB inventory band: a blob saved before these fields
@@ -242,4 +256,13 @@ fn old_state_without_strategy_t_fields_decodes_with_defaults() {
     assert_eq!(decoded.config.strategy_t_ckusdt_floor, 5_000_000, "ckUSDT floor default = 5 ckUSDT");
     assert_eq!(decoded.config.strategy_t_ckusdt_ceiling, 2_000_000_000, "ckUSDT ceiling default = 2000 ckUSDT");
     assert_eq!(decoded.config.strategy_t_ckusdc_floor, 5_000_000, "ckUSDC floor default = 5 ckUSDC");
+}
+
+#[test]
+fn pre_router_state_decodes_with_inert_route_policy() {
+    let mut value = serde_json::to_value(BotState::default()).expect("serialize");
+    assert!(value.as_object_mut().unwrap().remove("route_arb").is_some());
+    let decoded: BotState = serde_json::from_value(value).expect("decode pre-router state");
+    assert!(!decoded.route_arb.enabled);
+    assert!(decoded.route_arb.dry_run);
 }
