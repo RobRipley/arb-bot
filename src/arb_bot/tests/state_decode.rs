@@ -243,3 +243,12 @@ fn old_state_without_strategy_t_fields_decodes_with_defaults() {
     assert_eq!(decoded.config.strategy_t_ckusdt_ceiling, 2_000_000_000, "ckUSDT ceiling default = 2000 ckUSDT");
     assert_eq!(decoded.config.strategy_t_ckusdc_floor, 5_000_000, "ckUSDC floor default = 5 ckUSDC");
 }
+
+#[test]
+fn pre_router_state_decodes_with_inert_route_policy() {
+    let mut value = serde_json::to_value(BotState::default()).expect("serialize");
+    assert!(value.as_object_mut().unwrap().remove("route_arb").is_some());
+    let decoded: BotState = serde_json::from_value(value).expect("decode pre-router state");
+    assert!(!decoded.route_arb.enabled);
+    assert!(decoded.route_arb.dry_run);
+}

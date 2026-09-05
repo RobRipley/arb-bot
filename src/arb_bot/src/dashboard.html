@@ -811,6 +811,33 @@
         arb_paused: I.Bool,
         volume_paused: I.Bool,
       });
+      const RouteAsset = I.Variant({ Icp: I.Null, IcUsd: I.Null, CkUsdc: I.Null, CkUsdt: I.Null, CkBtc: I.Null, CkEth: I.Null });
+      const AssetControlV1 = I.Record({ asset: RouteAsset, enabled: I.Bool });
+      const PoolControlV1 = I.Record({ pool_id: I.Text, enabled: I.Bool });
+      const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
+      const RouteArbConfigV1 = I.Record({
+        enabled: I.Bool, dry_run: I.Bool, stable_book_enabled: I.Bool, icp_book_enabled: I.Bool,
+        asset_controls: I.Vec(AssetControlV1), pool_controls: I.Vec(PoolControlV1),
+        stable_size_ladder: I.Vec(I.Nat64), icp_size_ladder: I.Vec(I.Nat64),
+        max_route_legs: I.Nat8, max_quote_calls_per_observation: I.Nat16,
+        max_concurrent_quote_calls: I.Nat8, max_stable_principal_usd_6dec: I.Nat64,
+        max_icp_principal_e8s: I.Nat64, min_stable_profit_usd_6dec: I.Nat64,
+        min_stable_profit_bps: I.Nat32, min_icp_profit_e8s: I.Nat64,
+        min_icp_profit_bps: I.Nat32, inventory_bands: I.Vec(AssetInventoryBandV1),
+        quote_max_age_ns: I.Nat64, settlement_timeout_ns: I.Nat64,
+        reconciliation_queries_per_cycle: I.Nat8, max_open_held_positions: I.Nat16,
+        max_open_non_route_reservations: I.Nat16, max_terminal_execution_records: I.Nat32,
+        max_execution_record_bytes: I.Nat32, max_reconciliation_evidence_items: I.Nat8,
+      });
+      const RouteArbStatusV1 = I.Record({
+        config_valid: I.Bool, config_incident: I.Opt(I.Text), execution_compiled_in: I.Bool,
+        live_execution_authorized: I.Bool, route_count: I.Nat32,
+      });
+      const WalletAssetBalanceV1 = I.Record({
+        asset: RouteAsset, symbol: I.Text, ledger: I.Principal, expected_decimals: I.Nat8,
+        observed_decimals: I.Opt(I.Nat8), ledger_fee_native: I.Opt(I.Nat),
+        balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -856,6 +883,10 @@
         price_after: I.Nat64,
       });
       return I.Service({
+        get_route_arb_config_v1: I.Func([], [RouteArbConfigV1], ['query']),
+        set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
+        get_route_wallet_balances_v1: I.Func([], [I.Vec(WalletAssetBalanceV1)], []),
         get_config: I.Func([], [BotConfig], ['query']),
         set_config: I.Func([BotConfigInput], [], []),
         get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),

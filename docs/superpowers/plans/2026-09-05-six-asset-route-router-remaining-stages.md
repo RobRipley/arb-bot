@@ -79,9 +79,9 @@
 
 **Interfaces:** `RouteArbConfigV1`, `RouteArbStatusV1`, `WalletAssetBalanceV1`, `get_route_arb_config_v1`, `set_route_arb_config_v1`, `get_route_arb_status_v1`, `get_route_wallet_balances_v1`.
 
-- [ ] Write failing tests for inert defaults, immutable ceilings, invalid encoded config disabling mutation, old-state decode, pin substitution impossibility, checked clock regression, and all six wallet rows including zero ckBTC/ckETH.
-- [ ] Implement serde-defaulted control state and admin setter validation. Wallet reporting performs only balance/metadata queries against code-pinned ledgers and marks failures explicitly.
-- [ ] Run scoped tests plus `scripts/check-candid.sh`; commit `feat(arb): add inert route policy and wallet reporting`.
+- [x] Write failing tests for inert defaults, immutable ceilings, invalid encoded config disabling mutation, old-state decode, pin substitution impossibility, checked clock regression, and all six wallet rows including zero ckBTC/ckETH.
+- [x] Implement serde-defaulted control state and admin setter validation. Wallet reporting performs only balance/metadata queries against code-pinned ledgers and marks failures explicitly.
+- [x] Run scoped tests plus `scripts/check-candid.sh`; commit `feat(arb): add inert route policy and wallet reporting`.
 
 ### Task 5: Cursor-bounded quote observations
 

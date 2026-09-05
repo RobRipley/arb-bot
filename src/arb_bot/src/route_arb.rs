@@ -5,6 +5,9 @@
 //! arbitrary principal into a route target through configuration alone.
 
 use candid::{CandidType, Deserialize, Principal};
+use candid::Nat;
+use icrc_ledger_types::icrc1::account::Account;
+use num_traits::ToPrimitive;
 use serde::Serialize;
 
 #[derive(
@@ -46,6 +49,10 @@ impl Asset {
 
     pub fn decimals(self) -> u8 {
         asset_pins()[self.index()].decimals
+    }
+
+    pub fn symbol(self) -> &'static str {
+        asset_pins()[self.index()].symbol
     }
 }
 
@@ -579,4 +586,263 @@ pub fn rank_book(candidates: &mut [CandidateEvaluation]) {
             .then_with(|| left.size_ladder_index.cmp(&right.size_ladder_index))
             .then_with(|| left.principal_native.cmp(&right.principal_native))
     });
+}
+
+pub const HARD_MAX_ROUTE_LEGS: u8 = 4;
+pub const HARD_MAX_SIZE_LADDER_ENTRIES: u8 = 16;
+pub const HARD_MAX_CONCURRENT_QUOTES: u8 = 16;
+pub const HARD_MAX_QUOTE_AGE_NS: u64 = 60_000_000_000;
+pub const HARD_MAX_SETTLEMENT_TIMEOUT_NS: u64 = 86_400_000_000_000;
+pub const HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE: u8 = 32;
+pub const HARD_MAX_PAGE_SIZE: u16 = 100;
+pub const HARD_MAX_OPEN_HELD_POSITIONS: u16 = 256;
+pub const HARD_MAX_OPEN_NON_ROUTE_RESERVATIONS: u16 = 256;
+pub const HARD_MAX_EXECUTION_RECORD_BYTES: u32 = 65_536;
+pub const HARD_MAX_RECONCILIATION_EVIDENCE_ITEMS: u8 = 64;
+pub const HARD_MAX_TERMINAL_EXECUTION_RECORDS: u32 = 10_000;
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AssetControlV1 {
+    pub asset: Asset,
+    pub enabled: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct PoolControlV1 {
+    pub pool_id: String,
+    pub enabled: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AssetInventoryBandV1 {
+    pub asset: Asset,
+    pub floor_native: u64,
+    pub ceiling_native: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RouteArbConfigV1 {
+    pub enabled: bool,
+    pub dry_run: bool,
+    pub stable_book_enabled: bool,
+    pub icp_book_enabled: bool,
+    pub asset_controls: Vec<AssetControlV1>,
+    pub pool_controls: Vec<PoolControlV1>,
+    pub stable_size_ladder: Vec<u64>,
+    pub icp_size_ladder: Vec<u64>,
+    pub max_route_legs: u8,
+    pub max_quote_calls_per_observation: u16,
+    pub max_concurrent_quote_calls: u8,
+    pub max_stable_principal_usd_6dec: u64,
+    pub max_icp_principal_e8s: u64,
+    pub min_stable_profit_usd_6dec: u64,
+    pub min_stable_profit_bps: u32,
+    pub min_icp_profit_e8s: u64,
+    pub min_icp_profit_bps: u32,
+    pub inventory_bands: Vec<AssetInventoryBandV1>,
+    pub quote_max_age_ns: u64,
+    pub settlement_timeout_ns: u64,
+    pub reconciliation_queries_per_cycle: u8,
+    pub max_open_held_positions: u16,
+    pub max_open_non_route_reservations: u16,
+    pub max_terminal_execution_records: u32,
+    pub max_execution_record_bytes: u32,
+    pub max_reconciliation_evidence_items: u8,
+}
+
+impl Default for RouteArbConfigV1 {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dry_run: true,
+            stable_book_enabled: true,
+            icp_book_enabled: true,
+            asset_controls: Asset::ALL.into_iter().map(|asset| AssetControlV1 { asset, enabled: true }).collect(),
+            pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
+            stable_size_ladder: vec![1_000_000, 5_000_000, 10_000_000, 40_000_000],
+            icp_size_ladder: vec![100_000_000, 500_000_000, 1_000_000_000],
+            max_route_legs: 4,
+            max_quote_calls_per_observation: 4_096,
+            max_concurrent_quote_calls: 8,
+            max_stable_principal_usd_6dec: 40_000_000,
+            max_icp_principal_e8s: 1_000_000_000,
+            min_stable_profit_usd_6dec: 50_000,
+            min_stable_profit_bps: 50,
+            min_icp_profit_e8s: 10_000,
+            min_icp_profit_bps: 50,
+            inventory_bands: Asset::ALL.into_iter().map(|asset| AssetInventoryBandV1 {
+                asset,
+                floor_native: 0,
+                ceiling_native: u64::MAX,
+            }).collect(),
+            quote_max_age_ns: 30_000_000_000,
+            settlement_timeout_ns: 3_600_000_000_000,
+            reconciliation_queries_per_cycle: 16,
+            max_open_held_positions: HARD_MAX_OPEN_HELD_POSITIONS,
+            max_open_non_route_reservations: HARD_MAX_OPEN_NON_ROUTE_RESERVATIONS,
+            max_terminal_execution_records: HARD_MAX_TERMINAL_EXECUTION_RECORDS,
+            max_execution_record_bytes: HARD_MAX_EXECUTION_RECORD_BYTES,
+            max_reconciliation_evidence_items: HARD_MAX_RECONCILIATION_EVIDENCE_ITEMS,
+        }
+    }
+}
+
+fn exact_asset_set<T>(items: &[T], asset_of: impl Fn(&T) -> Asset) -> bool {
+    let actual: std::collections::BTreeSet<_> = items.iter().map(asset_of).collect();
+    actual == Asset::ALL.into_iter().collect() && items.len() == Asset::ALL.len()
+}
+
+pub fn validate_route_config(config: &RouteArbConfigV1) -> Result<(), String> {
+    if !(1..=HARD_MAX_ROUTE_LEGS).contains(&config.max_route_legs) {
+        return Err("max_route_legs must be between 1 and 4".to_string());
+    }
+    for (name, ladder, maximum) in [
+        ("stable", &config.stable_size_ladder, config.max_stable_principal_usd_6dec),
+        ("ICP", &config.icp_size_ladder, config.max_icp_principal_e8s),
+    ] {
+        if ladder.is_empty() || ladder.len() > usize::from(HARD_MAX_SIZE_LADDER_ENTRIES) {
+            return Err(format!("{name} size ladder must contain 1..=16 entries"));
+        }
+        if ladder.iter().any(|value| *value == 0 || *value > maximum)
+            || ladder.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err(format!("{name} size ladder must be strictly increasing, nonzero, and within its principal cap"));
+        }
+    }
+    if config.max_quote_calls_per_observation == 0 {
+        return Err("max_quote_calls_per_observation must be nonzero".to_string());
+    }
+    if !(1..=HARD_MAX_CONCURRENT_QUOTES).contains(&config.max_concurrent_quote_calls) {
+        return Err("max_concurrent_quote_calls outside 1..=16".to_string());
+    }
+    if !(1..=HARD_MAX_QUOTE_AGE_NS).contains(&config.quote_max_age_ns) {
+        return Err("quote_max_age_ns outside immutable bounds".to_string());
+    }
+    if !(1..=HARD_MAX_SETTLEMENT_TIMEOUT_NS).contains(&config.settlement_timeout_ns) {
+        return Err("settlement_timeout_ns outside immutable bounds".to_string());
+    }
+    if !(1..=HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE).contains(&config.reconciliation_queries_per_cycle) {
+        return Err("reconciliation_queries_per_cycle outside immutable bounds".to_string());
+    }
+    if config.max_open_held_positions == 0 || config.max_open_held_positions > HARD_MAX_OPEN_HELD_POSITIONS
+        || config.max_open_non_route_reservations == 0 || config.max_open_non_route_reservations > HARD_MAX_OPEN_NON_ROUTE_RESERVATIONS
+        || config.max_terminal_execution_records == 0 || config.max_terminal_execution_records > HARD_MAX_TERMINAL_EXECUTION_RECORDS
+        || config.max_execution_record_bytes == 0 || config.max_execution_record_bytes > HARD_MAX_EXECUTION_RECORD_BYTES
+        || config.max_reconciliation_evidence_items == 0 || config.max_reconciliation_evidence_items > HARD_MAX_RECONCILIATION_EVIDENCE_ITEMS
+    {
+        return Err("configured durable-storage bound exceeds immutable ceiling".to_string());
+    }
+    if !exact_asset_set(&config.asset_controls, |item| item.asset)
+        || !exact_asset_set(&config.inventory_bands, |item| item.asset)
+    {
+        return Err("asset controls and inventory bands must contain each code-pinned asset exactly once".to_string());
+    }
+    if config.inventory_bands.iter().any(|band| band.floor_native > band.ceiling_native) {
+        return Err("inventory floor cannot exceed ceiling".to_string());
+    }
+    let expected_pools: std::collections::BTreeSet<_> = pool_pins().into_iter().map(|pool| pool.pool_id.to_string()).collect();
+    let actual_pools: std::collections::BTreeSet<_> = config.pool_controls.iter().map(|pool| pool.pool_id.clone()).collect();
+    if config.pool_controls.len() != expected_pools.len() || actual_pools != expected_pools {
+        return Err("pool controls must contain each code-pinned pool exactly once".to_string());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LedgerReadResult {
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+    pub fee_native: Option<u128>,
+    pub balance_native: Option<u128>,
+    pub error: Option<String>,
+}
+
+impl LedgerReadResult {
+    pub fn ok(symbol: &str, decimals: u8, fee_native: u128, balance_native: u128) -> Self {
+        Self { symbol: Some(symbol.to_string()), decimals: Some(decimals), fee_native: Some(fee_native), balance_native: Some(balance_native), error: None }
+    }
+
+    pub fn failed(error: &str) -> Self {
+        Self { symbol: None, decimals: None, fee_native: None, balance_native: None, error: Some(error.to_string()) }
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct WalletAssetBalanceV1 {
+    pub asset: Asset,
+    pub symbol: String,
+    pub ledger: Principal,
+    pub expected_decimals: u8,
+    pub observed_decimals: Option<u8>,
+    pub ledger_fee_native: Option<u128>,
+    pub balance_native: Option<u128>,
+    pub metadata_valid: bool,
+    pub error: Option<String>,
+}
+
+pub fn wallet_rows_from_results(reads: [LedgerReadResult; 6]) -> Vec<WalletAssetBalanceV1> {
+    asset_pins().into_iter().zip(reads).map(|(pin, read)| {
+        let metadata_valid = read.error.is_none()
+            && read.symbol.as_deref() == Some(pin.symbol)
+            && read.decimals == Some(pin.decimals);
+        let error = read.error.or_else(|| (!metadata_valid).then(|| "ledger metadata does not match code-pinned identity".to_string()));
+        WalletAssetBalanceV1 {
+            asset: pin.asset,
+            symbol: pin.symbol.to_string(),
+            ledger: pin.ledger,
+            expected_decimals: pin.decimals,
+            observed_decimals: read.decimals,
+            ledger_fee_native: read.fee_native,
+            balance_native: read.balance_native,
+            metadata_valid,
+            error,
+        }
+    }).collect()
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RouteArbStatusV1 {
+    pub config_valid: bool,
+    pub config_incident: Option<String>,
+    pub execution_compiled_in: bool,
+    pub live_execution_authorized: bool,
+    pub route_count: u32,
+}
+
+pub fn route_status(config: &RouteArbConfigV1) -> RouteArbStatusV1 {
+    let validation = validate_route_config(config);
+    RouteArbStatusV1 {
+        config_valid: validation.is_ok(),
+        config_incident: validation.err(),
+        execution_compiled_in: false,
+        live_execution_authorized: false,
+        route_count: enumerate_routes(config.max_route_legs).map(|routes| routes.len() as u32).unwrap_or(0),
+    }
+}
+
+async fn read_ledger(pin: &AssetPin, owner: Principal) -> LedgerReadResult {
+    let account = Account { owner, subaccount: None };
+    let symbol: Result<(String,), _> = ic_cdk::call(pin.ledger, "icrc1_symbol", ()).await;
+    let decimals: Result<(u8,), _> = ic_cdk::call(pin.ledger, "icrc1_decimals", ()).await;
+    let fee: Result<(Nat,), _> = ic_cdk::call(pin.ledger, "icrc1_fee", ()).await;
+    let balance: Result<(Nat,), _> = ic_cdk::call(pin.ledger, "icrc1_balance_of", (account,)).await;
+    match (symbol, decimals, fee, balance) {
+        (Ok((symbol,)), Ok((decimals,)), Ok((fee,)), Ok((balance,))) => {
+            match (fee.0.to_u128(), balance.0.to_u128()) {
+                (Some(fee_native), Some(balance_native)) => LedgerReadResult::ok(&symbol, decimals, fee_native, balance_native),
+                _ => LedgerReadResult::failed("ledger fee or balance exceeds supported u128 range"),
+            }
+        }
+        (symbol, decimals, fee, balance) => LedgerReadResult::failed(&format!(
+            "ledger read failed: symbol={:?}; decimals={:?}; fee={:?}; balance={:?}",
+            symbol.err(), decimals.err(), fee.err(), balance.err()
+        )),
+    }
+}
+
+pub async fn read_wallet_balances(owner: Principal) -> Vec<WalletAssetBalanceV1> {
+    let pins = asset_pins();
+    let reads = futures::future::join_all(pins.iter().map(|pin| read_ledger(pin, owner))).await;
+    let reads: [LedgerReadResult; 6] = reads.try_into().expect("asset registry is compile-time fixed at six entries");
+    wallet_rows_from_results(reads)
 }

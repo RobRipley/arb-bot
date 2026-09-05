@@ -105,6 +105,9 @@ is_admin
 add_admin
 remove_admin
 get_config
+get_route_arb_config_v1
+get_route_arb_status_v1
+get_route_wallet_balances_v1
 get_trade_history
 get_trade_legs
 get_activity_log
@@ -123,6 +126,7 @@ clear_cycle_lock
 
 # ── Preserved volume configuration, no direct balance mutation ──
 VOLUME_CONFIG='
+set_route_arb_config_v1
 set_volume_config
 set_volume_global
 pause_volume

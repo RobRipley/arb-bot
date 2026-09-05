@@ -159,6 +159,30 @@ fn get_config() -> BotConfig {
 }
 
 #[query]
+fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
+    state::read_state(|s| s.route_arb.clone())
+}
+
+#[update]
+fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
+    require_admin();
+    route_arb::validate_route_config(&config)?;
+    state::mutate_state(|s| s.route_arb = config);
+    Ok(())
+}
+
+#[query]
+fn get_route_arb_status_v1() -> route_arb::RouteArbStatusV1 {
+    state::read_state(|s| route_arb::route_status(&s.route_arb))
+}
+
+#[update]
+async fn get_route_wallet_balances_v1() -> Vec<route_arb::WalletAssetBalanceV1> {
+    require_admin();
+    route_arb::read_wallet_balances(ic_cdk::id()).await
+}
+
+#[query]
 fn get_trade_history(offset: u64, limit: u64) -> Vec<TradeRecord> {
     state::get_trades_page(offset, limit)
 }

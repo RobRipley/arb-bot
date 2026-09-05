@@ -962,6 +962,10 @@ pub struct TradeLeg {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BotState {
     pub config: BotConfig,
+    /// Versioned six-asset route policy. Serde default keeps upgrades from
+    /// every pre-router schema inert and dry-run-only.
+    #[serde(default)]
+    pub route_arb: crate::route_arb::RouteArbConfigV1,
     #[serde(default)]
     pub token_ordering_resolved: bool,
     #[serde(default)]
@@ -1065,6 +1069,7 @@ impl Default for BotState {
                 strategy_t_ckusdc_floor: default_strategy_t_ckusdc_floor(),
                 strategy_t_ckusdc_ceiling: default_strategy_t_ckusdc_ceiling(),
             },
+            route_arb: crate::route_arb::RouteArbConfigV1::default(),
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
@@ -1487,6 +1492,7 @@ pub fn load_from_stable_memory() {
         // Rebuild the new slim BotState from the legacy meta fields.
         let new_state = BotState {
             config: legacy.config,
+            route_arb: crate::route_arb::RouteArbConfigV1::default(),
             token_ordering_resolved: legacy.token_ordering_resolved,
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,

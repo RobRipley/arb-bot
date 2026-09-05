@@ -182,6 +182,61 @@ type PublicHealth = record {
   volume_paused: bool;
 };
 
+type Asset = variant { Icp; IcUsd; CkUsdc; CkUsdt; CkBtc; CkEth };
+type AssetControlV1 = record { asset: Asset; enabled: bool };
+type PoolControlV1 = record { pool_id: text; enabled: bool };
+type AssetInventoryBandV1 = record {
+  asset: Asset;
+  floor_native: nat64;
+  ceiling_native: nat64;
+};
+type RouteArbConfigV1 = record {
+  enabled: bool;
+  dry_run: bool;
+  stable_book_enabled: bool;
+  icp_book_enabled: bool;
+  asset_controls: vec AssetControlV1;
+  pool_controls: vec PoolControlV1;
+  stable_size_ladder: vec nat64;
+  icp_size_ladder: vec nat64;
+  max_route_legs: nat8;
+  max_quote_calls_per_observation: nat16;
+  max_concurrent_quote_calls: nat8;
+  max_stable_principal_usd_6dec: nat64;
+  max_icp_principal_e8s: nat64;
+  min_stable_profit_usd_6dec: nat64;
+  min_stable_profit_bps: nat32;
+  min_icp_profit_e8s: nat64;
+  min_icp_profit_bps: nat32;
+  inventory_bands: vec AssetInventoryBandV1;
+  quote_max_age_ns: nat64;
+  settlement_timeout_ns: nat64;
+  reconciliation_queries_per_cycle: nat8;
+  max_open_held_positions: nat16;
+  max_open_non_route_reservations: nat16;
+  max_terminal_execution_records: nat32;
+  max_execution_record_bytes: nat32;
+  max_reconciliation_evidence_items: nat8;
+};
+type RouteArbStatusV1 = record {
+  config_valid: bool;
+  config_incident: opt text;
+  execution_compiled_in: bool;
+  live_execution_authorized: bool;
+  route_count: nat32;
+};
+type WalletAssetBalanceV1 = record {
+  asset: Asset;
+  symbol: text;
+  ledger: principal;
+  expected_decimals: nat8;
+  observed_decimals: opt nat8;
+  ledger_fee_native: opt nat;
+  balance_native: opt nat;
+  metadata_valid: bool;
+  error: opt text;
+};
+
 type Direction = variant {
   RumiToIcpswap;
   IcpswapToRumi;
@@ -432,6 +487,10 @@ type VolumeTradeLeg = record {
 };
 
 service : (InitArgs) -> {
+  get_route_arb_config_v1: () -> (RouteArbConfigV1) query;
+  set_route_arb_config_v1: (RouteArbConfigV1) -> (variant { Ok; Err: text });
+  get_route_arb_status_v1: () -> (RouteArbStatusV1) query;
+  get_route_wallet_balances_v1: () -> (vec WalletAssetBalanceV1);
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;
