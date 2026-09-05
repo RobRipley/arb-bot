@@ -53,18 +53,20 @@ fn post_upgrade() {
     setup_volume_timer();
 }
 
+/// Retired under Stage-1 of the six-asset route-arbitrage policy: the
+/// automatic arb-cycle timer is the "legacy automatic arbitrage timer
+/// callback" the spec requires to fail closed. Never registering it is
+/// the most directly verifiable way to guarantee it makes zero calls —
+/// there is no callback left to invoke. `ARB_TIMER_ID` is left in place
+/// (harmless — `clear_timer` on a never-set id is a no-op) rather than
+/// removed, to keep this diff minimal; a later stage may remove it
+/// entirely once the new engine's own scheduling exists.
 fn setup_timer() {
     ARB_TIMER_ID.with(|id| {
         if let Some(prev) = id.borrow_mut().take() {
             ic_cdk_timers::clear_timer(prev);
         }
     });
-    let interval = state::read_state(|s| s.config.arb_interval_secs).max(1);
-    let new_id = ic_cdk_timers::set_timer_interval(
-        std::time::Duration::from_secs(interval),
-        || ic_cdk::spawn(arb::run_arb_cycle()),
-    );
-    ARB_TIMER_ID.with(|id| *id.borrow_mut() = Some(new_id));
 }
 
 fn setup_volume_timer() {
