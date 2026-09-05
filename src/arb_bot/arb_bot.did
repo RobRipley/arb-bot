@@ -577,6 +577,9 @@ service : (InitArgs) -> {
   get_held_positions_v1: (nat64, nat64) -> (variant { Ok: vec HeldPositionV1; Err: text }) query;
   get_current_route_execution_v1: () -> (opt ExecutionRecordV1) query;
   get_terminal_route_executions_v1: (nat64, nat64) -> (variant { Ok: vec ExecutionRecordV1; Err: text }) query;
+  prepare_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
+  advance_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
+  reconcile_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;

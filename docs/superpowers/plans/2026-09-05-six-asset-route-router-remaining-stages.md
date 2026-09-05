@@ -145,10 +145,10 @@
 
 **Interfaces:** `prepare_route_execution_v1`, `advance_route_execution_v1`, `reconcile_route_execution_v1`; persisted phases `Planned` through `HeldInventory`. Preparation remains inert unless the separate live authorization field is true; defaults and migration keep it false.
 
-- [ ] Write failing deterministic state-machine tests covering intent persisted before outbound call, immutable request fingerprint, no replay from `LegSubmitted`, exact full-fill/partial/refund conservation, coincident-credit rejection, delayed/out-of-order/lost responses, timeout to `ReconciliationRequired`, 32-query budget, trap/restart/upgrade at each phase, duplicate callback idempotency, profit-preserving backward floors, deterioration to held inventory, full-refund abort, realized ledger-delta P&L, re-quote after lock wait and every leg, and canonical collision exclusion.
-- [ ] Implement venue-specific request builders and source-bound reconciliation predicates. The executor never advances on a bare DEX success or balance delta and never automatically sells a held lot.
-- [ ] Keep live authorization false in every constructor/migration and expose no method that can flip it in this release; execution APIs therefore exercise validation/state preparation only and return a clear authorization error before a fund-moving call.
-- [ ] Run scoped tests, Candid guard, and structural no-drain/retirement checks; commit `feat(arb): add inert durable route executor`.
+- [x] Write failing deterministic state-machine tests covering intent persisted before outbound call, immutable request fingerprint, no replay from `LegSubmitted`, exact full-fill/partial/refund conservation, coincident-credit rejection, delayed/out-of-order/lost responses, timeout to `ReconciliationRequired`, 32-query budget, trap/restart/upgrade at each phase, duplicate callback idempotency, profit-preserving backward floors, deterioration to held inventory, full-refund abort, realized ledger-delta P&L, re-quote after lock wait and every leg, and canonical collision exclusion.
+- [x] Implement venue-specific request builders and source-bound reconciliation predicates. The executor never advances on a bare DEX success or balance delta and never automatically sells a held lot.
+- [x] Keep live authorization false in every constructor/migration and expose no method that can flip it in this release; execution APIs therefore exercise validation/state preparation only and return a clear authorization error before a fund-moving call.
+- [x] Run scoped tests, Candid guard, and structural no-drain/retirement checks; commit `feat(arb): add inert durable route executor`.
 
 ### Task 9: Consolidated route-arbitrage dashboard
 

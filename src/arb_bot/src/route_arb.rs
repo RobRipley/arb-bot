@@ -1340,6 +1340,195 @@ pub struct ExecutionSlotV1 {
     pub execution: Option<ExecutionRecordV1>,
 }
 
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct SettlementProofV1 {
+    pub request_fingerprint: String,
+    pub planned_input_native: u64,
+    pub effective_input_native: u64,
+    pub gross_output_native: u64,
+    pub refund_native: u64,
+    pub source_debit_bound: bool,
+    pub venue_execution_bound: bool,
+    pub output_credit_bound: bool,
+    pub refund_bound: bool,
+    pub fully_reconciled: bool,
+}
+
+pub fn prepare_execution(
+    candidate: &RouteCandidateReportV1,
+    execution_id: &str,
+    now_ns: u64,
+) -> Result<ExecutionRecordV1, String> {
+    if execution_id.is_empty() || execution_id.len() > 256 {
+        return Err("execution_id must contain 1..=256 bytes".to_string());
+    }
+    if !candidate.eligible || !candidate.full_fill {
+        return Err("candidate must be eligible and fully filled at quote time".to_string());
+    }
+    let endpoint_valid = match candidate.candidate_class {
+        CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => {
+            candidate.start_asset.is_stable() && candidate.end_asset.is_stable()
+        }
+        CandidateClass::IcpReturning => {
+            candidate.start_asset == Asset::Icp && candidate.end_asset == Asset::Icp
+        }
+    };
+    if !endpoint_valid {
+        return Err("candidate endpoints do not match its profit domain".to_string());
+    }
+    Ok(ExecutionRecordV1 {
+        execution_id: execution_id.to_string(), route_id: candidate.route_id.clone(),
+        canonical_cycle_id: candidate.canonical_cycle_id.clone(),
+        candidate_class: candidate.candidate_class, phase: ExecutionPhaseV1::Planned,
+        current_leg_index: 0, planned_input_native: 0, required_min_output_native: 0,
+        quote_timestamp_ns: candidate.quote_timestamp_ns, submission_started_at_ns: None,
+        adapter_request_fingerprint: None, evidence: Vec::new(),
+        reconciliation_query_count: 0, incident: None, updated_at_ns: now_ns,
+    })
+}
+
+pub fn prepare_leg(
+    record: &mut ExecutionRecordV1,
+    planned_input_native: u64,
+    required_min_output_native: u64,
+    now_ns: u64,
+) -> Result<(), String> {
+    if !matches!(record.phase, ExecutionPhaseV1::Planned | ExecutionPhaseV1::RemainingRouteRequoted) {
+        return Err("a leg can only be prepared from Planned or RemainingRouteRequoted".to_string());
+    }
+    if planned_input_native == 0 || required_min_output_native == 0 {
+        return Err("planned input and minimum output must be nonzero".to_string());
+    }
+    record.planned_input_native = planned_input_native;
+    record.required_min_output_native = required_min_output_native;
+    record.adapter_request_fingerprint = None;
+    record.submission_started_at_ns = None;
+    record.phase = ExecutionPhaseV1::LegPrepared;
+    record.updated_at_ns = now_ns;
+    Ok(())
+}
+
+pub fn persist_leg_submission(
+    record: &mut ExecutionRecordV1,
+    request_fingerprint: &str,
+    now_ns: u64,
+) -> Result<(), String> {
+    if record.phase != ExecutionPhaseV1::LegPrepared {
+        return Err("submission intent may be persisted exactly once from LegPrepared".to_string());
+    }
+    if request_fingerprint.is_empty() || request_fingerprint.len() > 256 {
+        return Err("request fingerprint must contain 1..=256 bytes".to_string());
+    }
+    record.adapter_request_fingerprint = Some(request_fingerprint.to_string());
+    record.submission_started_at_ns = Some(now_ns);
+    record.phase = ExecutionPhaseV1::LegSubmitted;
+    record.updated_at_ns = now_ns;
+    Ok(())
+}
+
+pub fn mark_awaiting_settlement(record: &mut ExecutionRecordV1, now_ns: u64) -> Result<(), String> {
+    if record.phase != ExecutionPhaseV1::LegSubmitted {
+        return Err("only a persisted LegSubmitted intent can await settlement".to_string());
+    }
+    record.phase = ExecutionPhaseV1::AwaitingSettlement;
+    record.updated_at_ns = now_ns;
+    Ok(())
+}
+
+pub fn mark_reconciliation_required(
+    record: &mut ExecutionRecordV1,
+    now_ns: u64,
+    settlement_timeout_ns: u64,
+) -> Result<(), String> {
+    if !matches!(record.phase, ExecutionPhaseV1::LegSubmitted | ExecutionPhaseV1::AwaitingSettlement) {
+        return Err("only a submitted unsettled leg can require reconciliation".to_string());
+    }
+    let submitted = record.submission_started_at_ns.ok_or("submission timestamp unavailable")?;
+    let elapsed = now_ns.checked_sub(submitted).ok_or("settlement clock regressed")?;
+    if elapsed < settlement_timeout_ns {
+        return Err("settlement timeout has not elapsed".to_string());
+    }
+    record.phase = ExecutionPhaseV1::ReconciliationRequired;
+    record.incident = Some("source-bound settlement evidence remains incomplete".to_string());
+    record.updated_at_ns = now_ns;
+    Ok(())
+}
+
+pub fn reconcile_settlement(
+    record: &mut ExecutionRecordV1,
+    proof: &SettlementProofV1,
+    now_ns: u64,
+) -> Result<(), String> {
+    if !matches!(record.phase, ExecutionPhaseV1::AwaitingSettlement | ExecutionPhaseV1::ReconciliationRequired) {
+        return Err("settlement proof is only accepted for a submitted unsettled leg".to_string());
+    }
+    let expected = record.adapter_request_fingerprint.as_deref().ok_or("request fingerprint unavailable")?;
+    if proof.request_fingerprint != expected || proof.planned_input_native != record.planned_input_native {
+        return Err("settlement proof is not bound to the persisted request fingerprint".to_string());
+    }
+    if !proof.fully_reconciled
+        || !proof.source_debit_bound
+        || !proof.venue_execution_bound
+        || !proof.output_credit_bound
+        || !proof.refund_bound
+    {
+        return Err("amount-only or incomplete evidence cannot advance settlement".to_string());
+    }
+    let conserved = proof.effective_input_native.checked_add(proof.refund_native)
+        .ok_or("settlement conservation overflow")?;
+    if conserved != proof.planned_input_native {
+        return Err("effective input plus refund does not conserve planned input".to_string());
+    }
+    record.updated_at_ns = now_ns;
+    record.incident = None;
+    if proof.effective_input_native != proof.planned_input_native {
+        record.phase = if proof.effective_input_native == 0 && proof.gross_output_native == 0 {
+            ExecutionPhaseV1::Aborted
+        } else {
+            ExecutionPhaseV1::HeldInventory
+        };
+    } else if proof.gross_output_native < record.required_min_output_native {
+        record.phase = ExecutionPhaseV1::HeldInventory;
+    } else {
+        record.phase = ExecutionPhaseV1::LegSettled;
+    }
+    Ok(())
+}
+
+pub fn record_remaining_route_requote(
+    record: &mut ExecutionRecordV1,
+    still_profitable: bool,
+    now_ns: u64,
+) -> Result<(), String> {
+    if record.phase != ExecutionPhaseV1::LegSettled {
+        return Err("remaining route may only be evaluated after exact leg settlement".to_string());
+    }
+    record.phase = if still_profitable {
+        ExecutionPhaseV1::RemainingRouteRequoted
+    } else {
+        ExecutionPhaseV1::HeldInventory
+    };
+    record.updated_at_ns = now_ns;
+    Ok(())
+}
+
+pub fn consume_reconciliation_queries(
+    record: &mut ExecutionRecordV1,
+    requested: u8,
+    configured_limit: u8,
+) -> Result<(), String> {
+    if configured_limit == 0 || configured_limit > HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE {
+        return Err("invalid reconciliation query limit".to_string());
+    }
+    let next = record.reconciliation_query_count.checked_add(requested)
+        .ok_or("reconciliation query counter overflow")?;
+    if next > configured_limit || next > HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE {
+        return Err("reconciliation query budget exhausted".to_string());
+    }
+    record.reconciliation_query_count = next;
+    Ok(())
+}
+
 fn asset_for_ledger_text(address: &str) -> Option<Asset> {
     asset_pins().into_iter().find(|pin| pin.ledger.to_text() == address).map(|pin| pin.asset)
 }

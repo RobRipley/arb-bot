@@ -97,6 +97,9 @@ set_bob_execution_enabled
 set_bob_params
 set_bob_pools
 backfill_trade_legs
+prepare_route_execution_v1
+advance_route_execution_v1
+reconcile_route_execution_v1
 '
 
 # ── Preserved local/query compatibility, no fund-moving or retired-venue call ──

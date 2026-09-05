@@ -383,6 +383,24 @@ fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route
     state::get_terminal_route_executions_page(offset, limit)
 }
 
+#[update]
+fn prepare_route_execution_v1(_route_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; quote observations and durable reporting are available, but no fund-moving call can be prepared".to_string())
+}
+
+#[update]
+fn advance_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; advance cannot submit or replay a fund-moving call".to_string())
+}
+
+#[update]
+fn reconcile_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    Err("live route execution is not authorized in this release; no route submission exists to reconcile".to_string())
+}
+
 #[query]
 fn get_trade_history(offset: u64, limit: u64) -> Vec<TradeRecord> {
     state::get_trades_page(offset, limit)
