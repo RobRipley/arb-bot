@@ -5,7 +5,10 @@
 //! serialize a current BotState, strip the new fields to simulate an old
 //! blob, and assert the defaults come back.
 
-use arb_bot::state::{BotState, CycleSnapshot};
+use arb_bot::state::{
+    legacy_pending_bob_survives_decode_for_test, BobPool, BotState, CycleSnapshot,
+    PendingBobExit,
+};
 use candid::Principal;
 
 #[test]
@@ -21,6 +24,17 @@ fn old_state_without_band_fields_decodes_with_defaults() {
     let decoded: BotState = serde_json::from_value(v).expect("decode old-shape state");
     assert_eq!(decoded.config.icp_inventory_floor_e8s, 200_000_000, "floor default = 2 ICP");
     assert_eq!(decoded.config.icp_inventory_ceiling_e8s, 2_000_000_000, "ceiling default = 20 ICP");
+}
+
+#[test]
+fn raw_legacy_migration_shape_preserves_pending_bob_exit() {
+    let mut state = BotState::default();
+    state.pending_bob_exit = Some(PendingBobExit {
+        entry_pool: BobPool::BobIcp,
+        bob_amount: 0,
+    });
+    let bytes = serde_json::to_vec(&state).expect("serialize legacy-compatible state");
+    assert!(legacy_pending_bob_survives_decode_for_test(&bytes));
 }
 
 /// Same guard for the BOB inventory band: a blob saved before these fields

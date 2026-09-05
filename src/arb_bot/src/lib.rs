@@ -76,8 +76,8 @@ fn setup_volume_timer() {
             ic_cdk_timers::clear_timer(prev);
         }
     });
-    if state::read_state(|s| validate_volume_registry(&s.config).is_err()) {
-        state::log_error("volume timer not armed: persisted call targets do not match immutable registry".to_string());
+    if let Err(reason) = state::read_state(validate_volume_registry) {
+        state::log_error(format!("volume timer not armed: {reason}"));
         return;
     }
     let interval = state::read_state(|s| s.volume.interval_secs).max(1);
@@ -103,7 +103,7 @@ async fn run_volume_cycle_if_unfrozen() -> Vec<String> {
     }) {
         return vec![reason];
     }
-    let config_valid = state::read_state(|s| validate_volume_registry(&s.config));
+    let config_valid = state::read_state(validate_volume_registry);
     if let Err(reason) = config_valid {
         return vec![reason];
     }
@@ -113,9 +113,17 @@ async fn run_volume_cycle_if_unfrozen() -> Vec<String> {
     ) {
         return vec![format!("volume cycle deferred: {reason}")];
     }
-    let outcomes = volume::run_volume_cycle().await;
-    sync_volume_owned_reservations();
-    let _ = state::release_mutation_lock(&operation_id);
+    let mut outcomes = volume::run_volume_cycle().await;
+    if let Err(error) = sync_volume_owned_reservations() {
+        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+        outcomes.push(format!(
+            "volume cycle requires reconciliation: stranded-fund reservation failed: {error}"
+        ));
+        return outcomes;
+    }
+    if let Err(error) = state::release_mutation_lock(&operation_id) {
+        outcomes.push(format!("volume cycle could not release account mutation lock: {error}"));
+    }
     outcomes
 }
 
@@ -136,7 +144,8 @@ fn pinned(text: &str) -> Principal {
     Principal::from_text(text).expect("compile-time principal must be valid")
 }
 
-fn validate_volume_registry(config: &BotConfig) -> Result<(), String> {
+fn validate_volume_registry(state: &state::BotState) -> Result<(), String> {
+    let config = &state.config;
     let expected = [
         ("ICP ledger", config.icp_ledger, "ryjl3-tyaaa-aaaaa-aaaba-cai"),
         ("icUSD ledger", config.icusd_ledger, "t6bor-paaaa-aaaap-qrd5q-cai"),
@@ -164,6 +173,25 @@ fn validate_volume_registry(config: &BotConfig) -> Result<(), String> {
     if config.rumi_3pool != pinned("fohh4-yyaaa-aaaap-qtkpa-cai") {
         return Err("volume operation disabled: Rumi 3pool does not match immutable pin".to_string());
     }
+    let ordering = [
+        ("ICPSwap ICP/ckUSDC", config.icpswap_icp_is_token0, true, state.token_ordering_resolved),
+        ("ICPSwap ICP/icUSD", config.icpswap_icusd_icp_is_token0, true, state.icusd_token_ordering_resolved),
+        ("ICPSwap ICP/ckUSDT", config.icpswap_ckusdt_icp_is_token0, false, state.ckusdt_token_ordering_resolved),
+        ("ICPSwap ICP/3USD", config.icpswap_3usd_icp_is_token0, false, state.icpswap_3usd_token_ordering_resolved),
+        ("ICPSwap BOB/ICP", config.icpswap_bob_icp_icp_is_token0, false, state.bob_icp_ordering_resolved),
+    ];
+    for (label, actual, expected, resolved) in ordering {
+        if !resolved || actual != expected {
+            return Err(format!(
+                "volume operation disabled: {label} token ordering is unresolved or differs from the immutable registry"
+            ));
+        }
+    }
+    if config.icpswap_icusd_bob_pool != Principal::anonymous()
+        && (!state.icusd_bob_ordering_resolved || config.icpswap_icusd_bob_icusd_is_token0)
+    {
+        return Err("volume operation disabled: ICPSwap icUSD/BOB token ordering is unresolved or differs from the immutable registry".to_string());
+    }
     Ok(())
 }
 
@@ -173,9 +201,9 @@ fn is_pinned_volume_ledger(ledger: Principal) -> bool {
         || ledger == pinned("7pail-xaaaa-aaaas-aabmq-cai")
 }
 
-fn sync_volume_owned_reservations() {
+fn sync_volume_owned_reservations() -> Result<(), String> {
     let stranded = state::read_state(|s| s.volume_stranded_icp);
-    let _ = state::put_ownership_reservation(route_arb::OwnershipReservationV1 {
+    state::put_ownership_reservation(route_arb::OwnershipReservationV1 {
         reservation_id: "volume-stranded-icp".to_string(),
         asset: route_arb::Asset::Icp,
         amount_native: stranded,
@@ -185,7 +213,7 @@ fn sync_volume_owned_reservations() {
         operation_id: "volume-stranded-recovery".to_string(),
         reconciled_at_ns: ic_cdk::api::time(),
         active: stranded > 0,
-    });
+    })
 }
 
 /// Check if a principal is an authorized admin (used by dashboard to show/hide controls)
@@ -302,13 +330,36 @@ async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<rou
     if active.next_cursor != cursor {
         return Err(format!("cursor mismatch: expected {}, got {}", active.next_cursor, cursor));
     }
+    if !active.quote_call_budget_sufficient {
+        return Err(format!(
+            "route observation requires {} quote calls, above configured maximum {}; no quote calls were made",
+            active.required_quote_calls, config.max_quote_calls_per_observation
+        ));
+    }
     let universe = route_arb::build_work_universe(&config)?;
     if active.total_work_items != universe.items.len() as u64 {
         return Err("route universe changed; start a new observation".to_string());
     }
     let start = usize::try_from(cursor).map_err(|_| "cursor exceeds platform range")?;
     let end = start.saturating_add(usize::from(limit)).min(universe.items.len());
-    let quoted = route_arb::quote_observation_items(&config, &universe.items[start..end]).await;
+    let requested_quote_calls: u64 = universe.items[start..end]
+        .iter()
+        .map(|item| item.route.edges.len() as u64)
+        .sum();
+    let remaining_quote_calls = u64::from(config.max_quote_calls_per_observation)
+        .checked_sub(active.quote_calls_made)
+        .ok_or_else(|| "route observation has already exceeded its configured quote-call budget".to_string())?;
+    if requested_quote_calls > remaining_quote_calls {
+        return Err(format!(
+            "requested batch could require {requested_quote_calls} quote calls with only {remaining_quote_calls} remaining; no quote calls were made"
+        ));
+    }
+    let reservations = current_route_reservation_totals();
+    let quoted = route_arb::quote_observation_items(
+        &config,
+        &universe.items[start..end],
+        &reservations,
+    ).await;
     let candidates: Vec<_> = quoted.iter().map(|(candidate, _, _)| candidate.clone()).collect();
     let quote_calls = quoted.iter().map(|(_, calls, _)| *calls).sum();
     let full_fill_rejections = quoted.iter().filter(|(_, _, rejected)| *rejected).count() as u64;
@@ -331,6 +382,18 @@ async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<rou
         state::append_route_observation(observation.clone())?;
     }
     Ok(route_arb::ObservationBatchResultV1 { observation, candidates })
+}
+
+fn current_route_reservation_totals() -> route_arb::ReservationTotals {
+    let mut totals = route_arb::ReservationTotals::default();
+    for asset in route_arb::Asset::ALL {
+        let current = state::reservation_totals_for_asset(asset);
+        totals.held.set(asset, Some(u128::from(current.held)));
+        totals.active.set(asset, Some(u128::from(current.active_route)));
+        totals.non_route.set(asset, Some(u128::from(current.non_route)));
+        totals.set_whole_asset_frozen(asset, current.whole_asset_frozen);
+    }
+    totals
 }
 
 #[query]
@@ -820,7 +883,7 @@ const VOL_ICUSD_FEE: u64 = 100_000;
 #[update]
 async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     require_admin();
-    state::read_state(|s| validate_volume_registry(&s.config))
+    state::read_state(validate_volume_registry)
         .unwrap_or_else(|reason| ic_cdk::trap(&reason));
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         ic_cdk::trap(&reason);
@@ -1430,7 +1493,7 @@ fn resume_volume() {
 #[update]
 async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
-    state::read_state(|s| validate_volume_registry(&s.config))?;
+    state::read_state(validate_volume_registry)?;
     if !is_pinned_volume_ledger(token_ledger) {
         return Err("volume funding rejected: ledger is not code-pinned".to_string());
     }
@@ -1466,7 +1529,7 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
 #[update]
 async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<(), String> {
     require_admin();
-    state::read_state(|s| validate_volume_registry(&s.config))?;
+    state::read_state(validate_volume_registry)?;
     if !is_pinned_volume_ledger(token_ledger) {
         return Err("volume withdrawal rejected: ledger is not code-pinned".to_string());
     }
@@ -1651,7 +1714,7 @@ fn get_public_health() -> state::PublicHealth {
 #[update]
 async fn trigger_volume_rebalance() {
     require_admin();
-    state::read_state(|s| validate_volume_registry(&s.config))
+    state::read_state(validate_volume_registry)
         .unwrap_or_else(|reason| ic_cdk::trap(&reason));
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         ic_cdk::trap(&reason);
@@ -1665,8 +1728,16 @@ async fn trigger_volume_rebalance() {
         &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
     ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
     volume::run_rebalance(&config).await;
-    sync_volume_owned_reservations();
-    let _ = state::release_mutation_lock(&operation_id);
+    if let Err(error) = sync_volume_owned_reservations() {
+        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+        state::log_error(format!(
+            "volume rebalance requires reconciliation: stranded-fund reservation failed: {error}"
+        ));
+        return;
+    }
+    if let Err(error) = state::release_mutation_lock(&operation_id) {
+        state::log_error(format!("volume rebalance could not release account mutation lock: {error}"));
+    }
 }
 
 // ─── Volume Bot Queries ───

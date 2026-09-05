@@ -62,9 +62,25 @@ fn reservations_are_bounded_and_whole_asset_freezes_spending() {
         reconciled_at_ns: 0,
         active: true,
     };
-    arb_bot::state::put_ownership_reservation(reservation).unwrap();
+    arb_bot::state::put_ownership_reservation(reservation.clone()).unwrap();
     let totals = arb_bot::state::reservation_totals_for_asset(Asset::Icp);
     assert!(totals.whole_asset_frozen);
     assert!(arb_bot::state::spendable_native(Asset::Icp, 1_000_000).is_err());
     assert!(arb_bot::state::get_ownership_reservations_page(0, 101).is_err());
+
+    // Reconciliation updates the indexed current-state row instead of
+    // appending another durable event. Repeating this many times must remain
+    // one reservation, and releasing it must remove the current row.
+    for timestamp in 1..=300 {
+        let mut replacement = reservation.clone();
+        replacement.reconciled_at_ns = timestamp;
+        arb_bot::state::put_ownership_reservation(replacement).unwrap();
+    }
+    let page = arb_bot::state::get_ownership_reservations_page(0, 100).unwrap();
+    assert_eq!(page.iter().filter(|row| row.reservation_id == "freeze-storage-test").count(), 1);
+
+    let mut released = reservation;
+    released.active = false;
+    arb_bot::state::put_ownership_reservation(released).unwrap();
+    assert!(!arb_bot::state::reservation_totals_for_asset(Asset::Icp).whole_asset_frozen);
 }

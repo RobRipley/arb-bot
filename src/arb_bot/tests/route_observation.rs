@@ -87,6 +87,30 @@ fn observation_accumulator_only_publishes_winners_after_complete_scan() {
 }
 
 #[test]
+fn insufficient_observation_budget_cannot_accumulate_quote_calls() {
+    let mut state = ObservationAccumulatorV1::new("under-budget".into(), 10, 0, 2, 4, false);
+    let error = accumulate_observation_batch(
+        &mut state,
+        0,
+        vec![report("must-not-quote", CandidateClass::StablePar, 10, true)],
+        2,
+        0,
+    )
+    .unwrap_err();
+    assert!(error.contains("quote-call budget"));
+    assert_eq!(state.quote_calls_made, 0);
+    assert_eq!(state.next_cursor, 0);
+
+    let source = include_str!("../src/lib.rs");
+    let start = source.find("async fn quote_route_observation_batch_v1").unwrap();
+    let body = &source[start..source[start..].find("\n#[").map(|n| start + n).unwrap_or(source.len())];
+    let gate = body.find("!active.quote_call_budget_sufficient").unwrap();
+    let live_quotes = body.find("quote_observation_items").unwrap();
+    assert!(gate < live_quotes, "budget must fail closed before any live quote call");
+    assert!(body[..live_quotes].contains("requested_quote_calls > remaining_quote_calls"));
+}
+
+#[test]
 fn completed_observations_are_durably_page_bounded() {
     let mut first = ObservationAccumulatorV1::new("obs-storage-1".into(), 10, 0, 1, 1, true);
     first.scan_complete = true;

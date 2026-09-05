@@ -1590,7 +1590,6 @@
       isAdmin = adminFlag;
       if (isAdmin && currentConfig) {
         loadMyBalances(currentConfig);
-        swapUpdateBalances();
         volSwapUpdateBalances();
       }
       renderNav();
@@ -3213,51 +3212,20 @@
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
-            <div class="card-header">Swap</div>
-            <div class="swap-grid">
-              <div>
-                <label>From</label>
-                <div class="swap-token-row">
-                  <img class="token-logo" id="swap-from-logo" src="" alt="">
-                  <select id="swap-from-token" onchange="swapTokenChanged()">
-                    ${MONEY_TOKENS.map(t => `<option value="${t.key}"${t.key === 'icusd' ? ' selected' : ''}>${t.sym}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="swap-bal">Balance: <span id="swap-from-bal">—</span><button class="btn btn-sm btn-ghost" onclick="swapSetMax()">Max</button></div>
-                <input type="number" id="swap-from-amount" placeholder="0.00" min="0" oninput="swapQuote()">
-              </div>
-              <div class="swap-arrow">→</div>
-              <div>
-                <label>To</label>
-                <div class="swap-token-row">
-                  <img class="token-logo" id="swap-to-logo" src="" alt="">
-                  <select id="swap-to-token" onchange="swapTokenChanged()">
-                    ${MONEY_TOKENS.map(t => `<option value="${t.key}"${t.key === 'icp' ? ' selected' : ''}>${t.sym}</option>`).join('')}
-                  </select>
-                </div>
-                <div class="swap-bal">Balance: <span id="swap-to-bal">—</span></div>
-                <div class="swap-est">Receive ≈ <span id="swap-to-amount-display">—</span><input type="hidden" id="swap-to-amount"></div>
-                <div class="swap-route" id="swap-quote-info"></div>
-                <div class="swap-route" id="swap-route-info"></div>
-              </div>
+            <div class="card-header">Move funds — arb main</div>
+            <div class="btn-group" style="margin-bottom:var(--sp-3)">
+              ${MONEY_TOKENS.map(t => `<button class="btn btn-sm" onclick="doDeposit('${t.key}')">Deposit ${t.sym}</button>`).join('')}
             </div>
-            <button class="btn btn-primary" id="swap-execute-btn" style="margin-top:var(--sp-4)" onclick="confirmSwap()">Swap</button>
-            <div class="footnote">Routes match what the server supports today — ICP↔3USD via Rumi AMM, ICP↔icUSD/ckUSDC/ckUSDT via Rumi AMM + 3pool, stable↔stable via 3pool.</div>
+            <label>Withdraw</label>
+            <div class="fund-vol-grid" style="margin-bottom:var(--sp-3)">
+              <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}">${t.sym}</option>`).join('')}</select></div>
+              <div><input type="number" id="w-amount" placeholder="Amount"></div>
+            </div>
+            <input type="text" id="w-to" placeholder="Destination principal" style="margin-bottom:var(--sp-3)">
+            <button class="btn btn-danger btn-block" onclick="confirmWithdraw()">Withdraw</button>
+            <div class="footnote">Manual Rumi/3pool swaps are retired. Quote-only route arbitrage is available from the Markets view; wallet deposits and withdrawals remain separate administrative operations.</div>
           </div>
           <div style="display:flex;flex-direction:column;gap:var(--sp-4)">
-            <div class="card">
-              <div class="card-header">Move funds — arb main</div>
-              <div class="btn-group" style="margin-bottom:var(--sp-3)">
-                ${MONEY_TOKENS.map(t => `<button class="btn btn-sm" onclick="doDeposit('${t.key}')">Deposit ${t.sym}</button>`).join('')}
-              </div>
-              <label>Withdraw</label>
-              <div class="fund-vol-grid" style="margin-bottom:var(--sp-3)">
-                <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}">${t.sym}</option>`).join('')}</select></div>
-                <div><input type="number" id="w-amount" placeholder="Amount"></div>
-              </div>
-              <input type="text" id="w-to" placeholder="Destination principal" style="margin-bottom:var(--sp-3)">
-              <button class="btn btn-danger btn-block" onclick="confirmWithdraw()">Withdraw</button>
-            </div>
             <div class="card">
               <div class="card-header">Deposit address — arb main</div>
               <div class="deposit-addr-row"><span class="addr" onclick="copyToClipboard('${canisterId}', 'Principal copied')">${canisterId}</span><button class="btn btn-sm btn-ghost" onclick="copyToClipboard('${canisterId}', 'Principal copied')">Copy</button></div>
@@ -3300,7 +3268,6 @@
           </div>
         </div>
       `;
-      swapTokenChanged();
       volSwapTokenChanged();
     }
 
@@ -3961,40 +3928,31 @@
       const el = document.getElementById('view-ops');
       const c = currentConfig;
       if (!isAdmin) {
-        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see levers, setup, and the incident toolkit.</div></div>`;
+        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see the volume controls and admin tools.</div></div>`;
         return;
       }
       if (!c) { el.innerHTML = `<div class="card">Loading config…</div>`; return; }
 
-      const health = latestHealthReport;
-      const slipBps = health ? bi(health.slippage_bps) : bi(c.slippage_bps);
       const stats = latestVolumeStats;
+      const routeStatus = latestRouteStatus;
+      const routeConfigState = routeStatus
+        ? `${bi(routeStatus.route_count)} routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}`
+        : 'Loading route policy…';
 
       el.innerHTML = `
         <div class="card" style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Route arbitrage policy</div>
+          <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
+          <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning</span></div>
+          <div class="stat-row"><span>Execution</span><span class="badge badge-dryrun">quote-only · disabled</span></div>
+          <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
+          <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
+        </div>
+        <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Levers <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched weekly</span></div>
           <div class="lever-grid">
-            ${leverHtml('arb', 'Arb engine', 'Master run/pause', !c.paused, 'leverArb()')}
-            ${leverHtml('rumi', 'Rumi AMM', 'Paused ⇒ ' + RUMI_CROSS_IDS.join('/') + ' skip', !c.rumi_amm_paused, 'leverRumiAmm()')}
-            ${leverHtml('s', 'Strategy S', c.bob_execution_enabled ? 'Live (not dry-run)' : 'Dry-run only', c.bob_execution_enabled, 'leverStrategyS()')}
             ${leverHtml('vol', 'Volume engine', 'Master run/pause', !(stats && stats.volume_paused), 'leverVolume()')}
             ${stats ? VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', stats[p.statsKey].config.enabled, `leverVolumePool('${p.id}')`)).join('') : ''}
-          </div>
-          <div class="divider"></div>
-          <label>Slippage (bps)</label>
-          <div class="btn-group" style="margin-bottom:var(--sp-2)">
-            ${[25, 50, 100].map(bps => `<button class="btn btn-sm ${slipBps === bps ? 'btn-primary' : ''}" onclick="setSlipPreset(${bps})">${(bps / 100).toFixed(2)}%</button>`).join('')}
-          </div>
-          <div class="fund-vol-grid">
-            <div><input type="number" id="slip-input" value="${slipBps}" placeholder="bps"></div>
-            <div><button class="btn btn-primary" onclick="saveSlippage(this)">Save slippage</button></div>
-          </div>
-          <div class="divider"></div>
-          <label>Intervals &amp; caps</label>
-          <div class="grid g-cols-3">
-            <div><label>Arb cycle interval (s)</label><input type="number" id="cfg-arb-interval"></div>
-            <div><label>Min spread (bps)</label><input type="number" id="cfg-min-spread"></div>
-            <div><label>Max trade size (USD)</label><input type="number" id="cfg-max-trade" step="0.01"></div>
           </div>
           <div class="divider"></div>
           <label>Volume pool config</label>
@@ -4021,49 +3979,12 @@
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
-            <div class="card-header">Setup <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched once per venue</span></div>
-            <table class="setup-table">${setupTableHtml(c)}</table>
+            <div class="card-header">Admins</div>
+            <div id="admins-list">${renderAdminsHtml()}</div>
             <div class="divider"></div>
-            <div class="grid g-cols-2">
-              <div><label>PartyDEX ckUSDC fee (pips)</label><input type="number" id="cfg-partydex-ckusdc-fee"></div>
-              <div><label>PartyDEX ckUSDT fee (pips)</label><input type="number" id="cfg-partydex-ckusdt-fee"></div>
-              <div><label>Min profit (USD)</label><input type="number" id="cfg-min-profit" step="0.01"></div>
-              <div><label>ICP inventory floor</label><input type="number" id="cfg-icp-floor" step="0.01"></div>
-              <div><label>ICP inventory ceiling</label><input type="number" id="cfg-icp-ceiling" step="0.01"></div>
-              <div><label>BOB inventory floor</label><input type="number" id="cfg-bob-floor" step="0.01"></div>
-              <div><label>BOB inventory ceiling</label><input type="number" id="cfg-bob-ceiling" step="0.01"></div>
-              <div><label>BOB max trade (USD)</label><input type="number" id="cfg-bob-max-trade" step="0.01"></div>
-              <div><label>BOB min spread (bps)</label><input type="number" id="cfg-bob-min-spread"></div>
-            </div>
-            <label style="margin-top:var(--sp-3)">BOB/ICP pool principal</label><input type="text" id="cfg-bob-icp-pool" placeholder="aaaaa-aa">
-            <label style="margin-top:var(--sp-3)">icUSD/BOB pool principal</label><input type="text" id="cfg-icusd-bob-pool" placeholder="aaaaa-aa">
-            <button class="btn btn-primary btn-block" style="margin-top:var(--sp-4)" onclick="saveConfig(this)">Save config</button>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:var(--sp-4)">
-            <div class="card">
-              <div class="card-header">Admins</div>
-              <div id="admins-list">${renderAdminsHtml()}</div>
-              <div class="divider"></div>
-              <div class="fund-vol-grid">
-                <div><input type="text" id="admin-principal" placeholder="New admin principal"></div>
-                <div><button class="btn" onclick="doAddAdmin(this)">Add admin</button></div>
-              </div>
-            </div>
-            <div class="card incident-card${(currentWedgeKey && wedgeDismissedKey !== currentWedgeKey) ? ' hot' : ''}">
-              <div class="card-header">Incident toolkit</div>
-              <div class="incident-actions">
-                <div class="incident-action">
-                  <div><div class="incident-action-label">Clear cycle lock</div><div class="incident-action-cmd">clear_cycle_lock()</div></div>
-                  <button class="btn btn-sm btn-ghost" onclick="doClearCycleLock(this)">Run</button>
-                </div>
-                <div class="incident-action">
-                  <div><div class="incident-action-label">Recover PartyDEX balance</div><input type="text" id="incident-partydex-pool" placeholder="Pool principal" style="margin-top:4px;max-width:220px"></div>
-                  <button class="btn btn-sm btn-ghost" onclick="doRecoverPartydexBalance()">Run</button>
-                </div>
-              </div>
-              <div class="divider"></div>
-              <div class="footnote">Copy dfx for the rest (backfill_trade_legs — one-off manual correction, not a routine button):</div>
-              <div class="m-trade-row" style="border:none;font-size:10.5px;color:var(--text-tertiary);word-break:break-all" id="incident-backfill-cmd"></div>
+            <div class="fund-vol-grid">
+              <div><input type="text" id="admin-principal" placeholder="New admin principal"></div>
+              <div><button class="btn" onclick="doAddAdmin(this)">Add admin</button></div>
             </div>
           </div>
         </div>

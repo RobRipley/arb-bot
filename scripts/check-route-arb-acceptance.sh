@@ -27,6 +27,14 @@ if rg -n '^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+drain
 fi
 echo "PASS: automatic arbitrage drain function definitions are absent."
 
+echo "== dashboard JavaScript syntax =="
+dashboard_js="$(mktemp)"
+trap 'rm -f "$dashboard_js"' EXIT
+sed -n '/<script type="module">/,/<\/script>/p' src/arb_bot/src/dashboard.html \
+  | sed '1d;$d' > "$dashboard_js"
+node --check --input-type=module < "$dashboard_js"
+echo "PASS: dashboard module JavaScript parses."
+
 echo "== release Wasm build =="
 cargo clean -p arb_bot
 RUSTFLAGS=-Awarnings cargo build --target wasm32-unknown-unknown --release -p arb_bot

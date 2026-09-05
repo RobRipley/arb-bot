@@ -170,7 +170,7 @@
 - Modify: this plan (check completed boxes)
 
 - [x] Add one acceptance script that runs registry/graph/accounting/storage/execution/UI tests, Candid equality, Stage-1 disposition/zero-call/no-drain guards, call-target guard, release Wasm build, encoded interface checks, and a Wasm code-section/total-size report without changing the project limit.
-- [x] Run `RUSTFLAGS=-Awarnings cargo test -p arb_bot`, `scripts/check-route-arb-acceptance.sh`, and `git diff --check`; exact result: 87 tests passed, 1 ignored-by-design Candid printer, 0 failed; all structural/interface guards passed; release Wasm 3,124,507 bytes total with a 2,242,279-byte code-section payload and 10,340,633 bytes of headroom under the 12,582,912-byte network executable-code limit.
-- [ ] Self-review the complete branch against every Section 12 acceptance bullet. Fix only correctness defects within this approved scope; cap independent review at one whole-branch pass plus one focused fix verification.
-- [ ] Confirm no deployment/configuration/approval/transfer/swap occurred and that all new execution remains inert.
+- [x] Run `RUSTFLAGS=-Awarnings cargo test -p arb_bot`, `scripts/check-route-arb-acceptance.sh`, and `git diff --check`; final exact-tree result: 89 tests passed, 1 ignored-by-design Candid printer, 0 failed; all structural/interface and dashboard JavaScript guards passed; release Wasm 3,220,474 bytes total with a 2,330,237-byte code-section payload and 10,252,675 bytes of headroom under the 12,582,912-byte network executable-code limit.
+- [x] Self-review the complete branch against every Section 12 acceptance bullet. One bounded Terra/Luna whole-branch pass found correctness defects; one fix wave closed them. The single focused verification identified one remaining deleted-panel JavaScript initialization call, which was removed and covered by a regression test. No further review round was opened.
+- [x] Confirm no deployment/configuration/approval/transfer/swap occurred and that all new execution remains inert.
 - [ ] Commit docs/checks, push branch, create PR, wait for required checks, and merge when green. Do not deploy.

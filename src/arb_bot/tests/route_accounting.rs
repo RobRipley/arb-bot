@@ -37,10 +37,15 @@ fn available_balance_subtracts_every_reservation_and_fails_closed() {
         held: amounts(&[(Asset::CkUsdc, Some(10))]),
         active: amounts(&[(Asset::CkUsdc, Some(20))]),
         non_route: amounts(&[(Asset::CkUsdc, Some(30))]),
+        ..Default::default()
     };
     assert_eq!(available_native(Asset::CkUsdc, Some(100), &reservations), Ok(40));
     assert!(available_native(Asset::CkUsdc, None, &reservations).is_err());
     assert!(available_native(Asset::CkUsdc, Some(59), &reservations).is_err());
+
+    let mut frozen = ReservationTotals::default();
+    frozen.set_whole_asset_frozen(Asset::CkUsdc, true);
+    assert!(available_native(Asset::CkUsdc, Some(100), &frozen).is_err());
 }
 
 fn stable_quote(final_amount: u128) -> RouteQuote {
@@ -183,6 +188,44 @@ fn icp_profit_stays_native_and_changed_stable_terminal_uses_par() {
     let evaluated = evaluate_candidate(&changed, &balances, &reservations, &bands, 1, 1, 0, 0);
     assert!(evaluated.eligible && evaluated.par_assumption);
     assert_eq!(evaluated.net_profit_native, 1_000_000);
+}
+
+#[test]
+fn changed_stable_terminal_floor_is_enforced() {
+    let (balances, reservations, mut bands) = permissive_context();
+    let quote = RouteQuote {
+        route_id: "cross-stable-floor".into(),
+        canonical_cycle_id: None,
+        start_asset: Asset::CkUsdc,
+        end_asset: Asset::IcUsd,
+        asset_path: vec![Asset::CkUsdc, Asset::IcUsd],
+        principal_native: 100_000_000,
+        legs: vec![QuoteLeg {
+            edge_id: "c".into(),
+            from: Asset::CkUsdc,
+            to: Asset::IcUsd,
+            wallet_before: 100_000_000,
+            entry_ledger_fee: 10_000,
+            venue_input: 99_990_000,
+            gross_output: 10_100_100_000,
+            output_ledger_fee: 100_000,
+            wallet_after: 10_100_000_000,
+            dex_fee_native: 1,
+            full_fill: true,
+        }],
+        allowance_sufficient: Some(true),
+        quoted_at_ns: 1,
+        size_ladder_index: 0,
+    };
+
+    bands.set(Asset::IcUsd, 1_010_100_000_001, u128::MAX);
+    let below_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0);
+    assert!(!below_floor.eligible);
+    assert_eq!(below_floor.rejection_reason.as_deref(), Some("IcUsd inventory floor breached"));
+
+    bands.set(Asset::IcUsd, 1_010_100_000_000, u128::MAX);
+    let at_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0);
+    assert!(at_floor.eligible, "terminal balance reaches configured floor: {:?}", at_floor.rejection_reason);
 }
 
 fn ranked(id: &str, profit: i128, bps: i64, legs: usize, size_index: u8) -> CandidateEvaluation {

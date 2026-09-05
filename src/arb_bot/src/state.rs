@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
     storable::{Bound, Storable},
-    DefaultMemoryImpl, StableCell, StableLog,
+    DefaultMemoryImpl, StableBTreeMap, StableCell, StableLog,
 };
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
@@ -935,11 +935,16 @@ pub fn legacy_route_freeze_reason(state: &BotState, asset: LegacyFreezeAsset) ->
         LegacyFreezeAsset::Icp if state.pending_exit.is_some() => Some(
             "asset frozen: unresolved legacy pending_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
         ),
-        LegacyFreezeAsset::Bob if state.pending_bob_exit.is_some() => Some(
-            "asset frozen: unresolved legacy pending_bob_exit incident (Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
+        LegacyFreezeAsset::Bob
+            if state.pending_bob_exit.is_some() || legacy_bob_freeze_marker() => Some(
+            "asset frozen: unresolved legacy pending_bob_exit incident (durable whole-asset freeze; Stage-1 retirement freeze, see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md Section 11)".to_string(),
         ),
         _ => None,
     }
+}
+
+fn legacy_bob_freeze_marker() -> bool {
+    LEGACY_BOB_ASSET_FROZEN.with(|cell| *cell.borrow().get())
 }
 
 #[derive(CandidType, Clone, Debug, Serialize, Deserialize)]
@@ -1116,6 +1121,16 @@ struct LegacyBotState {
     snapshots: Vec<CycleSnapshot>,
     #[serde(default)]
     pending_exit: Option<PendingExit>,
+    #[serde(default)]
+    pending_bob_exit: Option<PendingBobExit>,
+}
+
+#[doc(hidden)]
+pub fn legacy_pending_bob_survives_decode_for_test(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<LegacyBotState>(bytes)
+        .ok()
+        .and_then(|state| state.pending_bob_exit)
+        .is_some()
 }
 
 // ─── Storable impls (JSON encoding) ───
@@ -1162,6 +1177,9 @@ json_storable!(crate::route_arb::ExecutionRecordV1);
 // MemoryId 18,19:   HELD_POSITIONS log
 // MemoryId 20:      CURRENT_ROUTE_EXECUTION cell
 // MemoryId 21,22:   TERMINAL_ROUTE_EXECUTIONS log
+// MemoryId 23:      OWNERSHIP_RESERVATION_INDEX (bounded current-state map)
+// MemoryId 24:      OWNERSHIP_RESERVATION_MIGRATED marker
+// MemoryId 25:      LEGACY_BOB_ASSET_FROZEN marker
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -1258,6 +1276,36 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(21))),
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(22))),
         ).expect("init TERMINAL_ROUTE_EXECUTIONS"),
+    );
+
+    // Current-state index for ownership reservations. Unlike the historical
+    // event log previously used here, replacing a reservation updates the
+    // existing key in place and releasing one removes it. This keeps durable
+    // growth bounded by the 256-open-reservation ceiling.
+    static OWNERSHIP_RESERVATION_INDEX: RefCell<StableBTreeMap<String, crate::route_arb::OwnershipReservationV1, Memory>> = RefCell::new(
+        StableBTreeMap::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(23))),
+        ),
+    );
+
+    // Migration marker for the old append-only reservation event log. The old
+    // log remains read-only for compatibility, while all future writes use
+    // OWNERSHIP_RESERVATION_INDEX.
+    static OWNERSHIP_RESERVATION_MIGRATED: RefCell<StableCell<bool, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(24))),
+            false,
+        ).expect("init OWNERSHIP_RESERVATION_MIGRATED"),
+    );
+
+    // BOB is a retired legacy asset and is not represented by the active
+    // six-asset enum. Keep its whole-asset incident freeze in its own durable
+    // cell so decoding/clearing the legacy pending field cannot release it.
+    static LEGACY_BOB_ASSET_FROZEN: RefCell<StableCell<bool, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(25))),
+            false,
+        ).expect("init LEGACY_BOB_ASSET_FROZEN"),
     );
 
     // Heap cache mirroring META_CELL for fast reads.
@@ -1576,16 +1624,42 @@ pub fn release_mutation_lock_for_test() {
     });
 }
 
-fn latest_reservations() -> std::collections::BTreeMap<String, crate::route_arb::OwnershipReservationV1> {
-    OWNERSHIP_RESERVATIONS.with(|log| {
+fn migrate_legacy_reservation_log_once() {
+    let migrated = OWNERSHIP_RESERVATION_MIGRATED.with(|cell| *cell.borrow().get());
+    if migrated {
+        return;
+    }
+
+    // Preserve the latest row for each ID from the old append-only log, but
+    // never overwrite a row already present in the indexed store. The latter
+    // makes a retry after an interrupted migration safe: a reservation
+    // written by the new code cannot be rolled back to an older log value.
+    let legacy_rows: std::collections::BTreeMap<_, _> = OWNERSHIP_RESERVATIONS.with(|log| {
         let log = log.borrow();
-        let mut latest = std::collections::BTreeMap::new();
-        for index in 0..log.len() {
-            if let Some(row) = log.get(index) {
-                latest.insert(row.reservation_id.clone(), row);
+        (0..log.len())
+            .filter_map(|index| log.get(index))
+            .map(|row| (row.reservation_id.clone(), row))
+            .collect()
+    });
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        let mut index = index.borrow_mut();
+        for (reservation_id, row) in legacy_rows {
+            if index.get(&reservation_id).is_none() {
+                index.insert(reservation_id, row);
             }
         }
-        latest
+    });
+    let _ = OWNERSHIP_RESERVATION_MIGRATED.with(|cell| cell.borrow_mut().set(true));
+}
+
+fn latest_reservations() -> std::collections::BTreeMap<String, crate::route_arb::OwnershipReservationV1> {
+    migrate_legacy_reservation_log_once();
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        index
+            .borrow()
+            .iter()
+            .map(|entry| entry)
+            .collect()
     })
 }
 
@@ -1601,10 +1675,14 @@ pub fn put_ownership_reservation(
     {
         return Err("open ownership-reservation cap reached".to_string());
     }
-    OWNERSHIP_RESERVATIONS.with(|log| {
-        log.borrow_mut().append(&reservation)
-            .map(|_| ())
-            .map_err(|error| format!("failed to persist ownership reservation: {error:?}"))
+    OWNERSHIP_RESERVATION_INDEX.with(|index| {
+        let mut index = index.borrow_mut();
+        if reservation.active {
+            index.insert(reservation.reservation_id.clone(), reservation);
+        } else {
+            index.remove(&reservation.reservation_id);
+        }
+        Ok(())
     })
 }
 
@@ -1651,6 +1729,15 @@ fn ensure_legacy_route_reservations() {
     let pending_icp = STATE.with(|state| {
         state.borrow().as_ref().is_some_and(|state| state.pending_exit.is_some())
     });
+    let pending_bob = STATE.with(|state| {
+        state.borrow().as_ref().is_some_and(|state| state.pending_bob_exit.is_some())
+    });
+    if pending_bob {
+        // BOB is intentionally outside the active six-asset enum, so its
+        // migration is represented by a durable whole-asset marker rather
+        // than by a route reservation row.
+        let _ = LEGACY_BOB_ASSET_FROZEN.with(|cell| cell.borrow_mut().set(true));
+    }
     if pending_icp
         && !latest_reservations().contains_key("legacy-pending-exit-icp-freeze")
     {
@@ -1874,6 +1961,7 @@ pub fn load_from_stable_memory() {
 
     if let Some(legacy) = legacy {
         // Rebuild the new slim BotState from the legacy meta fields.
+        let legacy_bob_frozen = legacy.pending_bob_exit.is_some();
         let new_state = BotState {
             config: legacy.config,
             route_arb: crate::route_arb::RouteArbConfigV1::default(),
@@ -1886,7 +1974,7 @@ pub fn load_from_stable_memory() {
             bob_icp_ordering_resolved: false,
             icusd_bob_ordering_resolved: false,
             pending_exit: legacy.pending_exit,
-            pending_bob_exit: None,
+            pending_bob_exit: legacy.pending_bob_exit,
             volume: VolumeConfig::default(),
             volume_stranded_icp: 0,
             volume_stranded_bob: 0,
@@ -1919,6 +2007,9 @@ pub fn load_from_stable_memory() {
         }
 
         init_state(new_state);
+        if legacy_bob_frozen {
+            let _ = LEGACY_BOB_ASSET_FROZEN.with(|cell| cell.borrow_mut().set(true));
+        }
         ensure_legacy_route_reservations();
 
         // Record the migration in the activity log.

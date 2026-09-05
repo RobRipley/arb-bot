@@ -324,6 +324,7 @@ pub struct ReservationTotals {
     pub held: AssetAmounts,
     pub active: AssetAmounts,
     pub non_route: AssetAmounts,
+    pub whole_asset_frozen: [bool; 6],
 }
 
 impl Default for ReservationTotals {
@@ -332,7 +333,18 @@ impl Default for ReservationTotals {
             held: AssetAmounts::zero(),
             active: AssetAmounts::zero(),
             non_route: AssetAmounts::zero(),
+            whole_asset_frozen: [false; 6],
         }
+    }
+}
+
+impl ReservationTotals {
+    pub fn set_whole_asset_frozen(&mut self, asset: Asset, frozen: bool) {
+        self.whole_asset_frozen[asset.index()] = frozen;
+    }
+
+    pub fn whole_asset_frozen(&self, asset: Asset) -> bool {
+        self.whole_asset_frozen[asset.index()]
     }
 }
 
@@ -366,6 +378,9 @@ pub fn available_native(
     ledger_balance: Option<u128>,
     reservations: &ReservationTotals,
 ) -> Result<u128, String> {
+    if reservations.whole_asset_frozen(asset) {
+        return Err(format!("{:?} is frozen by an unresolved ownership reservation", asset));
+    }
     let mut available = ledger_balance.ok_or_else(|| format!("unknown {:?} ledger balance", asset))?;
     for (name, values) in [
         ("held", &reservations.held),
@@ -538,6 +553,12 @@ pub fn evaluate_candidate(
         };
         if exposure > bands.ceiling(leg.to) {
             return rejected(quote, fallback_domain, format!("{:?} inventory ceiling exceeded", leg.to));
+        }
+        if leg_index + 1 == quote.legs.len()
+            && quote.end_asset != quote.start_asset
+            && exposure < bands.floor(leg.to)
+        {
+            return rejected(quote, fallback_domain, format!("{:?} inventory floor breached", leg.to));
         }
         expected_before = leg.wallet_after;
         expected_from = leg.to;
@@ -1159,6 +1180,12 @@ pub fn accumulate_observation_batch(
     if cursor != state.next_cursor {
         return Err(format!("cursor mismatch: expected {}, got {}", state.next_cursor, cursor));
     }
+    if !state.quote_call_budget_sufficient && quote_calls > 0 {
+        return Err("observation exceeds configured quote-call budget; refusing quoted results".to_string());
+    }
+    if state.quote_calls_made.checked_add(quote_calls).is_none_or(|total| total > state.required_quote_calls) {
+        return Err("batch quote-call count exceeds the declared observation universe".to_string());
+    }
     let next = cursor.checked_add(candidates.len() as u64).ok_or("observation cursor overflow")?;
     if next > state.total_work_items {
         return Err("batch exceeds observation universe".to_string());
@@ -1676,6 +1703,7 @@ async fn quote_work_item_live(
     config: &RouteArbConfigV1,
     fees: &LedgerFeeTable,
     balances: &AssetAmounts,
+    reservations: &ReservationTotals,
     admissions: &std::collections::BTreeMap<String, Result<Option<Asset>, String>>,
 ) -> (RouteCandidateReportV1, u64, bool) {
     let mut wallet_before = item.principal_native;
@@ -1736,7 +1764,7 @@ async fn quote_work_item_live(
     quote.allowance_sufficient = Some(allowance_sufficient);
     let bands = inventory_bands_from_config(config);
     let evaluation = evaluate_candidate(
-        &quote, balances, &ReservationTotals::default(), &bands,
+        &quote, balances, reservations, &bands,
         i128::from(config.min_stable_profit_usd_6dec), i64::from(config.min_stable_profit_bps),
         i128::from(config.min_icp_profit_e8s), i64::from(config.min_icp_profit_bps),
     );
@@ -1746,13 +1774,14 @@ async fn quote_work_item_live(
 pub async fn quote_observation_items(
     config: &RouteArbConfigV1,
     items: &[RouteWorkItem],
+    reservations: &ReservationTotals,
 ) -> Vec<(RouteCandidateReportV1, u64, bool)> {
     let wallet_rows = read_wallet_balances(ic_cdk::id()).await;
     let (fees, balances) = tables_from_wallet_rows(&wallet_rows);
     let admissions = load_pool_orderings(items).await;
     let mut reports = Vec::with_capacity(items.len());
     for item in items {
-        reports.push(quote_work_item_live(item, config, &fees, &balances, &admissions).await);
+        reports.push(quote_work_item_live(item, config, &fees, &balances, reservations, &admissions).await);
     }
     reports
 }
