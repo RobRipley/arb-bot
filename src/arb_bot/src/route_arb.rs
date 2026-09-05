@@ -28,6 +28,10 @@ impl Asset {
         Asset::CkBtc,
         Asset::CkEth,
     ];
+
+    pub fn is_stable(self) -> bool {
+        matches!(self, Asset::IcUsd | Asset::CkUsdt | Asset::CkUsdc)
+    }
 }
 
 #[derive(
@@ -72,6 +76,34 @@ pub struct DirectedEdge {
     pub venue: VenueKind,
     pub from: Asset,
     pub to: Asset,
+}
+
+#[derive(
+    CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord,
+)]
+pub enum CandidateClass {
+    StablePar,
+    StableSettledCrossAsset,
+    IcpReturning,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Route {
+    pub route_id: String,
+    pub canonical_cycle_id: Option<String>,
+    pub candidate_class: CandidateClass,
+    pub asset_path: Vec<Asset>,
+    pub edges: Vec<DirectedEdge>,
+}
+
+impl Route {
+    pub fn start_asset(&self) -> Asset {
+        self.asset_path[0]
+    }
+
+    pub fn end_asset(&self) -> Asset {
+        self.asset_path[self.asset_path.len() - 1]
+    }
 }
 
 fn principal(text: &str) -> Principal {
@@ -139,4 +171,105 @@ pub fn directed_edges() -> Vec<DirectedEdge> {
     }
     edges.sort_by(|left, right| left.edge_id.cmp(&right.edge_id));
     edges
+}
+
+pub fn canonical_cycle_id<S: AsRef<str>>(edge_ids: &[S]) -> String {
+    if edge_ids.is_empty() {
+        return String::new();
+    }
+    let ids: Vec<&str> = edge_ids.iter().map(AsRef::as_ref).collect();
+    (0..ids.len())
+        .map(|offset| {
+            (0..ids.len())
+                .map(|index| ids[(offset + index) % ids.len()])
+                .collect::<Vec<_>>()
+                .join("|")
+        })
+        .min()
+        .expect("a non-empty cycle has a rotation")
+}
+
+fn classify_path(path: &[Asset]) -> Option<CandidateClass> {
+    let start = *path.first()?;
+    let end = *path.last()?;
+    if start.is_stable() && end.is_stable() {
+        return Some(if path.iter().all(|asset| asset.is_stable()) {
+            CandidateClass::StablePar
+        } else {
+            CandidateClass::StableSettledCrossAsset
+        });
+    }
+    if start == Asset::Icp
+        && end == Asset::Icp
+        && path.len() > 2
+        && path[1..path.len() - 1].iter().all(|asset| asset.is_stable())
+    {
+        return Some(CandidateClass::IcpReturning);
+    }
+    None
+}
+
+fn walk_routes(
+    start: Asset,
+    max_legs: usize,
+    all_edges: &[DirectedEdge],
+    path: &mut Vec<Asset>,
+    selected: &mut Vec<DirectedEdge>,
+    routes: &mut Vec<Route>,
+) {
+    if let Some(candidate_class) = classify_path(path).filter(|_| !selected.is_empty()) {
+        let route_id = selected.iter().map(|edge| edge.edge_id.as_str()).collect::<Vec<_>>().join("|");
+        let is_cycle = path.last().copied() == Some(start);
+        let canonical = is_cycle.then(|| {
+            let edge_ids = selected.iter().map(|edge| edge.edge_id.as_str()).collect::<Vec<_>>();
+            canonical_cycle_id(&edge_ids)
+        });
+        routes.push(Route {
+            route_id,
+            canonical_cycle_id: canonical,
+            candidate_class,
+            asset_path: path.clone(),
+            edges: selected.clone(),
+        });
+    }
+
+    if selected.len() == max_legs || (!selected.is_empty() && path.last().copied() == Some(start)) {
+        return;
+    }
+
+    let current = *path.last().expect("route path always has its start asset");
+    for edge in all_edges.iter().filter(|edge| edge.from == current) {
+        if selected.iter().any(|prior| prior.edge_id == edge.edge_id || prior.pool_id == edge.pool_id) {
+            continue;
+        }
+        let closes_cycle = edge.to == start;
+        if path.contains(&edge.to) && !closes_cycle {
+            continue;
+        }
+        path.push(edge.to);
+        selected.push(edge.clone());
+        walk_routes(start, max_legs, all_edges, path, selected, routes);
+        selected.pop();
+        path.pop();
+    }
+}
+
+pub fn enumerate_routes(max_legs: u8) -> Result<Vec<Route>, String> {
+    if !(1..=4).contains(&max_legs) {
+        return Err("max_route_legs must be between 1 and 4".to_string());
+    }
+    let all_edges = directed_edges();
+    let mut routes = Vec::new();
+    for start in [Asset::IcUsd, Asset::CkUsdt, Asset::CkUsdc, Asset::Icp] {
+        walk_routes(
+            start,
+            max_legs as usize,
+            &all_edges,
+            &mut vec![start],
+            &mut Vec::new(),
+            &mut routes,
+        );
+    }
+    routes.sort_by(|left, right| left.route_id.cmp(&right.route_id));
+    Ok(routes)
 }

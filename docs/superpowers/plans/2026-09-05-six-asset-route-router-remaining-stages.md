@@ -48,10 +48,10 @@
 
 **Interfaces:** `CandidateClass`, `Route`, `enumerate_routes(max_legs)`, `route_id()`, `canonical_cycle_id()`.
 
-- [ ] Write failing exhaustive golden tests for the exact ordered route set and count at one through four legs, permitted endpoint classes, reachability, reverse distinction, rotation deduplication, and rejection of repeated vertices/pools/edges, embedded cycles, consecutive same-pool reversals, and a second Rumi use.
-- [ ] Run the scoped test and observe failure.
-- [ ] Implement deterministic DFS/backtracking and canonicalization without symbol-derived identity.
-- [ ] Re-run tests and commit `feat(arb): enumerate bounded six-asset routes`.
+- [x] Write failing exhaustive golden tests for the exact ordered route set and count at one through four legs, permitted endpoint classes, reachability, reverse distinction, rotation deduplication, and rejection of repeated vertices/pools/edges, embedded cycles, consecutive same-pool reversals, and a second Rumi use.
+- [x] Run the scoped test and observe failure.
+- [x] Implement deterministic DFS/backtracking and canonicalization without symbol-derived identity.
+- [x] Re-run tests and commit `feat(arb): enumerate bounded six-asset routes`.
 
 ### Task 3: Native-unit accounting, eligibility, inventory, and ranking
 
