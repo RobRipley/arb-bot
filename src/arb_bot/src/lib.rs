@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 pub mod state; // pub so integration tests can verify serde upgrade defaults
 pub mod strategy_t; // pub so integration tests can reach the pure math
+pub mod route_arb;
 mod prices;
 mod swaps;
 mod partydex;
