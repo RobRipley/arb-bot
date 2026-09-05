@@ -111,6 +111,11 @@ get_route_wallet_balances_v1
 get_route_observation_v1
 get_route_observations_v1
 get_best_route_candidates_v1
+get_route_mutation_lock_v1
+get_route_reservations_v1
+get_held_positions_v1
+get_current_route_execution_v1
+get_terminal_route_executions_v1
 get_trade_history
 get_trade_legs
 get_activity_log

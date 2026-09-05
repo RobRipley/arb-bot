@@ -1209,8 +1209,143 @@ pub struct BestRouteCandidatesV1 {
     pub icp: Option<RouteCandidateReportV1>,
 }
 
+#[derive(CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MutationOwnerV1 {
+    RouteExecution,
+    VolumeOperation,
+    GenericWithdrawal,
+    RetiredVenueRecovery,
+    LegacyMigration,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct MutationLockV1 {
+    pub operation_id: String,
+    pub owner: MutationOwnerV1,
+    pub acquired_at_ns: u64,
+    pub reconciliation_required: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct MutationLockSlotV1 {
+    pub lock: Option<MutationLockV1>,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReservationKindV1 {
+    ActiveRoute,
+    HeldPosition,
+    NonRoute,
+    LegacyFreeze,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct OwnershipReservationV1 {
+    pub reservation_id: String,
+    pub asset: Asset,
+    pub amount_native: u64,
+    pub whole_asset_freeze: bool,
+    pub kind: ReservationKindV1,
+    pub owner: MutationOwnerV1,
+    pub operation_id: String,
+    pub reconciled_at_ns: u64,
+    pub active: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub enum HeldBasisV1 {
+    StablePar { start_asset: Asset, principal_native: u64, principal_usd_6dec: u64 },
+    IcpNative { principal_icp_e8s: u64 },
+    LegacyUnknown { preserved_pending_fields: String },
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct HeldLotV1 {
+    pub asset: Asset,
+    pub native_amount: u64,
+    pub attributable_fees_native: u64,
+    pub reserved_native: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct HeldPositionV1 {
+    pub position_id: String,
+    pub originating_execution_id: String,
+    pub originating_route_id: String,
+    pub basis: HeldBasisV1,
+    pub lots: Vec<HeldLotV1>,
+    pub reason: String,
+    pub first_held_timestamp_ns: u64,
+    pub last_reconciled_timestamp_ns: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssetReservationStatusV1 {
+    pub asset: Option<Asset>,
+    pub held: u64,
+    pub active_route: u64,
+    pub non_route: u64,
+    pub whole_asset_frozen: bool,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExecutionPhaseV1 {
+    Planned,
+    LegPrepared,
+    LegSubmitted,
+    AwaitingSettlement,
+    ReconciliationRequired,
+    LegSettled,
+    RemainingRouteRequoted,
+    Completed,
+    Aborted,
+    HeldInventory,
+}
+
+impl ExecutionPhaseV1 {
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Aborted | Self::HeldInventory)
+    }
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ReconciliationEvidenceV1 {
+    pub evidence_kind: String,
+    pub source_reference: String,
+    pub amount_native: u64,
+    pub observed_at_ns: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionRecordV1 {
+    pub execution_id: String,
+    pub route_id: String,
+    pub canonical_cycle_id: Option<String>,
+    pub candidate_class: CandidateClass,
+    pub phase: ExecutionPhaseV1,
+    pub current_leg_index: u8,
+    pub planned_input_native: u64,
+    pub required_min_output_native: u64,
+    pub quote_timestamp_ns: u64,
+    pub submission_started_at_ns: Option<u64>,
+    pub adapter_request_fingerprint: Option<String>,
+    pub evidence: Vec<ReconciliationEvidenceV1>,
+    pub reconciliation_query_count: u8,
+    pub incident: Option<String>,
+    pub updated_at_ns: u64,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionSlotV1 {
+    pub execution: Option<ExecutionRecordV1>,
+}
+
 fn asset_for_ledger_text(address: &str) -> Option<Asset> {
     asset_pins().into_iter().find(|pin| pin.ledger.to_text() == address).map(|pin| pin.asset)
+}
+
+pub fn asset_for_ledger(ledger: Principal) -> Option<Asset> {
+    asset_pins().into_iter().find(|pin| pin.ledger == ledger).map(|pin| pin.asset)
 }
 
 async fn load_pool_orderings(items: &[RouteWorkItem]) -> std::collections::BTreeMap<String, Result<Option<Asset>, String>> {

@@ -112,9 +112,9 @@
 
 **Interfaces:** `MutationOwnerV1`, `MutationLockV1`, `OwnershipReservationV1`, `HeldPositionV1`, `ExecutionRecordV1`, paginated query APIs, internal acquire/release/reserve helpers.
 
-- [ ] Write failing tests for new non-overlapping stable memory IDs, record/evidence/text/page/open-count caps, capacity reservation before mutation, checked spendable balances, per-asset freezes, owner/provenance attribution, restart/upgrade round trips, and inability of `clear_cycle_lock` to alter the durable lock.
-- [ ] Implement bounded stable maps/cells/logs and migration of legacy pending exits to exact reservations when provable or durable whole-asset freezes otherwise. Never initiate a drain.
-- [ ] Run scoped state/upgrade/Candid tests and commit `feat(arb): add durable route ownership state`.
+- [x] Write failing tests for new non-overlapping stable memory IDs, record/evidence/text/page/open-count caps, capacity reservation before mutation, checked spendable balances, per-asset freezes, owner/provenance attribution, restart/upgrade round trips, and inability of `clear_cycle_lock` to alter the durable lock.
+- [x] Implement bounded stable maps/cells/logs and migration of legacy pending exits to exact reservations when provable or durable whole-asset freezes otherwise. Never initiate a drain.
+- [x] Run scoped state/upgrade/Candid tests and commit `feat(arb): add durable route ownership state`.
 
 ### Task 7: Lock every surviving shared-account mutation and pin call targets
 
@@ -128,10 +128,10 @@
 
 **Interfaces:** internal mutation guard used by volume manual/timer operations, generic withdrawal, and PartyDEX recovery; immutable volume registry validation.
 
-- [ ] Write failing call-counting tests for every overlapping public/timer path, all corrupt persisted execution/reference venue pins and orderings, arbitrary withdraw/recovery principals, reservation underflow, ambiguous non-route settlement, and legacy-lock clearing.
-- [ ] Implement fail-before-call target validation, lock acquisition, non-route capacity reservation, source-bound release rules, and timer deferral. Preserve volume pool selection/sizing/recovery economics.
-- [ ] Add structural scripts enforcing call-target constants and complete mutator classification.
-- [ ] Run all scoped and Stage-1 tests; commit `feat(arb): serialize route-relevant account mutation`.
+- [x] Write failing call-counting tests for every overlapping public/timer path, all corrupt persisted execution/reference venue pins and orderings, arbitrary withdraw/recovery principals, reservation underflow, ambiguous non-route settlement, and legacy-lock clearing.
+- [x] Implement fail-before-call target validation, lock acquisition, non-route capacity reservation, source-bound release rules, and timer deferral. Preserve volume pool selection/sizing/recovery economics.
+- [x] Add structural scripts enforcing call-target constants and complete mutator classification.
+- [x] Run all scoped and Stage-1 tests; commit `feat(arb): serialize route-relevant account mutation`.
 
 ### Task 8: Durable route executor and adapter reconciliation
 

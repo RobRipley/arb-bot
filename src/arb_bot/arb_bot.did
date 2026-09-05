@@ -273,6 +273,45 @@ type BestRouteCandidatesV1 = record {
   icp: opt RouteCandidateReportV1; stable: opt RouteCandidateReportV1;
   observation_id: opt text; scan_complete: bool;
 };
+type MutationOwnerV1 = variant { RouteExecution; VolumeOperation; GenericWithdrawal; RetiredVenueRecovery; LegacyMigration };
+type MutationLockV1 = record {
+  operation_id: text; owner: MutationOwnerV1; acquired_at_ns: nat64;
+  reconciliation_required: bool;
+};
+type ReservationKindV1 = variant { ActiveRoute; HeldPosition; NonRoute; LegacyFreeze };
+type OwnershipReservationV1 = record {
+  reservation_id: text; asset: Asset; amount_native: nat64;
+  whole_asset_freeze: bool; kind: ReservationKindV1; owner: MutationOwnerV1;
+  operation_id: text; reconciled_at_ns: nat64; active: bool;
+};
+type HeldBasisV1 = variant {
+  StablePar: record { start_asset: Asset; principal_native: nat64; principal_usd_6dec: nat64 };
+  IcpNative: record { principal_icp_e8s: nat64 };
+  LegacyUnknown: record { preserved_pending_fields: text };
+};
+type HeldLotV1 = record {
+  asset: Asset; native_amount: nat64; attributable_fees_native: nat64; reserved_native: nat64;
+};
+type HeldPositionV1 = record {
+  position_id: text; originating_execution_id: text; originating_route_id: text;
+  basis: HeldBasisV1; lots: vec HeldLotV1; reason: text;
+  first_held_timestamp_ns: nat64; last_reconciled_timestamp_ns: nat64;
+};
+type ExecutionPhaseV1 = variant {
+  Planned; LegPrepared; LegSubmitted; AwaitingSettlement; ReconciliationRequired;
+  LegSettled; RemainingRouteRequoted; Completed; Aborted; HeldInventory;
+};
+type ReconciliationEvidenceV1 = record {
+  evidence_kind: text; source_reference: text; amount_native: nat64; observed_at_ns: nat64;
+};
+type ExecutionRecordV1 = record {
+  execution_id: text; route_id: text; canonical_cycle_id: opt text;
+  candidate_class: CandidateClass; phase: ExecutionPhaseV1; current_leg_index: nat8;
+  planned_input_native: nat64; required_min_output_native: nat64;
+  quote_timestamp_ns: nat64; submission_started_at_ns: opt nat64;
+  adapter_request_fingerprint: opt text; evidence: vec ReconciliationEvidenceV1;
+  reconciliation_query_count: nat8; incident: opt text; updated_at_ns: nat64;
+};
 
 type Direction = variant {
   RumiToIcpswap;
@@ -533,6 +572,11 @@ service : (InitArgs) -> {
   get_route_observation_v1: () -> (opt ObservationAccumulatorV1) query;
   get_route_observations_v1: (nat64, nat64) -> (variant { Ok: vec ObservationAccumulatorV1; Err: text }) query;
   get_best_route_candidates_v1: () -> (BestRouteCandidatesV1) query;
+  get_route_mutation_lock_v1: () -> (opt MutationLockV1) query;
+  get_route_reservations_v1: (nat64, nat64) -> (variant { Ok: vec OwnershipReservationV1; Err: text }) query;
+  get_held_positions_v1: (nat64, nat64) -> (variant { Ok: vec HeldPositionV1; Err: text }) query;
+  get_current_route_execution_v1: () -> (opt ExecutionRecordV1) query;
+  get_terminal_route_executions_v1: (nat64, nat64) -> (variant { Ok: vec ExecutionRecordV1; Err: text }) query;
   // Query methods
   get_config: () -> (BotConfig) query;
   get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;

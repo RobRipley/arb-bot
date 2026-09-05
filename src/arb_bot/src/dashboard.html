@@ -874,6 +874,40 @@
         icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
         observation_id: I.Opt(I.Text), scan_complete: I.Bool,
       });
+      const MutationOwnerV1 = I.Variant({ RouteExecution: I.Null, VolumeOperation: I.Null, GenericWithdrawal: I.Null, RetiredVenueRecovery: I.Null, LegacyMigration: I.Null });
+      const MutationLockV1 = I.Record({ operation_id: I.Text, owner: MutationOwnerV1, acquired_at_ns: I.Nat64, reconciliation_required: I.Bool });
+      const ReservationKindV1 = I.Variant({ ActiveRoute: I.Null, HeldPosition: I.Null, NonRoute: I.Null, LegacyFreeze: I.Null });
+      const OwnershipReservationV1 = I.Record({
+        reservation_id: I.Text, asset: RouteAsset, amount_native: I.Nat64,
+        whole_asset_freeze: I.Bool, kind: ReservationKindV1, owner: MutationOwnerV1,
+        operation_id: I.Text, reconciled_at_ns: I.Nat64, active: I.Bool,
+      });
+      const HeldBasisV1 = I.Variant({
+        StablePar: I.Record({ start_asset: RouteAsset, principal_native: I.Nat64, principal_usd_6dec: I.Nat64 }),
+        IcpNative: I.Record({ principal_icp_e8s: I.Nat64 }),
+        LegacyUnknown: I.Record({ preserved_pending_fields: I.Text }),
+      });
+      const HeldLotV1 = I.Record({ asset: RouteAsset, native_amount: I.Nat64, attributable_fees_native: I.Nat64, reserved_native: I.Nat64 });
+      const HeldPositionV1 = I.Record({
+        position_id: I.Text, originating_execution_id: I.Text, originating_route_id: I.Text,
+        basis: HeldBasisV1, lots: I.Vec(HeldLotV1), reason: I.Text,
+        first_held_timestamp_ns: I.Nat64, last_reconciled_timestamp_ns: I.Nat64,
+      });
+      const ExecutionPhaseV1 = I.Variant({
+        Planned: I.Null, LegPrepared: I.Null, LegSubmitted: I.Null,
+        AwaitingSettlement: I.Null, ReconciliationRequired: I.Null,
+        LegSettled: I.Null, RemainingRouteRequoted: I.Null,
+        Completed: I.Null, Aborted: I.Null, HeldInventory: I.Null,
+      });
+      const ReconciliationEvidenceV1 = I.Record({ evidence_kind: I.Text, source_reference: I.Text, amount_native: I.Nat64, observed_at_ns: I.Nat64 });
+      const ExecutionRecordV1 = I.Record({
+        execution_id: I.Text, route_id: I.Text, canonical_cycle_id: I.Opt(I.Text),
+        candidate_class: CandidateClass, phase: ExecutionPhaseV1, current_leg_index: I.Nat8,
+        planned_input_native: I.Nat64, required_min_output_native: I.Nat64,
+        quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
+        adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
+        reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
+      });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
         idle_threshold_bps: I.Nat64,
@@ -928,6 +962,11 @@
         get_route_observation_v1: I.Func([], [I.Opt(ObservationAccumulatorV1)], ['query']),
         get_route_observations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ObservationAccumulatorV1), Err: I.Text })], ['query']),
         get_best_route_candidates_v1: I.Func([], [BestRouteCandidatesV1], ['query']),
+        get_route_mutation_lock_v1: I.Func([], [I.Opt(MutationLockV1)], ['query']),
+        get_route_reservations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(OwnershipReservationV1), Err: I.Text })], ['query']),
+        get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
+        get_current_route_execution_v1: I.Func([], [I.Opt(ExecutionRecordV1)], ['query']),
+        get_terminal_route_executions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ExecutionRecordV1), Err: I.Text })], ['query']),
         get_config: I.Func([], [BotConfig], ['query']),
         set_config: I.Func([BotConfigInput], [], []),
         get_trade_history: I.Func([I.Nat64, I.Nat64], [I.Vec(TradeRecord)], ['query']),
