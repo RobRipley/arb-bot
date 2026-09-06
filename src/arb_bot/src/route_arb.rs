@@ -1361,6 +1361,10 @@ pub struct ExecutionRecordV1 {
     pub reconciliation_query_count: u8,
     pub incident: Option<String>,
     pub updated_at_ns: u64,
+    /// Stable-par USD6 for stable books; ICP e8s for IcpReturning.
+    /// None for held inventory and historical records without attributable P&L.
+    #[serde(default)]
+    pub realized_profit: Option<i128>,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1411,7 +1415,7 @@ pub fn prepare_execution(
         current_leg_index: 0, planned_input_native: 0, required_min_output_native: 0,
         quote_timestamp_ns: candidate.quote_timestamp_ns, submission_started_at_ns: None,
         adapter_request_fingerprint: None, evidence: Vec::new(),
-        reconciliation_query_count: 0, incident: None, updated_at_ns: now_ns,
+        reconciliation_query_count: 0, incident: None, updated_at_ns: now_ns, realized_profit: None,
     })
 }
 

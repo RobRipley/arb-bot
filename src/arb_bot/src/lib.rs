@@ -6,6 +6,10 @@ use std::cell::RefCell;
 pub mod state; // pub so integration tests can verify serde upgrade defaults
 pub mod strategy_t; // pub so integration tests can reach the pure math
 pub mod route_arb;
+pub mod route_runtime;
+pub mod route_scheduler;
+pub mod route_rumi;
+pub mod route_icpswap;
 mod prices;
 mod swaps;
 mod partydex;
@@ -16,6 +20,7 @@ use state::{BotConfig, BotConfigInput, TradeRecord, TradeLeg, ErrorRecord, Activ
 
 thread_local! {
     static ARB_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
+    static ROUTE_RUNTIME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
     static VOLUME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
 }
 
@@ -40,6 +45,7 @@ fn init(args: InitArgs) {
     // on the first timer tick. Start the timer immediately.
     setup_timer();
     setup_volume_timer();
+    setup_route_runtime_timer();
 }
 
 #[pre_upgrade]
@@ -52,6 +58,7 @@ fn post_upgrade() {
     state::load_from_stable_memory();
     setup_timer();
     setup_volume_timer();
+    setup_route_runtime_timer();
 }
 
 /// Retired under Stage-1 of the six-asset route-arbitrage policy: the
@@ -67,6 +74,16 @@ fn setup_timer() {
         if let Some(prev) = id.borrow_mut().take() {
             ic_cdk_timers::clear_timer(prev);
         }
+    });
+}
+
+fn setup_route_runtime_timer() {
+    ROUTE_RUNTIME_TIMER_ID.with(|slot| {
+        if let Some(id) = slot.borrow_mut().take() { ic_cdk_timers::clear_timer(id); }
+        let id = ic_cdk_timers::set_timer_interval(std::time::Duration::from_secs(10), || {
+            ic_cdk::spawn(async { let _ = route_scheduler::tick().await; });
+        });
+        *slot.borrow_mut() = Some(id);
     });
 }
 
@@ -280,7 +297,12 @@ fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), St
 
 #[query]
 fn get_route_arb_status_v1() -> route_arb::RouteArbStatusV1 {
-    state::read_state(|s| route_arb::route_status(&s.route_arb))
+    let mut status=state::read_state(|s| route_arb::route_status(&s.route_arb));
+    match route_runtime::status() {
+        Ok(runtime) => {status.execution_compiled_in=runtime.compiled_support;status.live_execution_authorized=runtime.live_authorized;},
+        Err(error) => {status.config_valid=false;status.config_incident=Some(error);}
+    }
+    status
 }
 
 #[update]
@@ -292,6 +314,10 @@ async fn get_route_wallet_balances_v1() -> Vec<route_arb::WalletAssetBalanceV1> 
 #[update]
 fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String> {
     require_admin();
+    start_route_observation_internal()
+}
+
+pub(crate) fn start_route_observation_internal() -> Result<route_arb::ObservationStartV1, String> {
     let (config, generation) = state::read_state(|s| (s.route_arb.clone(), s.route_arb_config_generation));
     let universe = route_arb::build_work_universe(&config)?;
     let now = ic_cdk::api::time();
@@ -317,6 +343,10 @@ fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String>
 #[update]
 async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<route_arb::ObservationBatchResultV1, String> {
     require_admin();
+    quote_route_observation_batch_internal(cursor, limit).await
+}
+
+pub(crate) async fn quote_route_observation_batch_internal(cursor: u64, limit: u16) -> Result<route_arb::ObservationBatchResultV1, String> {
     if limit == 0 || limit > route_arb::HARD_MAX_PAGE_SIZE {
         return Err("limit must be between 1 and 100".to_string());
     }
@@ -446,22 +476,33 @@ fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route
     state::get_terminal_route_executions_page(offset, limit)
 }
 
-#[update]
-fn prepare_route_execution_v1(_route_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
-    require_admin();
-    Err("live route execution is not authorized in this release; quote observations and durable reporting are available, but no fund-moving call can be prepared".to_string())
+#[query]
+fn get_route_runtime_status_v1() -> Result<route_runtime::RuntimeStatus, String> {
+    route_runtime::status()
 }
 
 #[update]
-fn advance_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+fn set_route_runtime_authorized_v1(authorized: bool) -> Result<route_runtime::RuntimeStatus, String> {
     require_admin();
-    Err("live route execution is not authorized in this release; advance cannot submit or replay a fund-moving call".to_string())
+    route_runtime::set_authorized(authorized)
 }
 
 #[update]
-fn reconcile_route_execution_v1(_execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+async fn prepare_route_execution_v1(route_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
     require_admin();
-    Err("live route execution is not authorized in this release; no route submission exists to reconcile".to_string())
+    route_runtime::prepare(&route_id).await
+}
+
+#[update]
+async fn advance_route_execution_v1(execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    route_runtime::advance(&execution_id).await
+}
+
+#[update]
+async fn reconcile_route_execution_v1(execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
+    require_admin();
+    route_runtime::reconcile(&execution_id).await
 }
 
 #[query]

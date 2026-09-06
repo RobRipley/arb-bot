@@ -864,6 +864,9 @@
         balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
       });
       const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null });
+      const RuntimeStatus = I.Record({ compiled_support: I.Bool, live_authorized: I.Bool,
+        enabled: I.Bool, dry_run: I.Bool, last_error: I.Opt(I.Text), last_tick_ns: I.Nat64,
+        last_realized_profit: I.Opt(I.Int), last_profit_class: I.Opt(CandidateClass) });
       const QuoteLegReportV1 = I.Record({
         to: RouteAsset, wallet_before: I.Nat, wallet_after: I.Nat, gross_output: I.Nat,
         venue_input: I.Nat, from: RouteAsset, entry_ledger_fee: I.Nat,
@@ -978,6 +981,8 @@
         price_after: I.Nat64,
       });
       return I.Service({
+        get_route_runtime_status_v1: I.Func([], [I.Variant({ Ok: RuntimeStatus, Err: I.Text })], ['query']),
+        set_route_runtime_authorized_v1: I.Func([I.Bool], [I.Variant({ Ok: RuntimeStatus, Err: I.Text })], []),
         get_route_arb_config_v1: I.Func([], [RouteArbConfigV1], ['query']),
         set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
@@ -1401,6 +1406,7 @@
     let latestPublicHealth = null;
     let publicHealthFailed = false;
     let latestRouteStatus = null;
+    let latestRouteRuntime = null;
     let latestRouteWallet = [];
     let latestRouteObservation = null;
     let latestRouteCandidates = null;
@@ -2431,13 +2437,49 @@
       const heldRows = latestHeldPositions.length ? latestHeldPositions.map(p => `<div class="route-list-row"><span>${esc(p.position_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span><span class="badge badge-blocked">held</span></div>`).join('') : '<div class="route-empty">No held route inventory.</div>';
       const reservationRows = activeReservations.length ? activeReservations.map(r => `<div class="route-list-row"><span>${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))}</span></div>`).join('') : '<div class="route-empty">No active reservations.</div>';
       const current = latestRouteExecution;
-      const execHtml = current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span></div>` : '<div class="route-empty">No active route execution. Live execution is not compiled or authorized in this release.</div>';
+      const execHtml = current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span></div>` : '<div class="route-empty">No active route execution.</div>';
       return `<div class="grid g-cols-3" style="margin-top:var(--sp-4)">
         <div class="card"><div class="card-header">Route lock</div><div id="route-execution-state">${lock ? `<span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${esc(variantKey(lock.owner))}</span><div class="route-wallet-meta">${esc(lock.operation_id)}</div>` : '<span class="badge badge-live">clear</span>'}${execHtml}</div></div>
         <div class="card"><div class="card-header">Reservations</div><div id="route-reservations" class="route-list">${reservationRows}</div></div>
         <div class="card"><div class="card-header">Held positions</div><div id="route-held-positions" class="route-list">${heldRows}</div></div>
       </div>`;
     }
+    function routeTradingLabel() {
+      if (!latestRouteRuntime) return 'Status unavailable';
+      if (!latestRouteRuntime.compiled_support) return 'Not implemented';
+      return latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run ? 'Automatic arbitrage on' : 'Trading stopped';
+    }
+    function routeRuntimeHtml() {
+      const runtime = latestRouteRuntime;
+      const on = runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run;
+      const profit = runtime ? routeOpt(runtime.last_realized_profit) : null;
+      const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
+      const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
+      const decimals = unit === 'ICP' ? 8 : 6;
+      return `<div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Automatic arbitrage</div>
+        <div class="route-list-row"><span>${esc(routeTradingLabel())}</span>
+        ${isAdmin && runtime && runtime.compiled_support ? `<button class="btn ${on ? 'btn-danger' : 'btn-primary'}" onclick="setRouteTrading(${!on})">${on ? 'Stop new trades' : 'Start arbitrage'}</button>` : ''}</div>
+        <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
+        ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
+        <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
+    }
+    window.setRouteTrading = function(enabled) {
+      if (!requireAuth()) return;
+      openModal({ title: enabled ? 'Start automatic arbitrage' : 'Stop new trades',
+        body: enabled ? 'The bot will trade using its configured assets, pools, size limits and minimum profit thresholds. Each leg must settle before the next begins.' : 'New swaps will stop. Any previously submitted swap will continue to be reconciled.',
+        confirmLabel: enabled ? 'Start arbitrage' : 'Stop new trades', danger: enabled,
+        onConfirm: async () => {
+          try {
+            if (enabled) {
+              const config = await authenticatedActor.get_route_arb_config_v1();
+              unwrapResult(await authenticatedActor.set_route_arb_config_v1({ ...config, enabled: true, dry_run: false }));
+            }
+            latestRouteRuntime = unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
+            await loadRouteData(); renderAll(); toast(routeTradingLabel(), 'success');
+          } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await loadRouteData(); renderAll(); }
+        }
+      });
+    };
     function routeArbitrageHtml() {
       const status = latestRouteStatus;
       const obs = latestRouteObservation;
@@ -2447,13 +2489,14 @@
       return `<div id="route-arb-panel">
         <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
           <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
-        <div class="route-disclosure">icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds; live route execution is unavailable in this release.</div>
+        <div class="route-disclosure">icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Start arbitrage control and working settlement support at every venue.</div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${routeCandidateHtml(stable, 'stable-returning')}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${routeCandidateHtml(icp, 'ICP-returning')}</div></div>
         </div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}` : 'Loading route status…'}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
+        ${routeRuntimeHtml()}
         ${routeOperationsHtml()}
         <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
       </div>`;
@@ -2463,7 +2506,7 @@
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
       routeDataRequestPromise = (async () => {
         const safe = async (fn, fallback, label) => { try { return await fn(); } catch (e) { console.error(label, e); return fallback; } };
-        const [status, obs, candidates, lock, reservations, held, current, terminal] = await Promise.all([
+        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime] = await Promise.all([
           safe(() => anonymousActor.get_route_arb_status_v1(), null, 'route status'),
           safe(() => anonymousActor.get_route_observation_v1(), [], 'route observation'),
           safe(() => anonymousActor.get_best_route_candidates_v1(), null, 'route candidates'),
@@ -2472,8 +2515,10 @@
           safe(() => anonymousActor.get_held_positions_v1(0n, 100n), { Ok: [] }, 'held positions'),
           safe(() => anonymousActor.get_current_route_execution_v1(), [], 'route execution'),
           safe(() => anonymousActor.get_terminal_route_executions_v1(0n, 20n), { Ok: [] }, 'terminal executions'),
+          safe(() => anonymousActor.get_route_runtime_status_v1(), null, 'runtime status'),
         ]);
         latestRouteStatus = status;
+        latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
         latestRouteObservation = routeOpt(obs);
         latestRouteCandidates = candidates;
         latestRouteLock = routeOpt(lock);
@@ -2532,7 +2577,7 @@
         <div class="status-strip">
           <div class="status-chip info" onclick="goTo('markets')">
             <span class="status-chip-label">Route arbitrage</span>
-            <span class="status-chip-value">${!latestRouteStatus ? '—' : !latestRouteStatus.execution_compiled_in ? 'Quote-only · Not implemented' : latestRouteStatus.live_execution_authorized ? 'Live' : 'Trading disabled'}</span>
+            <span class="status-chip-value">${esc(routeTradingLabel())}</span>
           </div>
           <div class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
             <span class="status-chip-label">Volume engine</span>
@@ -2572,7 +2617,7 @@
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
             <div class="divider"></div>
-            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. The route engine is quote-only until separately reviewed and authorized.</div>
+            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Markets; quote snapshots are separate from realized results.</div>
           </div>
           <div class="card">
             <div class="card-header">Bot balances — arb main</div>

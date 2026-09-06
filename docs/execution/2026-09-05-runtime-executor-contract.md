@@ -1,72 +1,41 @@
-# Runtime route executor: implementation contract and evidence gap
+# Runtime route executor: implemented source contract and proof boundary
 
-Status: proposed cross-repository design; runtime implementation incomplete.
+Status: source implementation present on `codex/route-runtime-executor`; source tests and acceptance checks are the applicable proof. This supersedes the earlier Stage 2–4 description that treated the executor as inert stubs: the user explicitly expanded this source task to implement the executor. The source now contains activation capability, while defaults remain off and this document does not authorize deployment, live configuration, approvals, transfers, swaps, funding, or trading.
+
 Date: 2026-09-05 (America/Los_Angeles)
 
-The operator requested the missing executor implementation in the arb-bot task. Dashboard fixes are independent and can ship now. This document does not authorize deployment, live configuration, approvals, transfers, or trades.
+## What the branch implements
 
-## Current proof state
+The arb-bot now contains a durable, typed route runtime in `src/arb_bot/src/route_runtime.rs`, venue adapters in `route_rumi.rs` and `route_icpswap.rs`, and a bounded scheduler in `route_scheduler.rs`. The public prepare, advance, and reconcile methods are admin-gated and delegate to this runtime. The runtime persists the complete request and adapter intent before submission, records `LegSubmitted` before the non-idempotent call, and resumes submitted work through reconciliation only. It never replays a submitted update from a lost response.
 
-At arb-bot main `25aef5ec9badd0728ceee37b3eb3b9d8a6f0f5fa`, the three public executor methods return unconditional authorization errors. The Rust state-machine helpers and five route_execution tests establish inert transition behavior, not a running executor, venue request persistence, ledger reconciliation, or upgrade-safe settlement. Task 8 in the older remaining-stages plan must not be interpreted as runtime completion.
+Preparation re-quotes the selected whole route while holding the durable account-mutation lock. Each later leg is re-quoted from the original principal basis and route-wide final-profit floor. Policy-generation changes, stale quotes, changed route identity, insufficient allowance/full-fill proof, invalid pins, capacity exhaustion, and lock ownership changes fail closed. A route has one active execution at a time; canonical-cycle collisions and held inventory block reuse.
 
-The reported +137/+130 bps quotes were observations in the earlier task, not current executable orders. The dashboard calling retired `get_bot_health` and putting eligible quotes under Attention were independent presentation defects. Pulling a local checkout cannot change the deployed embedded dashboard.
+Settlements require typed, source-bound evidence. The runtime does not advance on a bare venue success, an amount-only reply, or a coincident wallet credit. Partial fills, authenticated refunds, deteriorated remaining routes, and other fully reconciled but non-completing outcomes become held inventory with reservations. Held lots are never automatically sold or released. Terminal finalization is checkpointed so a storage error can be retried without another submission. Reconciliation query budgets and evidence/storage bounds remain enforced.
 
-## Binding requirement
+The scheduler is bounded and serialized. It services an existing execution before starting new observation, scans the complete observation universe before selection, and stays idle while live authorization is absent, policy execution is disabled, or dry-run is true.
 
-The accepted [six-asset design](../superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md), lines 437 and 460–471, requires durable intent before submission, no replay after submission, and source-bound input, venue, output and refund evidence before settlement. This is the existing required invariant. A new Rumi receipt API is the recommended implementation approach, not an independently mandated API shape or a claim that all possible correlation approaches are impossible.
+## Authorization and live-proof boundary
 
-## Source evidence
+The source defaults remain `enabled = false`, `dry_run = true`, and `live_authorized = false`. The runtime reports `compiled_support` separately from `live_authorized`; compiled support is source capability only. An admin-gated authorization setter exists in the source API, but no authorization, deployment, configuration change, approval, funding, swap, or trade was performed for this delivery. Passing source tests therefore does not establish a deployed canister, an enabled timer, a live configuration, or executable orders.
 
-These are source snapshots, not deployed-interface verification.
+The Rumi adapter requires the pinned pool to expose the versioned receipt capability and to allowlist the bot as a receipt client before preparation. The current Rumi receipt-client allowlist is empty from the bot's perspective, so Rumi routes require separate operator enablement and deployed capability verification. The adapter persists a caller-scoped intent and accepts only an exact receipt binding of request identity, source/output/refund ledgers, accounts, amounts, fees, memo, and confirmed block status. A missing, unavailable, conflicting, or incomplete receipt remains unresolved.
 
-Rumi source `73d58622e12056a19366bc61135cc927aa39def5`:
+The ICPSwap adapter uses the pinned `depositFromAndSwap` call and captures a bounded pre-submission history cutoff. It binds a single post-cutoff receipt using pool identity, caller-owned accounts, direction, amount, pool memo/index, output/refund records, and ledger evidence. The adapter treats unavailable, missing, duplicate, capped, evicted, malformed, partial, and refund-incomplete receipt data as pending rather than settled. Because the pinned ICPSwap receipt/history availability is not live-verified here, an unavailable receipt leaves the durable reconciliation fence and account lock in place.
 
-- [transfers.rs lines 44–129](https://github.com/RumiLabsXYZ/rumi-protocol-v2/blob/73d58622e12056a19366bc61135cc927aa39def5/src/rumi_3pool/src/transfers.rs#L44): input/output helpers use no memo, construct timestamps internally, discard ledger block IDs, and return only success/failure.
-- [lib.rs lines 418–561](https://github.com/RumiLabsXYZ/rumi-protocol-v2/blob/73d58622e12056a19366bc61135cc927aa39def5/src/rumi_3pool/src/lib.rs#L418): swap returns an amount; successful event is appended after transfers. Refund/claim paths are not linked to a durable caller intent.
-- [types.rs lines 222–248](https://github.com/RumiLabsXYZ/rumi-protocol-v2/blob/73d58622e12056a19366bc61135cc927aa39def5/src/rumi_3pool/src/types.rs#L222): event lacks request identity and ledger transaction references.
+An unresolved fence has no automatic recovery or blind retry path. `LegSubmitted`, `AwaitingSettlement`, and `ReconciliationRequired` resume by read-only reconciliation of the persisted intent. The lock remains held until exact settlement, a fully reconciled held position, or a definitive pre-debit rejection is persisted. Any future recovery or receipt-capability rollout is separate operator work; this source document does not make it a required gate beyond the existing source-bound settlement invariant.
 
-ICPSwap source `94eeb92ad6ecc2713d38fd3bef48cd4f328a3513`:
+## Source evidence and tests
 
-- [SwapPool.mo line 1784](https://github.com/ICPSwap-Labs/icpswap-v3-service/blob/94eeb92ad6ecc2713d38fd3bef48cd4f328a3513/src/SwapPool.mo#L1784): one-step call returns an amount and accepts no client operation identity; pool creates its own transaction index.
-- [transaction/lib.mo line 183](https://github.com/ICPSwap-Labs/icpswap-v3-service/blob/94eeb92ad6ecc2713d38fd3bef48cd4f328a3513/src/components/transaction/lib.mo#L183): OneStepSwap withdrawal completion does not retain the supplied output ledger index. A zero index cannot be assumed to identify output.
-- [SwapPool.mo line 1516](https://github.com/ICPSwap-Labs/icpswap-v3-service/blob/94eeb92ad6ecc2713d38fd3bef48cd4f328a3513/src/SwapPool.mo#L1516): completed transaction leaves active history for cache. Cache synchronization can remove it. Durable historical availability must be established.
-- Pool-generated eight-byte big-endian transaction-index memo can bind transfers, but receipt memo fields themselves may be absent. Refunds require their related-index linkage and independent ledger validation.
+The implementation is covered by focused Rust tests for:
 
-No validated complete Rumi correlation predicate or deployed ICPSwap receipt-retention contract has been established. Amount/time-only correlation is not accepted as a replacement. Implementing wrappers over these unresolved predicates would not complete the requested executor.
+- runtime persistence before submission, lost responses without replay, restart/upgrade behavior, stale quotes, changed policy generation, pre-debit rejection, partial fills, refunds, route-wide floors, held-lot reservation, terminal checkpoint retry, and default authorization/capacity behavior (`route_runtime` and `route_execution`);
+- exact Rumi receipt identity, source transfer, fee/memo/block binding, delayed or missing receipts, and refund accounting (`route_rumi`);
+- ICPSwap receipt cutoff, bounded retrieval, duplicate/evicted/malformed/partial/refund cases, exact pool memo/index binding, and conservative pending outcomes (`route_icpswap`);
+- scheduler ordering, complete-scan gating, and reconciliation while new trading is disabled (`route_scheduler`);
+- route registry, graph, accounting, policy, storage, lock, Candid, legacy-freeze, and dashboard behavior.
 
-## Recommended cross-repository implementation
+The repository acceptance command is `scripts/check-route-arb-acceptance.sh`. It runs the focused suites, the `route_runtime` library tests, Candid and Stage-1 structural guards, dashboard checks, a release Wasm build, executable-code-size inspection, and `git diff --check`. The full-bot `RUSTFLAGS=-Awarnings cargo test -p arb_bot` passed with zero failures, the equivalent library runtime target `cargo test -p arb_bot --lib route_runtime` passed 11/11, and the acceptance command completed successfully. These commands prove this checkout only; they do not prove deployment or live venue receipt availability.
 
-### 1. Rumi: additive durable swap receipts
+## Required invariant and remaining proof
 
-Keep the existing swap wire contract intact. Add a versioned swap method accepting a caller-scoped 32-byte intent ID, input/output indices, exact input and minimum net output. Add a caller-scoped receipt query. Canonical request hashing binds method version, caller, intent, pool, ledgers, direction, amounts, and minimum.
-
-Persist a receipt before the first ledger call. Each transfer intent stores source/destination accounts, ledger, amount, fee, stable memo and created_at_time before call issuance. Persist returned ledger transaction ID or explicit unresolved outcome. Record input, output and every refund under the same operation identity. Ledger memo support is verified rather than assumed.
-
-A duplicate caller+intent with different request bytes rejects. A duplicate with the same bytes returns the existing receipt and never initiates a second economic operation. An ambiguous submitted transfer is reconciled from the persisted intent using exact ledger evidence; it is never blindly reconstructed or retried. Terminal receipt retention is bounded but must not silently evict receipts required by clients. Capacity is admitted before debit; exhaustion rejects before mutation. Pending receipts survive upgrade and remain queryable.
-
-Do not change pool pricing, fee economics or existing swap callers. The bot will require the new receipt capability for routes containing Rumi. A separate future deployment of that capability is needed for actual live use; source tests cannot prove deployed availability.
-
-### 2. ICPSwap: verified receipt and ledger adapter
-
-Verify the pinned pools' deployed Candid and a durable history source using read-only calls. Establish bounded/resumable retrieval for active, cached and archived receipts. Capture pre-submission history identity and bind exactly one new caller-owned one-step receipt to the persisted request. Validate source input block, pool direction/effective input, output transfer using pool-generated memo, and every linked refund. Fetch records directly; never accept caller-supplied proof booleans. Missing, multiple or evicted matches remain unresolved with lock held. If durable retrieval cannot be established, report that specific adapter unsupported rather than enabling it.
-
-### 3. Arb-bot: durable runtime orchestration
-
-Replace unconditional endpoint stubs only once concrete adapters exist. Persist complete typed requests and operation state, not boolean proof assertions. Acquire the global account lock and reserve storage capacity before preparing a submission. Re-quote the whole selected route after lock acquisition, validate pins/metadata/fees/full-fill/allowance/unencumbered balances/inventory bands/profit, and reject stale or changed policy generation.
-
-Persist LegSubmitted before the non-idempotent update. Every resume from submission reconciles only. Re-quote the remaining route after exact settlement, preserving original principal basis and route-wide minimum profit. Convert deteriorated or partial fills to fully reconciled held lots, reserve all lots before releasing the lock, and never auto-sell them. Unresolved evidence retains ReconciliationRequired and the lock. Completion uses verified net ledger movement for P&L.
-
-Use bounded per-poll evidence budgets, persisted cursors and idempotent callback handling. Invalidate quote selection after mutation and enforce one active route plus canonical-cycle exclusion. Scheduler selection respects the existing stable/ICP book policy. Ship with durable live authorization false and no activation in this task; report compiled support and authorization separately.
-
-## Acceptance before source completion
-
-- Real orchestrator tests with deterministic ledger/pool doubles, asserting outbound call counts and persisted state across each await, timeout, callback and restart.
-- Source-bound success, coincident external credit rejection, changed/missing receipt, wrong accounts/memo/ledger/block, partial fill, refund, lost response, duplicate request/callback, stale quote and changed-config cases.
-- Storage capacity and held-lot reservation admitted before submission; no unreserved held funds or lock release on unknown outcome.
-- Actual stable-memory serialization/upgrade round trips, Candid compatibility for both repositories, no legacy executor revival, retained volume-account serialization.
-- Whole-route economics and backward floors with native fee rounding; full suite and bounded independent review.
-- No deployment, approvals, funding, swaps, or live configuration during implementation.
-
-## Decision requested
-
-Approve extending source work into Rumi Protocol to add the receipt contract above, alongside ICPSwap evidence verification and the arb-bot runtime implementation. This is a concrete cross-repository design decision; the dashboard patch does not depend on it. Deployment and live trading remain separate decisions.
+The accepted six-asset design requires durable intent before submission, no replay after submission, and source-bound input, venue, output, and refund evidence before settlement. The current branch implements and unit-tests those source transitions with deterministic doubles. It does not establish the deployed Rumi receipt API or allowlist, the deployed ICPSwap receipt/history contract, a canister install, or live settlement. Those are separate deployment and operator decisions.

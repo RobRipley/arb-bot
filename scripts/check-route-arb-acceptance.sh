@@ -8,13 +8,16 @@ echo "== Six-asset route-arbitrage acceptance =="
 
 tests=(
   route_registry route_graph route_accounting route_policy route_observation
-  route_storage account_mutation_lock route_execution dashboard_route_ui
+  route_storage account_mutation_lock route_execution route_rumi route_icpswap route_scheduler dashboard_route_ui
   stage1_retirement legacy_freeze state_decode candid
 )
 for test_name in "${tests[@]}"; do
   echo "== cargo test: ${test_name} =="
   RUSTFLAGS=-Awarnings cargo test -p arb_bot --test "$test_name"
 done
+
+echo "== cargo test: route_runtime library module =="
+RUSTFLAGS=-Awarnings cargo test -p arb_bot --lib route_runtime
 
 scripts/check-candid.sh
 scripts/check-stage1-disposition.sh
@@ -35,6 +38,7 @@ sed -n '/<script type="module">/,/<\/script>/p' src/arb_bot/src/dashboard.html \
 node --check --input-type=module < "$dashboard_js"
 echo "PASS: dashboard module JavaScript parses."
 node scripts/test-dashboard-health.cjs
+node scripts/test-dashboard-runtime.cjs
 
 echo "== release Wasm build =="
 cargo clean -p arb_bot
