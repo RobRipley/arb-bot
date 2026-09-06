@@ -1483,6 +1483,8 @@
     let routeLedgerRequestPromise = null;
     let routeLedgerRequestPage = null;
     let routeDataRequestPromise = null;
+    let balanceRequestGeneration = 0;
+    let balanceRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
     let routeRuntimeAuthoritativeRefreshPromise = null;
     let currentExecutionDetailGeneration = 0;
@@ -1829,7 +1831,10 @@
       btn.textContent = 'Login with II';
       btn.onclick = doLogin;
       btn.disabled = false;
+      isAdmin = false;
+      resetRouteWalletForPublicReload();
       await applyAdminUi(false);
+      if (currentConfig) void loadBalances(currentConfig);
       toast('Logged out', 'success');
     };
 
@@ -2112,10 +2117,21 @@
       } catch (e) { markSourceFailed(routeSources.summary, e); console.error('loadSummary:', e); }
     }
 
+    function resetRouteWalletForPublicReload() {
+      balanceRequestGeneration += 1;
+      balanceRequestPromise = null;
+      latestRouteWallet = [];
+      Object.assign(routeSources.wallet, createSourceState());
+    }
+
     async function loadBalances(config) {
+      if (balanceRequestPromise) return balanceRequestPromise;
       const source = routeSources.legacyBalances;
       if (!config) { markSourceUnavailable(source, 'legacy ledger configuration is unavailable'); return; }
-      try {
+      const generation = ++balanceRequestGeneration;
+      let trackedRequest;
+      const request = (async () => {
+       try {
         const botPrincipal = Principal.fromText(canisterId);
         const account = { owner: botPrincipal, subaccount: [] };
         const results = await Promise.allSettled([
@@ -2125,15 +2141,58 @@
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(account)),
+          createBalanceActor(TOKEN_INFO.ckbtc.getLedger()).then(a => a.icrc1_balance_of(account)),
+          createBalanceActor(TOKEN_INFO.cketh.getLedger()).then(a => a.icrc1_balance_of(account)),
         ]);
-        const failed = results.find(result => result.status === 'rejected');
-        if (failed) throw failed.reason;
-        const [b1, b2, b3, b4, b5, b6] = results.map(result => result.value);
-        window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5, bBob: b6 };
-        markSourceFresh(source, window._rawBals);
-      } catch (e) { markSourceFailed(source, e); console.error('loadBalances:', e); }
-      if (state.activeView === 'markets') renderMarkets();
-      if (state.activeView === 'cockpit') renderCockpit();
+        if (generation !== balanceRequestGeneration) return;
+        const value = index => results[index].status === 'fulfilled' ? results[index].value : null;
+        const [b1, b2, b3, b4, b5, b6] = [0, 1, 2, 3, 4, 5].map(value);
+        const legacyFailure = results.slice(0, 6).find(result => result.status === 'rejected');
+        if (legacyFailure) {
+          markSourceFailed(source, legacyFailure.reason);
+        } else {
+          window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5, bBob: b6 };
+          markSourceFresh(source, window._rawBals);
+        }
+        if (!isAdmin) {
+          const pins = [
+            ['IcUsd', 'icUSD', TOKEN_INFO.icusd.getLedger(), 8, 3],
+            ['CkUsdt', 'ckUSDT', TOKEN_INFO.ckusdt.getLedger(), 6, 2],
+            ['CkUsdc', 'ckUSDC', config.ckusdc_ledger.toText(), 6, 1],
+            ['Icp', 'ICP', config.icp_ledger.toText(), 8, 4],
+            ['CkBtc', 'ckBTC', TOKEN_INFO.ckbtc.getLedger(), 8, 6],
+            ['CkEth', 'ckETH', TOKEN_INFO.cketh.getLedger(), 18, 7],
+          ];
+          latestRouteWallet = pins.map(([key, symbol, ledger, decimals, resultIndex]) => {
+            const result = results[resultIndex];
+            const error = result.status === 'rejected' ? String(result.reason?.message || result.reason) : null;
+            return {
+              asset: { [key]: null }, symbol, ledger: Principal.fromText(ledger), expected_decimals: decimals,
+              observed_decimals: [], ledger_fee_native: [],
+              balance_native: result.status === 'fulfilled' ? [result.value] : [],
+              metadata_valid: true, error: error ? [error] : [], public_read: true,
+            };
+          });
+          if (results.slice(0, 8).some(result => result.status === 'fulfilled')) {
+            markSourceFresh(routeSources.wallet, latestRouteWallet);
+          } else {
+            markSourceUnavailable(routeSources.wallet, 'public ledger balance queries failed');
+            routeSources.wallet.value = latestRouteWallet;
+          }
+        }
+       } catch (e) {
+         if (generation === balanceRequestGeneration) markSourceFailed(source, e);
+         console.error('loadBalances:', e);
+       }
+       if (generation !== balanceRequestGeneration) return;
+       if (state.activeView === 'markets') renderMarkets();
+       if (state.activeView === 'cockpit') renderCockpit();
+      })();
+      trackedRequest = request.finally(() => {
+        if (balanceRequestPromise === trackedRequest) balanceRequestPromise = null;
+      });
+      balanceRequestPromise = trackedRequest;
+      return trackedRequest;
     }
 
     async function loadVolumeBalances(config) {
@@ -2775,7 +2834,7 @@
         const balance = row && routeOpt(row.balance_native) != null ? routeNativeAmount(routeOpt(row.balance_native), row.asset)
           : walletState === 'failed' || walletState === 'unavailable' ? 'Unavailable' : '—';
         const err = row ? routeOpt(row.error) : null;
-        const metadata = row ? (row.metadata_valid ? 'metadata pinned' : 'metadata mismatch') : (isAdmin ? 'loading…' : 'log in to query');
+        const metadata = row ? (row.public_read ? 'public ledger balance' : row.metadata_valid ? 'metadata pinned' : 'metadata mismatch') : 'loading…';
         const sourceMeta = walletState === 'stale' ? `Stale · ${sourceLastSuccessLabel(walletSource)} · ${err || metadata}`
           : walletState === 'failed' || walletState === 'unavailable' ? `Unavailable${routeSourceError(walletSource)}`
           : walletState === 'loading' && isAdmin ? 'Loading…'
@@ -3314,12 +3373,25 @@
         void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration, true);
         latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
         routeArbConfig = routeConfig || null;
-        if (authenticatedActor) {
-          await querySource('wallet', typeof authenticatedActor.get_route_wallet_balances_v1 === 'function' ? () => authenticatedActor.get_route_wallet_balances_v1() : null, 'route wallet');
-          latestRouteWallet = routeSources.wallet.value || [];
+        if (authenticatedActor && isAdmin) {
+          let walletActor = authenticatedActor;
+          let walletLoaded = false;
+          for (let attempt = 0; attempt < 2 && walletActor && isAdmin; attempt += 1) {
+            await querySource('wallet', typeof walletActor.get_route_wallet_balances_v1 === 'function' ? () => walletActor.get_route_wallet_balances_v1() : null, 'route wallet');
+            if (authenticatedActor === walletActor && isAdmin) {
+              walletLoaded = true;
+              break;
+            }
+            walletActor = authenticatedActor;
+          }
+          if (walletLoaded) {
+            latestRouteWallet = routeSources.wallet.value || [];
+          } else {
+            resetRouteWalletForPublicReload();
+            if (!isAdmin && currentConfig) await loadBalances(currentConfig);
+          }
         } else {
-          markSourceUnavailable(routeSources.wallet, 'route wallet requires authentication');
-          latestRouteWallet = [];
+          // loadBalances() supplies direct public ledger reads for visitors and non-admin sessions.
         }
       })().finally(() => { routeDataRequestPromise = null; });
       return routeDataRequestPromise;
@@ -3628,12 +3700,13 @@
               ${ROUTE_ASSET_ORDER.map(key => {
                 const row = latestRouteWallet.find(b => routeAssetKey(b.asset) === key);
                 const amount = row ? routeOpt(row.balance_native) : null;
+                const rowError = row ? routeOpt(row.error) : null;
                 const sym = ROUTE_ASSET_LABELS[key];
                 const walletState = routeSourceState('wallet');
                 const displayAmount = amount == null
-                  ? (walletState === 'failed' || walletState === 'unavailable' ? sourceStateLabel('wallet') : '—')
+                  ? (rowError ? 'Unavailable' : walletState === 'failed' || walletState === 'unavailable' ? sourceStateLabel('wallet') : '—')
                   : routeNativeAmount(amount, row.asset);
-                return `<div class="bal-row">${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val">${esc(displayAmount)}</span></div>`;
+                return `<div class="bal-row"${rowError ? ` title="${esc(rowError)}"` : ''}>${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val${rowError ? ' negative' : ''}">${esc(displayAmount)}</span></div>`;
               }).join('')}
             </div>
           </div>

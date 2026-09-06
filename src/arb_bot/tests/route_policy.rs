@@ -79,3 +79,12 @@ fn wallet_report_contains_all_assets_and_exposes_read_failures() {
     assert_eq!(btc.balance_native, Some(0));
     assert!(btc.metadata_valid);
 }
+
+#[test]
+fn route_wallet_balance_diagnostics_remain_admin_gated() {
+    let source = include_str!("../src/lib.rs");
+    let tail = source.split("fn get_route_wallet_balances_v1").nth(1).unwrap();
+    let body = tail.split("\n#[").next().unwrap();
+    assert!(body.contains("require_admin()"));
+    assert!(body.contains("read_wallet_balances(ic_cdk::id())"));
+}
