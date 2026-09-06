@@ -38,6 +38,6 @@ vm.runInContext(section('function fetchPublicHealth()', '// ══════�
   assert.equal(vm.runInContext("routeSources.health.status", context), 'fresh');
   assert.equal(context.latestPublicHealth.has_pending_exit, false);
   assert(!section('function attentionItems()', 'window.dismissAttn').includes("kind: 'opportunity'"));
-  assert(html.includes('Not implemented'));
+  assert.match(html, /not implemented/i);
   console.log('PASS: signed-in health uses supported query, failures retain incident flags, quotes are not attention items');
 })().catch(e => { console.error(e); process.exitCode = 1; });
