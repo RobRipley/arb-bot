@@ -11,6 +11,11 @@ use ic_stable_structures::{
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
 
+/// Maximum number of execution detail rows retained in the current-state
+/// index. Terminal execution records remain independently bounded by their
+/// existing 10,000-entry history cap.
+pub const HARD_MAX_ROUTE_EXECUTION_DETAILS: u64 = 10_000;
+
 fn default_principal() -> Principal {
     Principal::anonymous()
 }
@@ -1904,6 +1909,8 @@ pub fn put_route_execution_detail(
                 }
                 return Err("terminal route execution detail changed on retry".into());
             }
+        } else if map.len() >= HARD_MAX_ROUTE_EXECUTION_DETAILS {
+            return Err("route execution detail capacity exhausted".into());
         }
         map.insert(detail.record.execution_id.clone(), detail);
         Ok(())

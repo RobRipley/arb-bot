@@ -682,6 +682,9 @@ pub async fn prepare_with<I: RuntimeIo>(
     s.current = Some(ex.clone());
     save(&s)?;
     state::put_current_route_execution(ex.record.clone())?;
+    // Establish the detail row before the first quote await. A crash or
+    // upgrade at that boundary must leave an explicit, quote-only read model.
+    state::put_route_execution_detail(detail_for(&ex))?;
     reserve_active(&ex, true)?;
     let result = async {
         let item = route_item(&ex, false)?;
@@ -918,6 +921,8 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
     match response {
         RuntimeSubmissionOutcome::Accepted => {
             ex.record.incident = None;
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::AwaitingSettlement;
         }
         RuntimeSubmissionOutcome::Unknown(e) => {
             let incident = e.chars().take(512).collect::<String>();
@@ -1181,6 +1186,7 @@ mod tests {
         refunded: Cell<bool>,
         fail_quote: Cell<bool>,
         change_generation: Cell<bool>,
+        accepted: Cell<bool>,
         calls: RefCell<Vec<RuntimeRequest>>,
     }
     fn quoted(item: &RouteWorkItem, now: u64) -> RouteCandidateReportV1 {
@@ -1245,6 +1251,11 @@ mod tests {
                     state::get_mutation_lock().is_some(),
                     "whole/tail quote must hold account lock"
                 );
+                let execution = state::get_current_route_execution().expect("planned record");
+                let detail = state::get_route_execution_detail(&execution.execution_id)
+                    .unwrap()
+                    .expect("detail must exist before first quote await");
+                assert!(detail.detail_available);
                 self.quotes.set(self.quotes.get() + 1);
                 if self.change_generation.get() {
                     state::mutate_state(|s| s.route_arb_config_generation += 1);
@@ -1300,6 +1311,8 @@ mod tests {
                     RuntimeSubmissionOutcome::RejectedBeforeDebit(
                         "capacity refused before debit".into(),
                     )
+                } else if self.accepted.get() {
+                    RuntimeSubmissionOutcome::Accepted
                 } else {
                     RuntimeSubmissionOutcome::Unknown("lost response".into())
                 }
@@ -1399,6 +1412,48 @@ mod tests {
         assert!(state::get_mutation_lock().is_none());
         assert!(status().unwrap().last_realized_profit.unwrap() > 0);
         assert!(block_on(advance_with(&io, &ex.execution_id)).is_err());
+    }
+    #[test]
+    fn accepted_submission_persists_awaiting_settlement_leg_status() {
+        let (io, route) = setup(1);
+        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        io.accepted.set(true);
+        assert_eq!(
+            block_on(advance_with(&io, &ex.execution_id)).unwrap().phase,
+            ExecutionPhaseV1::AwaitingSettlement
+        );
+        let detail = state::get_route_execution_detail(&ex.execution_id)
+            .unwrap()
+            .expect("execution detail");
+        assert_eq!(detail.legs[0].status, RouteExecutionLegStatusV1::AwaitingSettlement);
+        assert!(detail.legs[0].submitted_at_ns.is_some());
+        assert_eq!(
+            block_on(reconcile_with(&io, &ex.execution_id)).unwrap().phase,
+            ExecutionPhaseV1::LegSettled
+        );
+        let settled = state::get_route_execution_detail(&ex.execution_id)
+            .unwrap()
+            .expect("settled execution detail");
+        assert_eq!(settled.legs[0].status, RouteExecutionLegStatusV1::Settled);
+        assert!(settled.legs[0].actual_output_credit_native.is_some());
+    }
+    #[test]
+    fn pre_detail_runtime_json_decodes_without_inferred_leg_facts() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        old_runtime["current"]
+            .as_object_mut()
+            .unwrap()
+            .remove("leg_traces");
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+        let recovered = load().unwrap().current.unwrap();
+        assert_eq!(recovered.record.execution_id, record.execution_id);
+        let detail = route_execution_detail(&recovered);
+        assert!(!detail.detail_available);
+        assert!(detail.legs.is_empty());
     }
     #[test]
     fn changed_generation_during_whole_quote_aborts_and_releases_unused_lock() {

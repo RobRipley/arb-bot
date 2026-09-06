@@ -126,6 +126,34 @@ fn detail_map_is_empty_for_pre_detail_runtime_without_changing_current_record() 
 }
 
 #[test]
+fn detail_index_has_total_entry_cap_but_allows_idempotent_replacement() {
+    let mut first_inserted = None;
+    let mut inserted = 0u64;
+    for index in 0..arb_bot::state::HARD_MAX_ROUTE_EXECUTION_DETAILS {
+        let mut detail = detail_fixture();
+        detail.record.execution_id = format!("route-storage-capacity-{index}");
+        match arb_bot::state::put_route_execution_detail(detail.clone()) {
+            Ok(()) => {
+                inserted += 1;
+                first_inserted.get_or_insert(detail);
+            }
+            Err(error) => {
+                assert!(error.contains("capacity"));
+                break;
+            }
+        }
+    }
+    assert!(inserted >= arb_bot::state::HARD_MAX_ROUTE_EXECUTION_DETAILS - 3);
+    let existing = first_inserted.expect("capacity fixture insertion");
+    arb_bot::state::put_route_execution_detail(existing.clone()).unwrap();
+    let mut new_detail = existing;
+    new_detail.record.execution_id = "route-storage-capacity-overflow".into();
+    assert!(arb_bot::state::put_route_execution_detail(new_detail)
+        .unwrap_err()
+        .contains("capacity"));
+}
+
+#[test]
 fn durable_lock_is_exclusive_and_owner_bound() {
     arb_bot::state::release_mutation_lock_for_test();
     let first = arb_bot::state::acquire_mutation_lock(
