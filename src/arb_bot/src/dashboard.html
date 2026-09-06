@@ -1450,6 +1450,8 @@
     let terminalExecutionsIncomplete = false;
     let terminalExecutionsLoadedCount = 0;
     let routeDataRequestPromise = null;
+    let routeRuntimeQueryGeneration = 0;
+    let routeRuntimeAuthoritativeRefreshPromise = null;
     let healthRequestPromise = null;
     let publicHealthRequestPromise = null;
     let latestSnapshot = null;
@@ -2656,10 +2658,10 @@
       if (pending) {
         return {
           state: 'Applying',
-          label: pending === 'starting' ? 'Starting' : 'Stopping',
+          label: 'Applying',
           targetOn: pending === 'starting',
           gatesOn: Boolean(latestRouteRuntime && latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run),
-          reason: pending === 'starting' ? 'Applying start request' : 'Applying stop request',
+          reason: pending === 'starting' ? 'Starting automatic arbitrage' : 'Stopping new trades',
         };
       }
       const runtimeState = typeof routeSourceState === 'function'
@@ -2678,7 +2680,7 @@
       }
       return gatesOn
         ? { state: 'On', label: 'On', targetOn: true, gatesOn, reason: 'All runtime gates are enabled' }
-        : { state: 'Off', label: 'Stopped', targetOn: false, gatesOn, reason: 'New trades are stopped' };
+        : { state: 'Off', label: 'Off', targetOn: false, gatesOn, reason: 'New trades are stopped' };
     }
     function routeRuntimeHtml() {
       const runtime = latestRouteRuntime;
@@ -2693,7 +2695,7 @@
       const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
       const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
       const decimals = unit === 'ICP' ? 8 : 6;
-      const toggle = isAdmin ? `<button type="button" class="lever-toggle${pressed ? ' on' : ''}${automation.state === 'Applying' ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="Automatic arbitrage ${automation.label.toLowerCase()}" title="${automation.state === 'Off' ? 'Start arbitrage' : automation.state === 'On' ? 'Stop new trades' : automation.label}" ${canToggle ? `onclick="setRouteTrading(${!pressed})"` : 'disabled'}><span>${esc(automation.label)}</span></button>` : '';
+      const toggle = isAdmin ? `<button type="button" class="lever-toggle${pressed ? ' on' : ''}${automation.state === 'Applying' ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="Automatic arbitrage ${automation.label.toLowerCase()}" title="${automation.state === 'Off' ? 'Start arbitrage' : automation.state === 'On' ? 'Stop new trades' : automation.reason}" ${canToggle ? `onclick="setRouteTrading(${!pressed})"` : 'disabled'}><span>${esc(automation.label)}</span></button>` : '';
       const reason = automation.reason ? `<div class="route-wallet-meta">${esc(automation.reason)}${runtimeState === 'stale' ? ` · ${esc(sourceLastSuccessLabel(routeSources.runtime))}` : ''}</div>` : '';
       return `<div class="card" style="margin-top:var(--sp-4)" data-route-automation-state="${automation.state}"><div class="card-header">Automatic arbitrage</div>
         <div class="route-list-row"><span>${esc(runtimeDisplay)}</span>${toggle}</div>
@@ -2701,6 +2703,50 @@
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
         <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
+    }
+    async function refreshRouteRuntimeAuthoritative() {
+      if (routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
+      const generation = ++routeRuntimeQueryGeneration;
+      const drain = routeDataRequestPromise;
+      const refresh = (async () => {
+        if (drain) await drain;
+        const source = routeSources.runtime;
+        if (!anonymousActor || typeof anonymousActor.get_route_runtime_status_v1 !== 'function') {
+          markSourceUnavailable(source, 'runtime status is unavailable');
+          return latestRouteRuntime;
+        }
+        try {
+          const value = await anonymousActor.get_route_runtime_status_v1();
+          if (generation !== routeRuntimeQueryGeneration) return latestRouteRuntime;
+          if (value && Object.prototype.hasOwnProperty.call(value, 'Err')) {
+            markSourceFailed(source, value.Err);
+            return latestRouteRuntime;
+          }
+          const attemptMs = Date.now();
+          const observedAtMs = routeRuntimePayloadTimestampMs(value, attemptMs);
+          if (observedAtMs == null) {
+            markSourceFailed(source, 'runtime status freshness timestamp unavailable', attemptMs);
+            return latestRouteRuntime;
+          }
+          markSourceFresh(source, value, observedAtMs);
+          source.lastAttemptMs = attemptMs;
+          latestRouteRuntime = value && value.Ok ? value.Ok : null;
+          return latestRouteRuntime;
+        } catch (e) {
+          markSourceFailed(source, e);
+          return latestRouteRuntime;
+        }
+      })();
+      let trackedRefresh;
+      trackedRefresh = refresh.finally(() => {
+        if (routeRuntimeAuthoritativeRefreshPromise === trackedRefresh) routeRuntimeAuthoritativeRefreshPromise = null;
+      });
+      routeRuntimeAuthoritativeRefreshPromise = trackedRefresh;
+      return trackedRefresh;
+    }
+    function renderRouteAutomationViews() {
+      if (typeof renderAll === 'function') renderAll();
+      else if (typeof renderOps === 'function') renderOps();
     }
     window.setRouteTrading = function(enabled) {
       if (!requireAuth()) return;
@@ -2716,19 +2762,19 @@
               unwrapResult(await authenticatedActor.set_route_arb_config_v1({ ...config, enabled: true, dry_run: false }));
             }
             unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
-            await loadRouteData();
+            await refreshRouteRuntimeAuthoritative();
             // The mutation response is intentionally ignored. Clear Applying
             // only after the runtime query has completed so the next paint is
             // derived from authoritative state rather than optimistic state.
             if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
-            renderAll();
+            renderRouteAutomationViews();
             const refreshed = routeAutomationState();
             if ((enabled && refreshed.state !== 'On') || (!enabled && refreshed.state !== 'Off')) throw new Error(`runtime refresh reported ${refreshed.label}`);
             toast(`${refreshed.label} — confirmed by runtime refresh`, 'success');
-          } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await loadRouteData(); renderAll(); }
+          } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await refreshRouteRuntimeAuthoritative(); renderRouteAutomationViews(); }
           finally {
             if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
-            if (typeof renderOps === 'function') renderOps();
+            renderRouteAutomationViews();
           }
         }
       });
@@ -2812,7 +2858,9 @@
     }
 
     async function loadRouteData() {
+      if (typeof routeRuntimeAuthoritativeRefreshPromise !== 'undefined' && routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
+      const requestGeneration = typeof routeRuntimeQueryGeneration === 'number' ? ++routeRuntimeQueryGeneration : null;
       routeDataRequestPromise = (async () => {
         const querySource = async (name, fn, label, variantResult = false, successTimestampMs = null) => {
           const source = routeSources[name];
@@ -2854,7 +2902,9 @@
           querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true, routeRuntimePayloadTimestampMs),
         ]);
         latestRouteStatus = status;
-        latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
+        if (requestGeneration == null || requestGeneration === routeRuntimeQueryGeneration) {
+          latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
+        }
         latestRouteObservation = routeOpt(obs);
         latestRouteCandidates = candidates;
         latestRouteLock = routeOpt(lock);
