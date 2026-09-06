@@ -9,9 +9,9 @@ fn default_observation_universe_is_complete_and_bounded() {
     let config = RouteArbConfigV1::default();
     let universe = build_work_universe(&config).expect("valid defaults");
     assert_eq!(config.max_route_legs, 3, "four-leg support is available but expands only by config");
-    assert_eq!(universe.route_count, 246);
-    assert_eq!(universe.items.len(), 972);
-    assert_eq!(universe.required_quote_calls, 2_644);
+    assert_eq!(universe.route_count, 203);
+    assert_eq!(universe.items.len(), 800);
+    assert_eq!(universe.required_quote_calls, 2_204);
     assert!(universe.required_quote_calls <= u64::from(config.max_quote_calls_per_observation));
     assert!(universe.items.windows(2).all(|pair| pair[0].work_id < pair[1].work_id));
     assert!(universe.items.iter().all(|item| item.principal_native > 0));
@@ -25,6 +25,36 @@ fn disabled_assets_and_pools_remove_dependent_routes_instead_of_repointing() {
     let universe = build_work_universe(&config).unwrap();
     assert!(universe.items.iter().all(|item| !item.route.asset_path.contains(&Asset::CkBtc)));
     assert!(universe.items.iter().all(|item| item.route.edges.iter().all(|edge| edge.pool_id != "icpswap-icp-ckusdc")));
+}
+
+#[test]
+fn default_stable_exit_protection_blocks_wrapped_stable_to_icusd_only() {
+    let config = RouteArbConfigV1::default();
+    assert_eq!(config.allow_wrapped_stable_to_icusd, None);
+    let universe = build_work_universe(&config).unwrap();
+    assert!(universe.items.iter().all(|item| {
+        !(matches!(item.route.start_asset(), Asset::CkUsdc | Asset::CkUsdt)
+            && item.route.end_asset() == Asset::IcUsd)
+    }));
+    assert!(universe.items.iter().any(|item| {
+        item.route.start_asset() == Asset::IcUsd
+            && item.route.end_asset() == Asset::IcUsd
+    }));
+    assert!(universe.items.iter().any(|item| {
+        matches!(item.route.start_asset(), Asset::CkUsdc | Asset::CkUsdt)
+            && item.route.end_asset() == item.route.start_asset()
+    }));
+}
+
+#[test]
+fn stable_exit_protection_can_be_explicitly_enabled() {
+    let mut config = RouteArbConfigV1::default();
+    config.allow_wrapped_stable_to_icusd = Some(true);
+    let universe = build_work_universe(&config).unwrap();
+    assert!(universe.items.iter().any(|item| {
+        matches!(item.route.start_asset(), Asset::CkUsdc | Asset::CkUsdt)
+            && item.route.end_asset() == Asset::IcUsd
+    }));
 }
 
 #[test]

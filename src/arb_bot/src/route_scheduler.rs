@@ -17,20 +17,34 @@ pub fn next_action(status: &RuntimeStatus, has_current: bool, observation: Optio
         Some(_) => TickAction::StartObservation,
     }
 }
-thread_local! { static BUSY: Cell<bool> = const { Cell::new(false) }; }
+thread_local! { static BUSY: Cell<Option<u64>> = const { Cell::new(None) }; }
+pub fn in_flight_since_ns() -> Option<u64> { BUSY.with(Cell::get) }
 struct TickGuard;
 impl TickGuard {
     fn enter() -> Option<Self> {
-        BUSY.with(|b| if b.replace(true) { None } else { Some(Self) })
+        Self::enter_at(ic_cdk::api::time())
+    }
+
+    fn enter_at(started_ns: u64) -> Option<Self> {
+        BUSY.with(|b| {
+            if b.get().is_some() {
+                None
+            } else {
+                b.set(Some(started_ns));
+                Some(Self)
+            }
+        })
     }
 }
-impl Drop for TickGuard { fn drop(&mut self) { BUSY.with(|b|b.set(false)); } }
+impl Drop for TickGuard { fn drop(&mut self) { BUSY.with(|b|b.set(None)); } }
 
 /// One batch or one executor transition per timer tick, with no overlapping
 /// scheduler batches. Manual observation changes are still checked by cursor
 /// and policy generation at the durable commit boundary.
 pub async fn tick() -> Result<(), String> {
-    let Some(_guard) = TickGuard::enter() else { return Ok(()); };
+    let Some(_guard) = TickGuard::enter() else {
+        return Ok(());
+    };
     let status = route_runtime::status()?;
     let current = route_runtime::has_current()?;
     let observation = state::read_state(|s| s.route_observation.clone());
@@ -42,4 +56,28 @@ pub async fn tick() -> Result<(), String> {
     };
     route_runtime::note_scheduler_result(&result)?;
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_tick_exposes_in_flight_start_without_faking_completed_heartbeat() {
+        state::init_state(state::BotState::default());
+        route_runtime::set_scheduler_observability_for_test(
+            500,
+            Some("prior scheduler error".to_owned()),
+        )
+        .unwrap();
+
+        let guard = TickGuard::enter_at(100).unwrap();
+        assert!(TickGuard::enter_at(100).is_none());
+        let in_flight = route_runtime::status().unwrap();
+        assert_eq!(in_flight.scheduler_in_flight_since_ns, Some(100));
+        assert_eq!(in_flight.last_tick_ns, 500);
+        assert_eq!(in_flight.last_error.as_deref(), Some("prior scheduler error"));
+        drop(guard);
+        assert_eq!(route_runtime::status().unwrap().scheduler_in_flight_since_ns, None);
+    }
 }

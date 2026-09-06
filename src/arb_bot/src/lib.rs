@@ -282,10 +282,13 @@ fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
 }
 
 #[update]
-fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
+fn set_route_arb_config_v1(mut config: route_arb::RouteArbConfigV1) -> Result<(), String> {
     require_admin();
-    route_arb::validate_route_config(&config)?;
     state::mutate_state(|s| {
+        // This field has a dedicated setter so a stale full-record client
+        // cannot silently undo the inventory-protection policy.
+        config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd;
+        route_arb::validate_route_config(&config)?;
         s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
             .ok_or_else(|| "route config generation exhausted".to_string())?;
         s.route_arb = config;
@@ -293,6 +296,25 @@ fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), St
         Ok::<(), String>(())
     })?;
     Ok(())
+}
+
+#[update]
+fn set_wrapped_stable_to_icusd_allowed_v1(
+    allowed: bool,
+) -> Result<route_arb::RouteArbConfigV1, String> {
+    require_admin();
+    state::mutate_state(|s| {
+        let mut next = s.route_arb.clone();
+        next.allow_wrapped_stable_to_icusd = Some(allowed);
+        route_arb::validate_route_config(&next)?;
+        s.route_arb_config_generation = s
+            .route_arb_config_generation
+            .checked_add(1)
+            .ok_or_else(|| "route config generation exhausted".to_string())?;
+        s.route_arb = next.clone();
+        s.route_observation = None;
+        Ok(next)
+    })
 }
 
 #[query]

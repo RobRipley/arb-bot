@@ -266,3 +266,15 @@ fn pre_router_state_decodes_with_inert_route_policy() {
     assert!(!decoded.route_arb.enabled);
     assert!(decoded.route_arb.dry_run);
 }
+
+#[test]
+fn old_route_policy_without_stable_exit_field_defaults_to_protected() {
+    let mut value = serde_json::to_value(BotState::default()).expect("serialize");
+    let route = value
+        .get_mut("route_arb")
+        .and_then(|r| r.as_object_mut())
+        .expect("route policy object");
+    assert!(route.remove("allow_wrapped_stable_to_icusd").is_some());
+    let decoded: BotState = serde_json::from_value(value).expect("decode old route policy");
+    assert_eq!(decoded.route_arb.allow_wrapped_stable_to_icusd, None);
+}

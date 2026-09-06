@@ -1,9 +1,11 @@
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const html=fs.readFileSync('src/arb_bot/src/dashboard.html','utf8');
-const code=html.slice(html.indexOf('    function routeTradingLabel()'),html.indexOf('    function routeArbitrageHtml()'));
+const helperCode=html.slice(html.indexOf('    function routeRuntimeInFlightState('),html.indexOf('    function routeCandidateQuoteState('));
+const code=helperCode+html.slice(html.indexOf('    function routeTradingLabel()'),html.indexOf('    function routeArbitrageHtml()'));
+const freshnessCode=html.slice(html.indexOf('    function routeTimestampMs('),html.indexOf('    function routeQuoteStaleAfterMs('));
 let modal; const calls=[]; const events=[]; const toasts=[]; let resolveConfig; let drainResolve;
-const status={compiled_support:true,live_authorized:false,enabled:true,dry_run:true,last_error:[],last_realized_profit:[],last_profit_class:[]};
-const ctx=vm.createContext({latestRouteRuntime:null,routeSources:{runtime:{state:'loading'}},ROUTE_RUNTIME_STALE_AFTER_MS:30000,state:{levers:{}},routeDataRequestPromise:null,routeRuntimeQueryGeneration:0,routeRuntimeAuthoritativeRefreshPromise:null,window:{},isAdmin:true,routeOpt:x=>x?.[0]??null,esc:String,variantKey:x=>Object.keys(x)[0],
+const status={compiled_support:true,live_authorized:false,enabled:true,dry_run:true,last_error:[],last_realized_profit:[],last_profit_class:[],scheduler_in_flight_since_ns:[]};
+const ctx=vm.createContext({latestRouteRuntime:null,routeSources:{runtime:{state:'loading'}},ROUTE_RUNTIME_STALE_AFTER_MS:30000,SCHEDULER_NO_PROGRESS_CEILING_MS:600000,state:{levers:{}},routeDataRequestPromise:null,routeRuntimeQueryGeneration:0,routeRuntimeAuthoritativeRefreshPromise:null,window:{},isAdmin:true,routeOpt:x=>x?.[0]??null,routeTimestampMs:x=>Number(x)/1e6,routeAge:()=> '2.0m',esc:String,variantKey:x=>Object.keys(x)[0],
   routeSourceState:()=>ctx.routeSources.runtime.state || (ctx.latestRouteRuntime?'fresh':'loading'),sourceLastSuccessLabel:()=> 'just now',
   routeRuntimePayloadTimestampMs:()=>Date.now(),
   markSourceFresh:(source,value)=>{source.state='fresh';source.value=value},markSourceFailed:(source,error)=>{source.state='failed';source.error=String(error)},markSourceUnavailable:(source,error)=>{source.state='unavailable';source.error=String(error)},
@@ -15,6 +17,11 @@ const ctx=vm.createContext({latestRouteRuntime:null,routeSources:{runtime:{state
   loadRouteData:async()=>{ctx.latestRouteRuntime={...status,live_authorized:calls.some(c=>c[0]==='authorize'&&c[1]),dry_run:false};ctx.routeSources.runtime.state='fresh'},renderAll(){events.push(`renderAll:${ctx.state.levers.routeAutomation||'clear'}`)},toast:(message,kind)=>toasts.push([message,kind])});
 vm.runInContext(code,ctx);
 (async()=>{
+  const nowMs=1_000_000;
+  const freshCtx=vm.createContext({Date:{now:()=>nowMs},routeOpt:x=>x?.[0]??null,SCHEDULER_NO_PROGRESS_CEILING_MS:600000});
+  vm.runInContext(freshnessCode,freshCtx);
+  assert.equal(vm.runInContext('routeRuntimePayloadTimestampMs({last_tick_ns:1n,scheduler_in_flight_since_ns:[900000000000n],live_authorized:true,enabled:true,dry_run:false},1000000)',freshCtx),1000000);
+  assert.equal(vm.runInContext('routeRuntimePayloadTimestampMs({last_tick_ns:500000000000n,scheduler_in_flight_since_ns:[100000000000n],live_authorized:true,enabled:true,dry_run:false},1000000)',freshCtx),500000);
   assert.equal(vm.runInContext('routeAutomationState().state',ctx),'Unknown');
   assert.equal(vm.runInContext('routeAutomationState().label',ctx),'Unknown');
   assert(!vm.runInContext('routeRuntimeHtml()',ctx).includes('onclick='));
@@ -40,6 +47,9 @@ vm.runInContext(code,ctx);
   assert.equal(calls[0][1].max_route_legs,3);assert.deepEqual(calls[1],['authorize',true]);
   assert.equal(vm.runInContext('routeAutomationState().state',ctx),'On');
   assert.equal(vm.runInContext('routeAutomationState().label',ctx),'On');
+  ctx.latestRouteRuntime={...ctx.latestRouteRuntime,scheduler_in_flight_since_ns:[BigInt(Date.now())*1000000n]};
+  assert.equal(vm.runInContext('routeAutomationState().state',ctx),'On');
+  assert.equal(vm.runInContext('routeAutomationState().label',ctx),'Scanning');
   assert(events.indexOf('runtime-query') > events.indexOf('authorize'), 'runtime query must start after authorization mutation');
   assert(events.some(event => event.startsWith('renderAll:')), 'clear Applying must repaint the mounted views');
   assert(toasts.some(([message,kind])=>kind==='success' && message.includes('confirmed by runtime refresh')));

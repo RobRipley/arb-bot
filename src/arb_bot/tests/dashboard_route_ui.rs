@@ -184,6 +184,21 @@ fn dashboard_assigns_content_to_unique_owners() {
 }
 
 #[test]
+fn ops_exposes_default_on_ck_stable_protection_as_a_toggle() {
+    let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
+    let dashboard = include_str!("../src/dashboard.html");
+    assert!(ops.contains("Protect ck stables"));
+    assert!(ops.contains("leverStableExitProtection()"));
+    assert!(ops.contains("allow_wrapped_stable_to_icusd"));
+    assert!(ops.contains("'routeArbConfig'"));
+    assert!(dashboard.contains("set_wrapped_stable_to_icusd_allowed_v1"));
+    assert!(dashboard.contains("markSourceFailed(routeSources.routeArbConfig"));
+    assert!(dashboard.contains("markSourceUnavailable(routeSources.observation"));
+    assert!(dashboard.contains("markSourceUnavailable(routeSources.candidates"));
+    assert!(dashboard.contains("await loadRouteData()"));
+}
+
+#[test]
 fn diagnostics_owns_low_level_route_evidence_without_copying_cockpit_content() {
     let diagnostics = rendered_region("function renderDiagnostics()", "// ═══════ Ledger");
     let operations = rendered_region("function routeOperationsHtml()", "function manualQuoteScanState");

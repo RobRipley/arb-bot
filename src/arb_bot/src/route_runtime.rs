@@ -115,6 +115,8 @@ pub struct RuntimeStatus {
     pub dry_run: bool,
     pub last_error: Option<String>,
     pub last_tick_ns: u64,
+    /// Start time of the currently executing scheduler callback, when any.
+    pub scheduler_in_flight_since_ns: Option<u64>,
     /// Stable-par USD6 or ICP e8s, based on attributable completed movements.
     pub last_realized_profit: Option<i128>,
     pub last_profit_class: Option<CandidateClass>,
@@ -308,6 +310,7 @@ pub fn status() -> Result<RuntimeStatus, String> {
         dry_run: c.dry_run,
         last_error: s.last_error,
         last_tick_ns: s.last_tick_ns,
+        scheduler_in_flight_since_ns: crate::route_scheduler::in_flight_since_ns(),
         last_profit_class: s.last_terminal.as_ref().map(|e| e.original.candidate_class),
         last_realized_profit: s.last_terminal.and_then(|e| e.realized_profit),
     })
@@ -1362,6 +1365,17 @@ pub fn note_scheduler_result(result: &Result<(), String>) -> Result<(), String> 
     let mut s = load()?;
     s.last_tick_ns = ic_cdk::api::time();
     s.last_error = result.as_ref().err().map(|e| e.chars().take(512).collect());
+    save(&s)
+}
+
+#[cfg(test)]
+pub(crate) fn set_scheduler_observability_for_test(
+    last_tick_ns: u64,
+    last_error: Option<String>,
+) -> Result<(), String> {
+    let mut s = load()?;
+    s.last_tick_ns = last_tick_ns;
+    s.last_error = last_error;
     save(&s)
 }
 
