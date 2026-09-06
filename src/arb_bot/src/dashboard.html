@@ -1472,6 +1472,9 @@
           && Number.isFinite(staleAfterMs) && nowMs - source.lastSuccessMs >= staleAfterMs) return 'stale';
       return source.status;
     }
+    function sourceLastSuccessLabel(source) {
+      return source.lastSuccessMs == null ? 'last success unknown' : `as of ${new Date(source.lastSuccessMs).toLocaleTimeString()}`;
+    }
     const routeSources = {
       status: createSourceState(),
       observation: createSourceState(),
@@ -1901,9 +1904,10 @@
       currentWedgeKey = key;
       if (wedgeDismissedKey === key) { el.classList.remove('show'); el.innerHTML = ''; return; }
       const message = latestHealthReport ? wedgeMessage(conditions, latestHealthReport) : 'Pending exits or stranded volume funds need review in Operations.';
+      const healthStamp = healthStale ? ` · ${sourceLastSuccessLabel(routeSources.health)}` : '';
       el.classList.add('show');
       el.innerHTML = `
-        <div class="wedge-banner-msg"><span class="wedge-dot"></span><span><strong>${healthStale ? 'Health status stale.' : healthUnavailable ? 'Health status unavailable.' : 'Cycle may be stuck.'}</strong> ${esc(message)}</span></div>
+        <div class="wedge-banner-msg"><span class="wedge-dot"></span><span><strong>${healthStale ? 'Health status stale' : healthUnavailable ? 'Health status unavailable.' : 'Cycle may be stuck.'}${healthStamp}</strong> ${esc(message)}</span></div>
         <div class="wedge-banner-actions">
           <button class="btn btn-sm btn-ghost" onclick="goTo('markets')">View market</button>
           ${isAdmin ? `<button class="btn btn-sm btn-danger" onclick="goTo('ops')">Open incident toolkit</button>` : ''}
@@ -1916,15 +1920,16 @@
     function fetchPublicHealth() {
       if (!anonymousActor) return Promise.resolve(null);
       if (publicHealthRequestPromise) return publicHealthRequestPromise;
-      publicHealthRequestPromise = (async () => {
+      const request = (async () => {
         const source = routeSources.health;
-        if (typeof anonymousActor.get_public_health !== 'function') {
-          markSourceUnavailable(source, 'get_public_health is unavailable');
-          publicHealthFailed = true;
-          renderCurrentView();
-          return null;
-        }
         try {
+          if (typeof anonymousActor.get_public_health !== 'function') {
+            markSourceUnavailable(source, 'get_public_health is unavailable');
+            publicHealthFailed = true;
+            updateFreshnessIndicator();
+            renderCurrentView();
+            return null;
+          }
           const pub = await anonymousActor.get_public_health();
           markSourceFresh(source, pub);
           const conditions = [];
@@ -1934,13 +1939,15 @@
           latestPublicHealth = pub;
           publicHealthFailed = false;
           window._publicWedge = conditions;
+          updateFreshnessIndicator();
           renderBanner();
           renderCurrentView();
           return pub;
-        } catch (e) { markSourceFailed(source, e); publicHealthFailed = true; console.error('public health poll failed:', e); renderCurrentView(); return null; }
-        finally { publicHealthRequestPromise = null; }
+        } catch (e) { markSourceFailed(source, e); publicHealthFailed = true; console.error('public health poll failed:', e); updateFreshnessIndicator(); renderCurrentView(); return null; }
       })();
-      return publicHealthRequestPromise;
+      publicHealthRequestPromise = request;
+      request.then(() => { publicHealthRequestPromise = null; }, () => { publicHealthRequestPromise = null; });
+      return request;
     }
 
     // ═══════ Data loaders ═══════
@@ -2460,9 +2467,24 @@
       const age = Math.max(0, (Date.now() * 1e6 - Number(timestampNs)) / 1e9);
       return age < 60 ? `${age.toFixed(0)}s` : `${(age / 60).toFixed(1)}m`;
     }
+    function routeTimestampMs(timestampNs) {
+      if (timestampNs == null) return null;
+      const value = Number(timestampNs);
+      return Number.isFinite(value) ? value / 1e6 : null;
+    }
+    function routeRuntimePayloadTimestampMs(result) {
+      const payload = result && result.Ok ? result.Ok : result;
+      return payload && payload.last_tick_ns != null ? routeTimestampMs(payload.last_tick_ns) : null;
+    }
     function routeQuoteStaleAfterMs() {
       const ns = currentConfig && (currentConfig.max_quote_age_ns ?? currentConfig.quote_max_age_ns);
       return ns == null ? null : Number(ns) / 1e6;
+    }
+    function routeCandidateQuoteState(candidate, nowMs = Date.now()) {
+      if (!candidate || routeQuoteStaleAfterMs() == null) return 'unknown';
+      const quotedAtMs = routeTimestampMs(candidate.quote_timestamp_ns);
+      if (quotedAtMs == null) return 'unknown';
+      return nowMs - quotedAtMs >= routeQuoteStaleAfterMs() ? 'stale' : 'fresh';
     }
     function routeSourceState(name, staleAfterMs = null) {
       return sourceDisplayState(routeSources[name], staleAfterMs);
@@ -2474,7 +2496,7 @@
       const source = routeSources[name];
       const status = routeSourceState(name, staleAfterMs);
       if (status === 'fresh') return '';
-      if (status === 'stale') return '<span class="badge badge-stale">Stale</span>';
+      if (status === 'stale') return `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(source)}</span>`;
       if (status === 'loading') return '<span class="badge badge-unconfigured">Loading…</span>';
       return `<span class="badge badge-stuck">Unavailable${esc(routeSourceError(source))}</span>`;
     }
@@ -2484,6 +2506,28 @@
       if (status === 'loading') return '<div class="route-empty">Loading…</div>';
       if (status === 'failed' || status === 'unavailable') return `<div class="route-empty negative">Unavailable${esc(routeSourceError(source))}</div>`;
       return null;
+    }
+    function routeAggregateState() {
+      const quoteStaleAfterMs = routeQuoteStaleAfterMs();
+      const names = ['status', 'observation', 'candidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'runtime', 'health'];
+      if (authenticatedActor) names.push('wallet');
+      const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates') ? quoteStaleAfterMs : null));
+      const candidates = routeSources.candidates.value;
+      const candidateQuotes = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean).map(routeCandidateQuoteState) : [];
+      if (candidateQuotes.includes('stale')) states.push('stale');
+      else if (candidateQuotes.includes('unknown')) states.push('unknown');
+      if (states.includes('failed') || states.includes('unavailable')) return 'unavailable';
+      if (states.includes('stale')) return 'stale';
+      if (states.includes('unknown')) return 'unknown';
+      if (states.includes('loading')) return 'loading';
+      return 'fresh';
+    }
+    function updateFreshnessIndicator() {
+      const fresh = document.getElementById('freshness');
+      if (!fresh) return;
+      const aggregate = routeAggregateState();
+      fresh.textContent = aggregate === 'fresh' ? 'Live' : aggregate[0].toUpperCase() + aggregate.slice(1);
+      fresh.classList.toggle('live-now', aggregate === 'fresh');
     }
     function routeNativeAmount(amount, asset) {
       const key = routeAssetKey(asset);
@@ -2496,6 +2540,11 @@
     }
     function routeCandidateHtml(candidate, kind) {
       if (!candidate) return `<div class="route-empty">No completed eligible ${kind} candidate yet. Run or continue a quote-only observation.</div>`;
+      const quoteState = routeCandidateQuoteState(candidate);
+      const quoteTimestampMs = routeTimestampMs(candidate.quote_timestamp_ns);
+      const quoteFreshness = quoteState === 'stale'
+        ? `Stale · ${quoteTimestampMs == null ? 'quote time unknown' : 'as of ' + new Date(quoteTimestampMs).toLocaleTimeString()}`
+        : quoteState === 'unknown' ? 'Quote freshness unknown' : routeAge(candidate.quote_timestamp_ns);
       const path = candidate.asset_path.map(routeAssetLabel).join(' → ');
       const venues = candidate.venue_edges.join(' → ');
       const reason = routeOpt(candidate.rejection_reason);
@@ -2511,7 +2560,7 @@
           <div class="route-gate"><span class="k">Full fill</span><span class="v ${candidate.full_fill ? 'positive' : 'negative'}">${candidate.full_fill ? 'confirmed' : 'rejected'}</span></div>
           <div class="route-gate"><span class="k">Allowance</span><span class="v">${esc(candidate.allowance_status)}</span></div>
           <div class="route-gate"><span class="k">Inventory</span><span class="v">${esc(candidate.inventory_effect)}</span></div>
-          <div class="route-gate"><span class="k">Quote age</span><span class="v">${routeAge(candidate.quote_timestamp_ns)}</span></div>
+          <div class="route-gate"><span class="k">Quote age</span><span class="v ${quoteState === 'stale' ? 'ts-stale' : quoteState === 'unknown' ? 'negative' : ''}">${esc(quoteFreshness)}</span></div>
           <div class="route-gate"><span class="k">Collision</span><span class="v" title="${esc(collision)}">${esc(collision.slice(0, 18))}${collision.length > 18 ? '…' : ''}</span></div>
         </div>
         ${reason ? `<div class="negative" style="font-size:11px;margin-top:8px">Rejected: ${esc(reason)}</div>` : ''}
@@ -2527,7 +2576,7 @@
         const balance = row && routeOpt(row.balance_native) != null ? routeNativeAmount(routeOpt(row.balance_native), row.asset) : '—';
         const err = row ? routeOpt(row.error) : null;
         const metadata = row ? (row.metadata_valid ? 'metadata pinned' : 'metadata mismatch') : (isAdmin ? 'loading…' : 'log in to query');
-        const sourceMeta = walletState === 'stale' ? `Stale · ${err || metadata}`
+        const sourceMeta = walletState === 'stale' ? `Stale · ${sourceLastSuccessLabel(walletSource)} · ${err || metadata}`
           : walletState === 'failed' || walletState === 'unavailable' ? `Unavailable${routeSourceError(walletSource)}`
           : walletState === 'loading' && isAdmin ? 'Loading…'
           : err || metadata;
@@ -2544,14 +2593,14 @@
       const heldUnavailable = routeSourceUnavailableHtml('heldPositions');
       const reservationUnavailable = routeSourceUnavailableHtml('reservations');
       const currentUnavailable = routeSourceUnavailableHtml('currentExecution');
-      const heldRows = heldUnavailable || (latestHeldPositions.length ? latestHeldPositions.map(p => `<div class="route-list-row"><span>${esc(p.position_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span><span class="badge badge-blocked">held</span>${heldState === 'stale' ? '<span class="badge badge-stale">Stale</span>' : ''}</div>`).join('') : `<div class="route-empty${heldState === 'stale' ? ' ts-stale' : ''}">${heldState === 'stale' ? 'Stale · No held route inventory at last successful read.' : 'No held route inventory.'}</div>`);
-      const reservationRows = reservationUnavailable || (activeReservations.length ? activeReservations.map(r => `<div class="route-list-row"><span>${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))}</span>${reservationsState === 'stale' ? '<span class="badge badge-stale">Stale</span>' : ''}</div>`).join('') : `<div class="route-empty${reservationsState === 'stale' ? ' ts-stale' : ''}">${reservationsState === 'stale' ? 'Stale · No active reservations at last successful read.' : 'No active reservations.'}</div>`);
+      const heldRows = heldUnavailable || (latestHeldPositions.length ? latestHeldPositions.map(p => `<div class="route-list-row"><span>${esc(p.position_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span><span class="badge badge-blocked">held</span>${heldState === 'stale' ? `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(routeSources.heldPositions)}</span>` : ''}</div>`).join('') : `<div class="route-empty${heldState === 'stale' ? ' ts-stale' : ''}">${heldState === 'stale' ? `Stale · ${sourceLastSuccessLabel(routeSources.heldPositions)} · No held route inventory at last successful read.` : 'No held route inventory.'}</div>`);
+      const reservationRows = reservationUnavailable || (activeReservations.length ? activeReservations.map(r => `<div class="route-list-row"><span>${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))}</span>${reservationsState === 'stale' ? `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(routeSources.reservations)}</span>` : ''}</div>`).join('') : `<div class="route-empty${reservationsState === 'stale' ? ' ts-stale' : ''}">${reservationsState === 'stale' ? `Stale · ${sourceLastSuccessLabel(routeSources.reservations)} · No active reservations at last successful read.` : 'No active reservations.'}</div>`);
       const current = latestRouteExecution;
-      const execHtml = currentUnavailable || (current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span>${currentState === 'stale' ? '<span class="badge badge-stale">Stale</span>' : ''}</div>` : `<div class="route-empty${currentState === 'stale' ? ' ts-stale' : ''}">${currentState === 'stale' ? 'Stale · No active route execution at last successful read.' : 'No active route execution.'}</div>`);
+      const execHtml = currentUnavailable || (current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span>${currentState === 'stale' ? `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)}</span>` : ''}</div>` : `<div class="route-empty${currentState === 'stale' ? ' ts-stale' : ''}">${currentState === 'stale' ? `Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)} · No active route execution at last successful read.` : 'No active route execution.'}</div>`);
       const lockBody = lockState === 'loading' ? '<span class="badge badge-unconfigured">Loading…</span>'
         : lockState === 'failed' || lockState === 'unavailable' ? `<span class="badge badge-stuck">Unavailable${esc(routeSourceError(routeSources.lock))}</span>`
-        : lock ? `<span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${esc(variantKey(lock.owner))}</span><div class="route-wallet-meta">${esc(lock.operation_id)}</div>${lockState === 'stale' ? '<span class="badge badge-stale">Stale</span>' : ''}`
-        : lockState === 'stale' ? '<span class="badge badge-stale">Stale</span><div class="route-wallet-meta">Clear at last successful read</div>'
+        : lock ? `<span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${esc(variantKey(lock.owner))}</span><div class="route-wallet-meta">${esc(lock.operation_id)}</div>${lockState === 'stale' ? `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(routeSources.lock)}</span>` : ''}`
+        : lockState === 'stale' ? `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(routeSources.lock)}</span><div class="route-wallet-meta">Clear at last successful read</div>`
         : '<span class="badge badge-live">clear</span>';
       return `<div class="grid g-cols-3" style="margin-top:var(--sp-4)">
         <div class="card"><div class="card-header">Route lock</div><div id="route-execution-state">${lockBody}${execHtml}</div></div>
@@ -2563,23 +2612,25 @@
       const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : latestRouteRuntime ? 'fresh' : 'loading';
       if (runtimeState === 'loading' && !latestRouteRuntime) return 'Status unavailable';
       if (runtimeState === 'failed' || runtimeState === 'unavailable') return 'Runtime unavailable';
+      if (runtimeState === 'stale') return `Blocked · stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}`;
       if (!latestRouteRuntime) return runtimeState === 'stale' ? 'Stale runtime status' : 'Status unavailable';
       if (!latestRouteRuntime.compiled_support) return 'Not implemented';
       const label = latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run ? 'Automatic arbitrage on' : 'Trading stopped';
-      return runtimeState === 'stale' ? `Stale · ${label}` : label;
+      return label;
     }
     function routeRuntimeHtml() {
       const runtime = latestRouteRuntime;
       const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : runtime ? 'fresh' : 'failed';
       const runtimeDisplay = runtimeState === 'loading' ? 'Loading runtime status' : routeTradingLabel();
-      const on = runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run;
+      const runtimeFresh = runtimeState === 'fresh';
+      const on = runtimeFresh && runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run;
       const profit = runtime ? routeOpt(runtime.last_realized_profit) : null;
       const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
       const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
       const decimals = unit === 'ICP' ? 8 : 6;
       return `<div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Automatic arbitrage</div>
         <div class="route-list-row"><span>${esc(runtimeDisplay)}</span>
-        ${isAdmin && runtime && runtime.compiled_support ? `<button class="btn ${on ? 'btn-danger' : 'btn-primary'}" onclick="setRouteTrading(${!on})">${on ? 'Stop new trades' : 'Start arbitrage'}</button>` : ''}</div>
+        ${isAdmin && runtimeFresh && runtime && runtime.compiled_support ? `<button class="btn ${on ? 'btn-danger' : 'btn-primary'}" onclick="setRouteTrading(${!on})">${on ? 'Stop new trades' : 'Start arbitrage'}</button>` : ''}</div>
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
         <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
@@ -2614,15 +2665,18 @@
         : observationState === 'failed' || observationState === 'unavailable' ? 'Observation unavailable'
         : observationState === 'stale' ? `Stale · ${!obs ? 'no cached observation' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`}`
         : !obs ? 'No observation yet' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`;
+      const candidateSourceStamp = candidatesState === 'stale' ? `<div class="route-wallet-meta ts-stale">Stale · ${sourceLastSuccessLabel(routeSources.candidates)}</div>` : '';
       const candidateUnavailable = candidatesState === 'loading' ? '<div class="route-empty">Loading candidates…</div>'
         : candidatesState === 'failed' || candidatesState === 'unavailable' ? `<div class="route-empty negative">Candidates unavailable${esc(routeSourceError(routeSources.candidates))}</div>`
-        : candidatesState === 'stale' && !stable ? '<div class="route-empty ts-stale">Stale · no cached stable-returning candidate.</div>' : null;
-      const stableHtml = candidateUnavailable || routeCandidateHtml(stable, 'stable-returning');
-      const icpHtml = candidateUnavailable || routeCandidateHtml(icp, 'ICP-returning');
+        : candidatesState === 'stale' && !stable ? `<div class="route-empty ts-stale">Stale · ${sourceLastSuccessLabel(routeSources.candidates)} · no cached stable-returning candidate.</div>` : null;
+      const stableHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(stable, 'stable-returning');
+      const icpHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(icp, 'ICP-returning');
       const statusText = statusState === 'loading' ? 'Loading route status…'
         : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
         : status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
         : 'Route status unavailable';
+      const statusStamp = statusState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.status)}` : '';
+      const observationStamp = observationState === 'stale' ? ` · ${sourceLastSuccessLabel(routeSources.observation)}` : '';
       return `<div id="route-arb-panel">
         <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
           <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
@@ -2632,7 +2686,7 @@
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
         </div>
-        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${esc(statusText)}${statusState === 'stale' ? ' · Stale' : ''}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}${observationStamp}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${esc(statusText)}${statusStamp}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
         ${routeRuntimeHtml()}
         ${routeOperationsHtml()}
         <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
@@ -2642,7 +2696,7 @@
     async function loadRouteData() {
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
       routeDataRequestPromise = (async () => {
-        const querySource = async (name, fn, label, variantResult = false) => {
+        const querySource = async (name, fn, label, variantResult = false, successTimestampMs = null) => {
           const source = routeSources[name];
           if (typeof fn !== 'function') {
             markSourceUnavailable(source, `${label} is unavailable`);
@@ -2655,7 +2709,14 @@
               console.error(label, value.Err);
               return source.value;
             }
-            markSourceFresh(source, value);
+            const attemptMs = Date.now();
+            const observedAtMs = typeof successTimestampMs === 'function' ? successTimestampMs(value) : null;
+            if (typeof successTimestampMs === 'function' && observedAtMs == null) {
+              markSourceFailed(source, `${label} freshness timestamp unavailable`, attemptMs);
+              return source.value;
+            }
+            markSourceFresh(source, value, observedAtMs == null ? attemptMs : observedAtMs);
+            source.lastAttemptMs = attemptMs;
             return value;
           } catch (e) {
             markSourceFailed(source, e);
@@ -2672,7 +2733,7 @@
           querySource('heldPositions', typeof anonymousActor.get_held_positions_v1 === 'function' ? () => anonymousActor.get_held_positions_v1(0n, 100n) : null, 'held positions', true),
           querySource('currentExecution', typeof anonymousActor.get_current_route_execution_v1 === 'function' ? () => anonymousActor.get_current_route_execution_v1() : null, 'route execution'),
           querySource('terminalExecutions', typeof anonymousActor.get_terminal_route_executions_v1 === 'function' ? () => anonymousActor.get_terminal_route_executions_v1(0n, 20n) : null, 'terminal executions', true),
-          querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true),
+          querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true, routeRuntimePayloadTimestampMs),
         ]);
         latestRouteStatus = status;
         latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
@@ -4393,12 +4454,10 @@
       requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = '75%'; }));
     }
     function finishProgress() {
-      const fresh = document.getElementById('freshness');
       const fill = document.getElementById('progress-fill');
       fill.style.transition = 'width .3s ease';
       fill.style.width = '100%';
-      fresh.textContent = 'Live';
-      fresh.classList.add('live-now');
+      updateFreshnessIndicator();
       setTimeout(() => { fill.style.width = '0%'; }, 400);
     }
 
@@ -4422,6 +4481,7 @@
       if (!authenticatedActor) fetchPublicHealth();
       saveCache();
       state.liveLoaded = true;
+      updateFreshnessIndicator();
       // Rendering is never allowed to break the poll loop: a template bug
       // here must not stop setInterval(loadAll) from firing next cycle —
       // that's exactly the "silent dead minute" this rebuild exists to kill.
