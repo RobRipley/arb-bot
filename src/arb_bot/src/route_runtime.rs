@@ -90,6 +90,8 @@ pub struct RuntimeExecution {
     pub submitted_intents: Vec<(RuntimeRequest, AdapterIntent)>,
     pub realized_profit: Option<i128>,
     #[serde(default)]
+    pub detail: Option<RouteExecutionDetailV1>,
+    #[serde(default)]
     leg_traces: Vec<RuntimeLegTrace>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
@@ -189,14 +191,49 @@ fn detail_for(ex: &RuntimeExecution) -> RouteExecutionDetailV1 {
 pub fn route_execution_detail(ex: &RuntimeExecution) -> RouteExecutionDetailV1 {
     detail_for(ex)
 }
+fn runtime_snapshot(ex: &RuntimeExecution) -> RuntimeExecution {
+    let mut snapshot = ex.clone();
+    // An empty trace is the upgrade marker for a pre-detail runtime. Keep the
+    // field absent so recovery never manufactures per-leg facts.
+    snapshot.detail = (!ex.leg_traces.is_empty()).then(|| detail_for(ex));
+    snapshot
+}
+pub fn get_durable_detail(
+    execution_id: &str,
+) -> Result<Option<RouteExecutionDetailV1>, String> {
+    let durable = load()?;
+    let runtime = durable
+        .current
+        .as_ref()
+        .filter(|execution| execution.record.execution_id == execution_id)
+        .or_else(|| {
+            durable
+                .last_terminal
+                .as_ref()
+                .filter(|execution| execution.record.execution_id == execution_id)
+        });
+    if let Some(execution) = runtime {
+        if let Some(detail) = &execution.detail {
+            return Ok(Some(detail.clone()));
+        }
+    }
+    if let Some(detail) = state::get_route_execution_detail(execution_id)? {
+        return Ok(Some(detail));
+    }
+    if let Some(execution) = runtime {
+        return Ok(Some(detail_for(execution)));
+    }
+    Ok(None)
+}
 fn persist(ex: &RuntimeExecution) -> Result<(), String> {
     let mut s = load()?;
-    let bytes = serde_json::to_vec(ex).map_err(|e| e.to_string())?;
+    let snapshot = runtime_snapshot(ex);
+    let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
     let config = config().0;
     if bytes.len() > config.max_execution_record_bytes as usize {
         return Err("typed execution exceeds configured durable record capacity".into());
     }
-    s.current = Some(ex.clone());
+    s.current = Some(snapshot);
     save(&s)?;
     state::put_current_route_execution(ex.record.clone())?;
     if !ex.leg_traces.is_empty() {
@@ -675,11 +712,13 @@ pub async fn prepare_with<I: RuntimeIo>(
         settlements: vec![],
         submitted_intents: vec![],
         realized_profit: None,
+        detail: None,
         leg_traces,
     };
     state::acquire_mutation_lock(&execution_id, MutationOwnerV1::RouteExecution, io.now())?;
     // Persist planned route and sequence before the first read-only await too.
-    s.current = Some(ex.clone());
+    let snapshot = runtime_snapshot(&ex);
+    s.current = Some(snapshot);
     save(&s)?;
     state::put_current_route_execution(ex.record.clone())?;
     // Establish the detail row before the first quote await. A crash or
@@ -783,7 +822,7 @@ fn finish(ex: &mut RuntimeExecution, now: u64) -> Result<(), String> {
     let mut s = load()?;
     s.current = None;
     s.last_served_icp = ex.original.candidate_class == CandidateClass::IcpReturning;
-    s.last_terminal = Some(ex.clone());
+    s.last_terminal = Some(runtime_snapshot(ex));
     save(&s)?;
     state::mutate_state(|s| s.route_observation = None);
     Ok(())
@@ -1454,6 +1493,23 @@ mod tests {
         let detail = route_execution_detail(&recovered);
         assert!(!detail.detail_available);
         assert!(detail.legs.is_empty());
+    }
+    #[test]
+    fn runtime_snapshot_survives_detail_projection_failure_at_creation_boundary() {
+        let (io, route) = setup(1);
+        state::fail_next_route_execution_detail_for_test();
+        let error = block_on(prepare_with(&io, &route)).unwrap_err();
+        assert!(error.contains("projection failure"));
+        let durable = load().unwrap().current.unwrap();
+        let expected = durable.detail.clone().expect("runtime detail snapshot");
+        assert!(expected.detail_available);
+        assert_eq!(
+            get_durable_detail(&durable.record.execution_id)
+                .unwrap()
+                .expect("durable detail"),
+            expected
+        );
+        assert!(state::get_mutation_lock().is_some());
     }
     #[test]
     fn changed_generation_during_whole_quote_aborts_and_releases_unused_lock() {

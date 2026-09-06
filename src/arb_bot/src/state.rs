@@ -2,6 +2,8 @@ use candid::{CandidType, Deserialize, Principal};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
+#[cfg(test)]
+use std::cell::Cell;
 
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -1326,6 +1328,9 @@ thread_local! {
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(27))),
         ));
 
+    #[cfg(test)]
+    static FAIL_NEXT_ROUTE_EXECUTION_DETAIL: Cell<bool> = const { Cell::new(false) };
+
     // Heap cache mirroring META_CELL for fast reads.
     static STATE: RefCell<Option<BotState>> = RefCell::default();
 }
@@ -1900,6 +1905,10 @@ pub fn put_route_execution_detail(
     detail: crate::route_arb::RouteExecutionDetailV1,
 ) -> Result<(), String> {
     validate_route_execution_detail(&detail)?;
+    #[cfg(test)]
+    if FAIL_NEXT_ROUTE_EXECUTION_DETAIL.with(|flag| flag.replace(false)) {
+        return Err("injected route execution detail projection failure".into());
+    }
     ROUTE_EXECUTION_DETAILS.with(|map| {
         let mut map = map.borrow_mut();
         if let Some(previous) = map.get(&detail.record.execution_id) {
@@ -1915,6 +1924,11 @@ pub fn put_route_execution_detail(
         map.insert(detail.record.execution_id.clone(), detail);
         Ok(())
     })
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_route_execution_detail_for_test() {
+    FAIL_NEXT_ROUTE_EXECUTION_DETAIL.with(|flag| flag.set(true));
 }
 
 pub fn get_route_execution_detail(
