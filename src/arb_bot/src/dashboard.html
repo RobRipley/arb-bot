@@ -402,6 +402,8 @@
   .price-badge-paused .price-badge-value { color: var(--warning); font-size: 12.5px; font-weight: 500; }
   .price-badge-unconfigured { border-style: dashed; opacity: 0.7; }
   .price-badge-unconfigured .price-badge-value { color: var(--text-tertiary); font-size: 12.5px; }
+  .price-badge-unavailable { border-style: dashed; opacity: 0.7; }
+  .price-badge-unavailable .price-badge-value { color: var(--text-tertiary); font-size: 12.5px; }
   .price-axis-group { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px dashed var(--border-strong); }
   .price-axis-label { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: var(--sp-2); }
   .price-axis-label .price-axis-note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
@@ -1179,7 +1181,7 @@
       const QuoteArgs = I.Record({ amountIn: I.Text, zeroForOne: I.Bool, amountOutMinimum: I.Text });
       return I.Service({
         metadata: I.Func([], [MetadataResult], ['query']),
-        quote: I.Func([QuoteArgs], [IcpSwapResult], ['query']),
+        quoteForAll: I.Func([QuoteArgs], [IcpSwapResult], ['query']),
       });
     };
 
@@ -2352,7 +2354,7 @@
       const source = routeSources.activePrices;
       try {
         const agent = await HttpAgent.create({ host: IC_HOST });
-        const icpswapResults = await Promise.all(ACTIVE_ROUTE_PRICE_POOLS.map(async spec => {
+        const icpswapSettled = await Promise.allSettled(ACTIVE_ROUTE_PRICE_POOLS.map(async spec => {
           const actor = createIcpSwapPriceActor(agent, spec.principal);
           const metadataResult = await actor.metadata();
           if (!metadataResult || !metadataResult.ok) throw new Error(`metadata: ${activeRoutePriceError(metadataResult)}`);
@@ -2361,8 +2363,8 @@
           const zeroForOne = metadata.token0.address === inputLedger;
           if (!zeroForOne && metadata.token1.address !== inputLedger) throw new Error('metadata does not contain the pinned input ledger');
           const amountIn = ACTIVE_ROUTE_PROBE_NATIVE[spec.input];
-          const quoteResult = await actor.quote({ amountIn: amountIn.toString(), zeroForOne, amountOutMinimum: '0' });
-          if (!quoteResult || !quoteResult.ok) throw new Error(`quote: ${activeRoutePriceError(quoteResult)}`);
+          const quoteResult = await actor.quoteForAll({ amountIn: amountIn.toString(), zeroForOne, amountOutMinimum: '0' });
+          if (!quoteResult || !quoteResult.ok) throw new Error(`quoteForAll: ${activeRoutePriceError(quoteResult)}`);
           return {
             ...spec,
             venue: 'ICPSwap',
@@ -2373,7 +2375,7 @@
           };
         }));
         const threePool = createRumi3PoolPriceActor(agent);
-        const threePoolResults = await Promise.all(ACTIVE_3POOL_PRICE_PAIRS.map(async spec => {
+        const threePoolSettled = await Promise.allSettled(ACTIVE_3POOL_PRICE_PAIRS.map(async spec => {
           const inputCoin = POOL_COIN_MAP[spec.input];
           const outputCoin = POOL_COIN_MAP[spec.output];
           const amountIn = ACTIVE_ROUTE_PROBE_NATIVE[spec.input];
@@ -2391,8 +2393,20 @@
             outputDecimals: outputCoin.decimals,
           };
         }));
-        const prices = [...icpswapResults, ...threePoolResults];
-        markSourceFresh(source, prices);
+        const failedPrice = (spec, venue, reason) => ({
+          ...spec,
+          venue,
+          error: reason && reason.message ? reason.message : String(reason),
+        });
+        const icpswapPrices = icpswapSettled.map((result, index) => result.status === 'fulfilled'
+          ? result.value
+          : failedPrice(ACTIVE_ROUTE_PRICE_POOLS[index], 'ICPSwap', result.reason));
+        const threePoolPrices = threePoolSettled.map((result, index) => result.status === 'fulfilled'
+          ? result.value
+          : failedPrice({ id: `rumi-3pool-${ACTIVE_3POOL_PRICE_PAIRS[index].input}-${ACTIVE_3POOL_PRICE_PAIRS[index].output}`, group: 'Stable routes', ...ACTIVE_3POOL_PRICE_PAIRS[index] }, 'Rumi 3pool', result.reason));
+        const prices = [...icpswapPrices, ...threePoolPrices];
+        if (prices.some(price => !price.error)) markSourceFresh(source, prices);
+        else markSourceFailed(source, new Error('all active pool quote reads failed'));
         if (state.activeView === 'cockpit') renderCockpit();
         updateFreshnessIndicator();
         return prices;
@@ -2796,6 +2810,15 @@
     function activeRoutePriceBadge(price) {
       const input = TOKEN_INFO[price.input];
       const output = TOKEN_INFO[price.output];
+      if (price.error) return priceBadge({
+        token: `${input.label} → ${output.label}`,
+        venueKey: price.venue === 'ICPSwap' ? 'icpswap' : 'rumi',
+        venueName: price.venue,
+        hue: price.venue === 'ICPSwap' ? 'var(--v-icpswap)' : 'var(--v-rumi)',
+        value: 'Unavailable',
+        sub: price.error,
+        state: 'unavailable',
+      });
       const rate = formatActiveRouteRate(price.outputNative, price.inputNative, price.inputDecimals, price.outputDecimals);
       return priceBadge({
         token: `${input.label} → ${output.label}`,
@@ -5419,12 +5442,10 @@
       if (!legs.length) return '<span class="route-flow-loading">Realized route amounts unavailable for this execution.</span>';
       const stages = [];
       const first = legs[0];
-      const firstDebit = routeLedgerTextOption(first.actual_input_debit_native, null)
-        ?? routeLedgerTextOption(first.requested_input_native, null);
+      const firstDebit = routeLedgerTextOption(first.actual_input_debit_native, null);
       stages.push(routeLedgerFlowStage(first.from, routeLedgerAmountValue(firstDebit, first.from)));
       for (const leg of legs) {
-        const output = routeLedgerTextOption(leg.actual_output_credit_native, null)
-          ?? routeLedgerTextOption(leg.quoted_output_native, null);
+        const output = routeLedgerTextOption(leg.actual_output_credit_native, null);
         stages.push(routeLedgerFlowStage(leg.to, routeLedgerAmountValue(output, leg.to)));
       }
       return `<div class="route-execution-flow-inner">${stages.join('<span class="route-flow-arrow" aria-hidden="true">→</span>')}</div>`;
@@ -5434,8 +5455,7 @@
       if (cached.status === 'fresh' && cached.final && cached.value && cached.value.detail_available !== false) {
         const first = Array.isArray(cached.value.legs) ? cached.value.legs.slice().sort((a, b) => Number(a.leg_index) - Number(b.leg_index))[0] : null;
         if (first) {
-          const debit = routeLedgerTextOption(first.actual_input_debit_native, null)
-            ?? routeLedgerTextOption(first.requested_input_native, null);
+          const debit = routeLedgerTextOption(first.actual_input_debit_native, null);
           return routeLedgerAmount(debit, first.from, 'Unavailable');
         }
       }
