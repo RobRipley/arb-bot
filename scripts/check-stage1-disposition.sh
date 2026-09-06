@@ -136,6 +136,7 @@ clear_cycle_lock
 # ── Preserved volume configuration, no direct balance mutation ──
 VOLUME_CONFIG='
 set_route_arb_config_v1
+set_wrapped_stable_to_icusd_allowed_v1
 set_volume_config
 set_volume_global
 pause_volume

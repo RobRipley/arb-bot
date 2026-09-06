@@ -1,7 +1,7 @@
 use arb_bot::route_runtime::RuntimeStatus;
 use arb_bot::route_scheduler::{next_action,TickAction};
 use arb_bot::route_arb::{ObservationAccumulatorV1,RouteCandidateReportV1,CandidateClass};
-fn status()->RuntimeStatus{RuntimeStatus{compiled_support:true,live_authorized:true,enabled:true,dry_run:false,last_error:None,last_tick_ns:0,last_realized_profit:None,last_profit_class:None}}
+fn status()->RuntimeStatus{RuntimeStatus{compiled_support:true,live_authorized:true,enabled:true,dry_run:false,last_error:None,last_tick_ns:0,scheduler_in_flight_since_ns:None,last_realized_profit:None,last_profit_class:None}}
 fn observation()->ObservationAccumulatorV1{ObservationAccumulatorV1::new("obs".into(),1,0,972,2644,true)}
 #[test]
 fn disabled_trading_stays_idle_but_existing_attempt_always_reconciles(){

@@ -90,6 +90,31 @@ fn public_executor_delegates_to_durable_runtime_with_admin_guard() {
 }
 
 #[test]
+fn stable_exit_toggle_is_admin_gated_and_mutates_only_its_policy_field() {
+    let source = include_str!("../src/lib.rs");
+    let tail = source
+        .split("fn set_wrapped_stable_to_icusd_allowed_v1")
+        .nth(1)
+        .expect("field-specific stable-exit endpoint");
+    let body = tail.split("\n#[").next().unwrap();
+    assert!(body.contains("require_admin()"));
+    assert!(body.contains("allow_wrapped_stable_to_icusd"));
+    assert!(body.contains("route_arb_config_generation"));
+    assert!(body.contains("route_observation = None"));
+    assert!(!body.contains("s.route_arb = config"));
+}
+
+#[test]
+fn full_route_config_writer_preserves_the_field_with_a_dedicated_setter() {
+    let source = include_str!("../src/lib.rs");
+    let tail = source.split("fn set_route_arb_config_v1").nth(1).unwrap();
+    let body = tail.split("\n#[").next().unwrap();
+    assert!(body.contains(
+        "config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd"
+    ));
+}
+
+#[test]
 fn full_refund_aborts_and_reconciliation_queries_never_exceed_hard_cap() {
     let mut record = prepare_execution(&candidate(), "exec-refund", 101).unwrap();
     prepare_leg(&mut record, 9_990_000, 10_050_000, 102).unwrap();

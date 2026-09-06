@@ -874,6 +874,7 @@
       const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
       const RouteArbConfigV1 = I.Record({
         enabled: I.Bool, dry_run: I.Bool, stable_book_enabled: I.Bool, icp_book_enabled: I.Bool,
+        allow_wrapped_stable_to_icusd: I.Opt(I.Bool),
         asset_controls: I.Vec(AssetControlV1), pool_controls: I.Vec(PoolControlV1),
         stable_size_ladder: I.Vec(I.Nat64), icp_size_ladder: I.Vec(I.Nat64),
         max_route_legs: I.Nat8, max_quote_calls_per_observation: I.Nat16,
@@ -898,6 +899,7 @@
       const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null });
       const RuntimeStatus = I.Record({ compiled_support: I.Bool, live_authorized: I.Bool,
         enabled: I.Bool, dry_run: I.Bool, last_error: I.Opt(I.Text), last_tick_ns: I.Nat64,
+        scheduler_in_flight_since_ns: I.Opt(I.Nat64),
         last_realized_profit: I.Opt(I.Int), last_profit_class: I.Opt(CandidateClass) });
       const QuoteLegReportV1 = I.Record({
         to: RouteAsset, wallet_before: I.Nat, wallet_after: I.Nat, gross_output: I.Nat,
@@ -1038,6 +1040,7 @@
         set_route_runtime_authorized_v1: I.Func([I.Bool], [I.Variant({ Ok: RuntimeStatus, Err: I.Text })], []),
         get_route_arb_config_v1: I.Func([], [RouteArbConfigV1], ['query']),
         set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
+        set_wrapped_stable_to_icusd_allowed_v1: I.Func([I.Bool], [I.Variant({ Ok: RouteArbConfigV1, Err: I.Text })], []),
         get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
         get_route_wallet_balances_v1: I.Func([], [I.Vec(WalletAssetBalanceV1)], []),
         start_route_observation_v1: I.Func([], [I.Variant({ Ok: ObservationStartV1, Err: I.Text })], []),
@@ -1506,6 +1509,7 @@
     // Route data is independently observable. A failed refresh must never be
     // turned into a healthy empty value by a query fallback.
     const ROUTE_RUNTIME_STALE_AFTER_MS = 30_000;
+    const SCHEDULER_NO_PROGRESS_CEILING_MS = 600_000;
     const TERMINAL_EXECUTIONS_PAGE_SIZE = 100n;
     const TERMINAL_EXECUTIONS_MAX = 1000n;
     const ROUTE_LEDGER_PAGE_SIZE = 25n;
@@ -2646,9 +2650,17 @@
     function routeRuntimePayloadTimestampMs(result, nowMs = Date.now()) {
       const payload = result && result.Ok ? result.Ok : result;
       if (!payload || payload.last_tick_ns == null) return null;
+      if (routeRuntimeInFlightState(payload, nowMs) === 'active') return nowMs;
       const tickMs = routeTimestampMs(payload.last_tick_ns);
       const active = Boolean(payload.live_authorized && payload.enabled && !payload.dry_run);
       return tickMs === 0 && !active ? nowMs : tickMs;
+    }
+    function routeRuntimeInFlightState(payload, nowMs = Date.now()) {
+      const startedNs = routeOpt(payload?.scheduler_in_flight_since_ns);
+      if (startedNs == null) return 'idle';
+      const startedMs = routeTimestampMs(startedNs);
+      if (startedMs == null) return 'stalled';
+      return nowMs - startedMs <= SCHEDULER_NO_PROGRESS_CEILING_MS ? 'active' : 'stalled';
     }
     function routeQuoteStaleAfterMs() {
       // RouteArbConfigV1 is a separate query/read model. Do not read a
@@ -2973,6 +2985,9 @@
       if (!runtime.compiled_support) {
         return { state: 'Blocked', label: 'Blocked', targetOn: gatesOn, gatesOn, reason: 'Runtime support unavailable' };
       }
+      if (gatesOn && routeRuntimeInFlightState(runtime) === 'active') {
+        return { state: 'On', label: 'Scanning', targetOn: true, gatesOn, reason: `Quote batch in progress · ${routeAge(routeOpt(runtime.scheduler_in_flight_since_ns))} elapsed` };
+      }
       return gatesOn
         ? { state: 'On', label: 'On', targetOn: true, gatesOn, reason: 'All runtime gates are enabled' }
         : { state: 'Off', label: 'Off', targetOn: false, gatesOn, reason: 'New trades are stopped' };
@@ -3076,6 +3091,43 @@
         }
       });
     };
+    window.leverStableExitProtection = async function () {
+      const key = 'stable-exit-protection';
+      if (state.levers[key] === 'applying' || !requireAuth()) return;
+      if (routeSourceState('routeArbConfig') !== 'fresh' || !routeArbConfig) {
+        toast(`Route policy ${sourceStateText('routeArbConfig')}; refresh before changing it`, 'error');
+        return;
+      }
+      const currentlyAllowed = routeArbConfig.allow_wrapped_stable_to_icusd?.[0] === true;
+      state.levers[key] = 'applying';
+      renderOps();
+      try {
+        const refreshed = unwrapResult(
+          await authenticatedActor.set_wrapped_stable_to_icusd_allowed_v1(!currentlyAllowed)
+        );
+        routeArbConfig = refreshed;
+        markSourceFresh(routeSources.routeArbConfig, refreshed);
+        const protectedNow = refreshed.allow_wrapped_stable_to_icusd?.[0] !== true;
+        // A policy change invalidates the server-side observation. Let any
+        // older dashboard request drain, then remove its values and fetch an
+        // authoritative replacement before presenting candidates again.
+        const drain = routeDataRequestPromise;
+        if (drain) await drain;
+        latestRouteObservation = null;
+        latestRouteCandidates = null;
+        markSourceUnavailable(routeSources.observation, 'Route policy changed; refreshing quotes');
+        markSourceUnavailable(routeSources.candidates, 'Route policy changed; refreshing quotes');
+        renderRouteAutomationViews();
+        await loadRouteData();
+        toast(`Protect ck stables: ${protectedNow ? 'on' : 'off'} · confirmed by canister`, 'success');
+      } catch (e) {
+        markSourceFailed(routeSources.routeArbConfig, e);
+        toast('Stable exit policy failed: ' + (e.message || e), 'error');
+      } finally {
+        delete state.levers[key];
+        renderOps();
+      }
+    };
     function routeArbitrageHtml() {
       const status = latestRouteStatus;
       const obs = latestRouteObservation;
@@ -3097,7 +3149,7 @@
       const icpHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(icp, 'ICP-returning');
       const statusText = statusState === 'loading' ? 'Loading route status…'
         : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
-        : status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
+        : status ? `${bi(status.route_count)} graph routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
         : 'Route status unavailable';
       const statusStamp = statusState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.status)}` : '';
       const observationStamp = observationState === 'stale' ? ` · ${sourceLastSuccessLabel(routeSources.observation)}` : '';
@@ -4958,7 +5010,7 @@
       const routeConfigState = routeArbConfigState === 'loading' ? 'Loading route policy…'
         : routeArbConfigState === 'failed' ? `Failed${routeSourceError(routeSources.routeArbConfig)}`
           : routeArbConfigState === 'unavailable' ? `Unavailable${routeSourceError(routeSources.routeArbConfig)}`
-            : routeStatus ? `${bi(routeStatus.route_count)} routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}${routeArbConfigState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.routeArbConfig)}` : ''}`
+            : routeStatus ? `${bi(routeStatus.route_count)} graph routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}${routeArbConfigState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.routeArbConfig)}` : ''}`
               : 'Route policy unavailable';
       const routeAutomation = routeAutomationState();
       const executionCopy = routeAutomation.state === 'On'
@@ -4976,6 +5028,9 @@
           <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
           <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning</span></div>
           <div class="stat-row"><span>Execution</span><span class="badge ${routeAutomation.state === 'On' ? 'badge-live' : routeAutomation.state === 'Unknown' ? 'badge-stuck' : 'badge-dryrun'}">${esc(executionCopy)}</span></div>
+          <div class="lever-grid" style="margin-top:var(--sp-3)">
+            ${leverHtml('stable-exit-protection', 'Protect ck stables', 'Blocks ckUSDC/ckUSDT-funded routes from settling into icUSD', routeArbConfig?.allow_wrapped_stable_to_icusd?.[0] !== true, 'leverStableExitProtection()', 'routeArbConfig')}
+          </div>
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>

@@ -677,6 +677,10 @@ pub struct RouteArbConfigV1 {
     pub dry_run: bool,
     pub stable_book_enabled: bool,
     pub icp_book_enabled: bool,
+    /// Allow ckUSDC/ckUSDT-funded stable routes to settle in icUSD.
+    /// `None` preserves the protected default for pre-field configurations.
+    #[serde(default)]
+    pub allow_wrapped_stable_to_icusd: Option<bool>,
     pub asset_controls: Vec<AssetControlV1>,
     pub pool_controls: Vec<PoolControlV1>,
     pub stable_size_ladder: Vec<u64>,
@@ -708,6 +712,7 @@ impl Default for RouteArbConfigV1 {
             dry_run: true,
             stable_book_enabled: true,
             icp_book_enabled: true,
+            allow_wrapped_stable_to_icusd: None,
             asset_controls: Asset::ALL.into_iter().map(|asset| AssetControlV1 { asset, enabled: true }).collect(),
             pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
             stable_size_ladder: vec![1_000_000, 5_000_000, 10_000_000, 40_000_000],
@@ -957,6 +962,11 @@ pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, St
         .into_iter()
         .filter(|route| route.asset_path.iter().all(|asset| enabled_assets.contains(asset)))
         .filter(|route| route.edges.iter().all(|edge| enabled_pools.contains(edge.pool_id)))
+        .filter(|route| {
+            config.allow_wrapped_stable_to_icusd.unwrap_or(false)
+                || !(matches!(route.start_asset(), Asset::CkUsdc | Asset::CkUsdt)
+                    && route.end_asset() == Asset::IcUsd)
+        })
         .filter(|route| match route.candidate_class {
             CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => config.stable_book_enabled,
             CandidateClass::IcpReturning => config.icp_book_enabled,
