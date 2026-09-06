@@ -199,6 +199,29 @@ fn ops_exposes_default_on_ck_stable_protection_as_a_toggle() {
 }
 
 #[test]
+fn route_wallet_balances_load_for_logged_out_visitors() {
+    let dashboard = include_str!("../src/dashboard.html");
+    let loader = rendered_region("function resetRouteWalletForPublicReload()", "async function loadVolumeBalances(config)");
+    assert!(loader.contains("TOKEN_INFO.ckbtc.getLedger()"));
+    assert!(loader.contains("TOKEN_INFO.cketh.getLedger()"));
+    assert!(loader.contains("latestRouteWallet"));
+    assert!(loader.contains("routeSources.wallet"));
+    assert!(loader.contains("if (balanceRequestPromise)"));
+    assert!(loader.contains("balanceRequestGeneration"));
+    assert!(loader.contains("if (!isAdmin)"));
+    let route_loader = rendered_region("async function loadRouteData", "function manualQuoteScanStillActive");
+    assert!(route_loader.contains("authenticatedActor && isAdmin"));
+    assert!(route_loader.contains("authenticatedActor === walletActor && isAdmin"));
+    assert!(route_loader.contains("attempt < 2 && walletActor && isAdmin"));
+    assert!(route_loader.contains("walletActor = authenticatedActor"));
+    assert!(route_loader.contains("resetRouteWalletForPublicReload()"));
+    let logout = rendered_region("window.doLogout = async function", "document.getElementById('auth-btn').addEventListener");
+    assert!(logout.contains("resetRouteWalletForPublicReload()"));
+    assert!(dashboard.contains("rowError ? 'Unavailable'"));
+    assert!(!dashboard.contains("log in to query"));
+}
+
+#[test]
 fn diagnostics_owns_low_level_route_evidence_without_copying_cockpit_content() {
     let diagnostics = rendered_region("function renderDiagnostics()", "// ═══════ Ledger");
     let operations = rendered_region("function routeOperationsHtml()", "function manualQuoteScanState");
