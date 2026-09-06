@@ -1452,6 +1452,15 @@
     let routeDataRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
     let routeRuntimeAuthoritativeRefreshPromise = null;
+    let manualQuoteScanGeneration = 0;
+    let manualQuoteScan = {
+      phase: 'ready',
+      observationId: null,
+      cursor: null,
+      batchCount: 0,
+      error: null,
+      startedAtNs: null,
+    };
     let healthRequestPromise = null;
     let publicHealthRequestPromise = null;
     let latestSnapshot = null;
@@ -1774,6 +1783,11 @@
     }
 
     window.goTo = function (id, opts) {
+      if (id !== 'markets' && manualQuoteScan.phase === 'running') {
+        manualQuoteScanGeneration += 1;
+        manualQuoteScan.phase = 'aborted';
+        manualQuoteScan.error = 'Markets view changed before the scan completed';
+      }
       state.activeView = id;
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + id).classList.add('active');
@@ -2559,8 +2573,8 @@
       const quoteState = routeCandidateQuoteState(candidate);
       const quoteTimestampMs = routeTimestampMs(candidate.quote_timestamp_ns);
       const quoteFreshness = quoteState === 'stale'
-        ? `Stale · ${quoteTimestampMs == null ? 'quote time unknown' : 'as of ' + new Date(quoteTimestampMs).toLocaleTimeString()}`
-        : quoteState === 'unknown' ? 'Quote freshness unknown' : routeAge(candidate.quote_timestamp_ns);
+        ? `Stale · ${quoteTimestampMs == null ? 'quote time unknown' : 'as of ' + new Date(quoteTimestampMs).toLocaleTimeString()} · exceeded configured quote age`
+        : quoteState === 'unknown' ? 'Quote freshness unknown' : `Fresh · ${routeAge(candidate.quote_timestamp_ns)} old`;
       const path = candidate.asset_path.map(routeAssetLabel).join(' → ');
       const venues = candidate.venue_edges.join(' → ');
       const reason = routeOpt(candidate.rejection_reason);
@@ -2570,8 +2584,8 @@
       return `<div class="route-candidate ${kind === 'ICP-returning' ? 'icp' : ''}">
         <div class="route-path">${esc(path)}</div>
         <div class="route-venues">${esc(venues)}</div>
-        <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}">${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
-        <div class="text-ter" style="font-size:11px">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} principal · native P&amp;L ${esc(profitNative)}</div>
+        <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}"><span class="text-ter" style="font-size:10px;text-transform:uppercase;letter-spacing:.04em">Estimated spread</span> ${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
+        <div class="text-ter" style="font-size:11px">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} principal · <span class="text-ter">Estimated profit (native)</span> ${esc(profitNative)}</div>
         <div class="route-gates">
           <div class="route-gate"><span class="k">Full fill</span><span class="v ${candidate.full_fill ? 'positive' : 'negative'}">${candidate.full_fill ? 'confirmed' : 'rejected'}</span></div>
           <div class="route-gate"><span class="k">Allowance</span><span class="v">${esc(candidate.allowance_status)}</span></div>
@@ -2624,6 +2638,37 @@
         <div class="card"><div class="card-header">Held positions</div><div id="route-held-positions" class="route-list">${heldRows}</div></div>
       </div>`;
     }
+    function manualQuoteScanState(obs) {
+      if (manualQuoteScan.phase === 'running') return { key: 'running', label: 'Running' };
+      if (manualQuoteScan.phase === 'failed') return { key: 'failed', label: 'Failed' };
+      if (manualQuoteScan.phase === 'aborted') return { key: 'aborted', label: 'Stopped' };
+      if (manualQuoteScan.phase === 'complete' || (obs && obs.scan_complete)) return { key: 'complete', label: 'Complete' };
+      return { key: 'ready', label: 'Ready' };
+    }
+    function observationProgressHtml(obs = latestRouteObservation, observationState = routeSourceState('observation')) {
+      const scan = manualQuoteScanState(obs);
+      const running = scan.key === 'running';
+      const failed = scan.key === 'failed';
+      const counters = obs
+        ? `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates · ${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls`
+        : 'No observation started';
+      const observationTime = obs && obs.started_at_ns != null
+        ? `Observation started ${new Date(routeTimestampMs(obs.started_at_ns)).toLocaleTimeString()}`
+        : 'Observation time unavailable';
+      const staleReason = observationState === 'stale'
+        ? `Quote observation stale · ${sourceLastSuccessLabel(routeSources.observation)}`
+        : 'Quote age is evaluated from each candidate timestamp and the configured max age';
+      const button = isAdmin
+        ? `<button type="button" class="btn btn-primary" aria-label="Start observation and run manual quote scan" onclick="runManualQuoteScan()"${running ? ' disabled' : ''}>${running ? 'Scanning…' : failed ? 'Resume manual scan' : 'Run manual quote scan'}</button>`
+        : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>';
+      const incident = obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : '';
+      const failure = manualQuoteScan.error ? `<div class="negative" style="margin-top:8px">${esc(manualQuoteScan.error)}</div>` : '';
+      return `<div class="route-observation-progress" data-observation-state="${scan.key}">
+        <div class="route-list-row"><span class="badge ${scan.key === 'complete' ? 'badge-live' : scan.key === 'failed' || scan.key === 'aborted' ? 'badge-stuck' : scan.key === 'running' ? 'badge-dryrun' : 'badge-unconfigured'}">${scan.label}</span><span>${esc(counters)}</span>${button}</div>
+        <div class="route-wallet-meta">${esc(observationTime)} · ${esc(staleReason)}</div>
+        ${incident}${failure}
+      </div>`;
+    }
     function renderDiagnostics() {
       const el = document.getElementById('view-diagnostics');
       if (!el) return;
@@ -2637,7 +2682,7 @@
         <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
           <div class="card" data-diagnostics-observation>
             <div class="card-header">Observation counters</div>
-            ${observationState === 'loading' ? '<div class="route-empty">Loading…</div>' : observationState === 'failed' || observationState === 'unavailable' ? `<div class="route-empty negative">Unavailable${esc(routeSourceError(routeSources.observation))}</div>` : obs ? `<div class="route-list-row"><span>${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates</span><span>${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls</span><span>${obs.scan_complete ? 'complete' : 'in progress'}</span></div>` : '<div class="route-empty">No observation recorded.</div>'}
+            ${observationState === 'loading' ? '<div class="route-empty">Loading…</div>' : observationState === 'failed' || observationState === 'unavailable' ? `<div class="route-empty negative">Unavailable${esc(routeSourceError(routeSources.observation))}</div>` : obs ? `<div class="route-list-row"><span>${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates</span><span>${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls</span><span>${obs.scan_complete ? 'complete' : 'in progress'}</span></div><div class="route-wallet-meta">Raw cursor: ${esc(obs.next_cursor)} · Client batches this scan: ${manualQuoteScan.batchCount}</div>` : '<div class="route-empty">No observation recorded.</div>'}
           </div>
           <div class="card" data-diagnostics-evidence>
             <div class="card-header">Execution evidence</div>
@@ -2805,8 +2850,8 @@
       const statusStamp = statusState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.status)}` : '';
       const observationStamp = observationState === 'stale' ? ` · ${sourceLastSuccessLabel(routeSources.observation)}` : '';
       return `<div id="route-arb-panel">
-        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
-          <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
+        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP. Start observation runs bounded quote batches automatically.</div></div>
+          <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
         <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
@@ -2919,19 +2964,85 @@
       })().finally(() => { routeDataRequestPromise = null; });
       return routeDataRequestPromise;
     }
-    window.startRouteObservation = async function(btn) {
-      if (!requireAuth()) return;
-      btnLoading(btn, 'Starting…');
-      try { unwrapResult(await authenticatedActor.start_route_observation_v1()); await loadRouteData(); renderCurrentView(); toast('Quote-only observation started', 'success'); }
-      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
+    function manualQuoteScanStillActive(generation, observationId) {
+      return generation === manualQuoteScanGeneration
+        && state.activeView === 'markets'
+        && manualQuoteScan.phase === 'running'
+        && manualQuoteScan.observationId === observationId;
+    }
+    function stopManualQuoteScan(generation, reason) {
+      if (generation !== manualQuoteScanGeneration) return false;
+      manualQuoteScanGeneration += 1;
+      manualQuoteScan.phase = 'aborted';
+      manualQuoteScan.error = reason;
+      if (state.activeView === 'markets') renderCurrentView();
+      return false;
+    }
+    window.runManualQuoteScan = async function() {
+      if (!requireAuth()) return false;
+      if (manualQuoteScan.phase === 'running') return false;
+      if (state.activeView !== 'markets') return stopManualQuoteScan(manualQuoteScanGeneration, 'Markets view is not active; scan was not started');
+
+      const resume = manualQuoteScan.phase === 'failed'
+        && manualQuoteScan.observationId != null
+        && manualQuoteScan.cursor != null;
+      const generation = ++manualQuoteScanGeneration;
+      const scan = resume
+        ? { ...manualQuoteScan, phase: 'running', error: null }
+        : { phase: 'running', observationId: null, cursor: null, batchCount: 0, error: null, startedAtNs: null };
+      manualQuoteScan = scan;
+      let observationId = scan.observationId;
+      let cursor = scan.cursor;
+      try {
+        if (!resume) {
+          const started = unwrapResult(await authenticatedActor.start_route_observation_v1());
+          if (generation !== manualQuoteScanGeneration || state.activeView !== 'markets') return stopManualQuoteScan(generation, 'Markets view changed before the scan started');
+          observationId = started.observation_id;
+          cursor = started.next_cursor == null ? 0n : BigInt(started.next_cursor);
+          manualQuoteScan.observationId = observationId;
+          manualQuoteScan.cursor = cursor;
+          manualQuoteScan.startedAtNs = started.started_at_ns || null;
+          // The start response has only the initial counters. Keep its identity
+          // visible until the authoritative query below replaces it.
+          latestRouteObservation = { ...started, scan_complete: false, candidates_evaluated: 0n, total_work_items: started.route_size_count || 0n, quote_calls_made: 0n, required_quote_calls: started.required_quote_calls || 0n, incident: [] };
+        }
+
+        await loadRouteData();
+        if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+        if (!latestRouteObservation || latestRouteObservation.observation_id !== observationId) return stopManualQuoteScan(generation, 'A newer or unavailable observation replaced this scan');
+        while (true) {
+          if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+          const result = unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(cursor, 100));
+          const observation = result && result.observation;
+          if (!observation || observation.observation_id !== observationId) return stopManualQuoteScan(generation, 'Observation identity changed; scan stopped before completion');
+          cursor = observation.next_cursor == null ? cursor : BigInt(observation.next_cursor);
+          manualQuoteScan.cursor = cursor;
+          manualQuoteScan.batchCount += 1;
+          latestRouteObservation = observation;
+          if (typeof routeSources !== 'undefined' && routeSources.observation) markSourceFresh(routeSources.observation, observation);
+          await loadRouteData();
+          if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+          if (!latestRouteObservation || latestRouteObservation.observation_id !== observationId) return stopManualQuoteScan(generation, 'A newer or unavailable observation replaced this scan');
+          if (observation.scan_complete) {
+            manualQuoteScan.phase = 'complete';
+            manualQuoteScan.error = null;
+            renderCurrentView();
+            toast('Manual quote scan complete', 'success');
+            return true;
+          }
+        }
+      } catch (e) {
+        if (generation !== manualQuoteScanGeneration || state.activeView !== 'markets') {
+          return stopManualQuoteScan(generation, 'Markets view changed; scan stopped without claiming completion');
+        }
+        manualQuoteScan.phase = 'failed';
+        manualQuoteScan.error = e && e.message ? e.message : String(e);
+        renderCurrentView();
+        toast('Manual quote scan failed. Resume manual scan to retry from the saved cursor.', 'error');
+        return false;
+      }
     };
-    window.continueRouteObservation = async function(btn) {
-      if (!requireAuth()) return;
-      if (!latestRouteObservation || latestRouteObservation.scan_complete) { toast('Start a new observation first', 'error'); return; }
-      btnLoading(btn, 'Quoting…');
-      try { unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(latestRouteObservation.next_cursor, 100)); await loadRouteData(); renderCurrentView(); toast('Observation batch complete', 'success'); }
-      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
-    };
+    //    window.startRouteObservation is intentionally replaced by runManualQuoteScan.
 
     function cockpitSourceLabel(sourceName, value, emptyLabel, sourceState = routeSourceState(sourceName)) {
       const state = sourceState;

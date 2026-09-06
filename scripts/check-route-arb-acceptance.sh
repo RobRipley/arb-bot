@@ -40,6 +40,7 @@ echo "PASS: dashboard module JavaScript parses."
 node scripts/test-dashboard-data-state.cjs
 node scripts/test-dashboard-health.cjs
 node scripts/test-dashboard-runtime.cjs
+node scripts/test-dashboard-observation.cjs
 
 echo "== release Wasm build =="
 cargo clean -p arb_bot
