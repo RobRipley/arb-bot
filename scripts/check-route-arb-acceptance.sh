@@ -34,6 +34,7 @@ sed -n '/<script type="module">/,/<\/script>/p' src/arb_bot/src/dashboard.html \
   | sed '1d;$d' > "$dashboard_js"
 node --check --input-type=module < "$dashboard_js"
 echo "PASS: dashboard module JavaScript parses."
+node scripts/test-dashboard-health.cjs
 
 echo "== release Wasm build =="
 cargo clean -p arb_bot
