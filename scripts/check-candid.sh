@@ -369,4 +369,19 @@ else
   fi
 fi
 
+# ── ExecutionRecordV1 realized-profit wire-shape guard ───────────────────
+# Backend uses Option<i128>, so the dashboard must describe Candid `opt int`.
+# An int64 here silently truncates valid realized values at the UI boundary.
+echo
+echo "== structural guard: ExecutionRecordV1.realized_profit is opt int =="
+if rg -q 'realized_profit: Option<i128>' src/arb_bot/src/route_arb.rs \
+  && rg -q 'realized_profit[[:space:]]*:[[:space:]]*opt int;' src/arb_bot/arb_bot.did \
+  && rg -q 'realized_profit:[[:space:]]*I\.Opt\(I\.Int\)' src/arb_bot/src/dashboard.html \
+  && ! rg -q 'realized_profit:[[:space:]]*I\.Opt\(I\.Int64\)' src/arb_bot/src/dashboard.html; then
+  echo "PASS: realized_profit is represented as arbitrary-precision Candid opt int."
+else
+  echo "FAIL: realized_profit wire shape drifted from Option<i128> / opt int." >&2
+  fail=1
+fi
+
 exit "$fail"

@@ -967,7 +967,7 @@
         quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
         adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
         reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
-        realized_profit: I.Opt(I.Int64), start_asset: I.Opt(RouteAsset),
+        realized_profit: I.Opt(I.Int), start_asset: I.Opt(RouteAsset),
       });
       const RouteExecutionLegStatusV1 = I.Variant({
         Quoted: I.Null, Refunded: I.Null, Prepared: I.Null, Submitted: I.Null,
@@ -1533,7 +1533,7 @@
     function sourceLastSuccessLabel(source) {
       return source.lastSuccessMs == null ? 'last success unknown' : `as of ${new Date(source.lastSuccessMs).toLocaleTimeString()}`;
     }
-    function sourceStateLabel(name, staleAfterMs = null) {
+    function sourceStateText(name, staleAfterMs = null) {
       const source = routeSources[name];
       if (!source) return 'Unavailable';
       const status = routeSourceState(name, staleAfterMs);
@@ -1542,6 +1542,10 @@
       if (status === 'loading') return 'Loading…';
       return `${status === 'failed' ? 'Failed' : 'Unavailable'}${source.error ? ` · ${source.error}` : ''}`;
     }
+    // Source labels are inserted into several innerHTML templates. Keep the
+    // raw form for callers that escape later, and make the HTML-facing helper
+    // safe by construction so a rejected query can never become markup.
+    function sourceStateLabel(name, staleAfterMs = null) { return esc(sourceStateText(name, staleAfterMs)); }
     function sourceHasValue(name, staleAfterMs = null) {
       const source = routeSources[name];
       if (!source) return false;
@@ -2349,8 +2353,9 @@
     function volumeLive(pool) {
       const stats = latestVolumeStats;
       const statsState = routeSourceState('volumeStats');
-      if (statsState === 'failed' || statsState === 'unavailable') return { state: 'UNKNOWN', reason: sourceStateLabel('volumeStats'), facts: null };
-      if (statsState === 'loading' || !stats) return { state: 'STALE', reason: sourceStateLabel('volumeStats'), facts: null };
+      if (statsState === 'failed' || statsState === 'unavailable') return { state: 'UNKNOWN', reason: sourceStateText('volumeStats'), facts: null };
+      if (statsState === 'loading' || !stats) return { state: 'LOADING', reason: sourceStateText('volumeStats'), facts: null };
+      if (statsState === 'stale') return { state: 'STALE', reason: sourceStateText('volumeStats'), facts: null };
       const status = stats[pool.statsKey];
       const cfg = status.config, st = status.state;
       const healthPool = latestHealthReport ? (latestHealthReport.pools || []).find(p => variantKey(p.pool) === variantKey(pool.poolVariant)) : null;
@@ -2387,7 +2392,7 @@
       if (latestRouteLock && latestRouteLock.reconciliation_required) {
         items.push({ key: 'route-reconciliation', kind: 'incident',
           title: 'Route execution requires reconciliation', meta: esc(latestRouteLock.operation_id),
-          actionLabel: 'View route', go: () => goTo('markets') });
+          actionLabel: 'View diagnostics', go: () => goTo('diagnostics') });
       }
       if (publicHealthFailed || !latestPublicHealth) {
         items.push({ key: 'health-unavailable', kind: 'incident',
@@ -3307,12 +3312,41 @@
       if (state === 'stale') return { state, label: `Stale · ${sourceLastSuccessLabel(routeSources[sourceName])}` };
       return { state, label: value ? value : emptyLabel };
     }
+    function routeExecutionLegCount(execution) {
+      if (!execution) return null;
+      const detail = typeof routeExecutionDetails !== 'undefined' ? routeExecutionDetails.get(execution.execution_id) : null;
+      if (detail && detail.status === 'fresh' && detail.value && detail.value.detail_available && Array.isArray(detail.value.legs) && detail.value.legs.length) {
+        return detail.value.legs.length;
+      }
+      const candidates = routeSources.candidates && routeSources.candidates.value;
+      const candidateList = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean) : [];
+      const candidate = candidateList.find(item => item.route_id === execution.route_id);
+      if (!candidate) return null;
+      if (Array.isArray(candidate.legs) && candidate.legs.length) return candidate.legs.length;
+      return Array.isArray(candidate.asset_path) && candidate.asset_path.length > 1 ? candidate.asset_path.length - 1 : null;
+    }
     function cockpitExecutionLegLabel(execution) {
       if (!execution) return 'Leg unavailable';
       const index = Number(execution.current_leg_index);
-      const total = execution.total_legs ?? execution.leg_count ?? execution.route_leg_count;
       if (!Number.isFinite(index)) return 'Leg unavailable';
-      return total == null ? `Leg ${index + 1}` : `Leg ${index + 1} of ${Number(total)}`;
+      const total = routeExecutionLegCount(execution);
+      return total == null ? `Leg ${index + 1} · total unavailable` : `Leg ${index + 1} of ${total}`;
+    }
+    function cockpitExecutionPhaseLabel(execution) {
+      if (!execution) return null;
+      switch (variantKey(execution.phase)) {
+        case 'Planned':
+        case 'LegPrepared': return 'Preparing';
+        case 'LegSubmitted': return 'Executing';
+        case 'AwaitingSettlement': return 'Confirming';
+        case 'ReconciliationRequired': return 'Reconciling';
+        case 'LegSettled':
+        case 'RemainingRouteRequoted': return 'Evaluating';
+        case 'HeldInventory': return 'Blocked';
+        case 'Aborted': return 'Stopped';
+        case 'Completed': return 'Scanning';
+        default: return 'Unknown';
+      }
     }
 
     function cockpitTodayResults(terminalState) {
@@ -3341,28 +3375,23 @@
       const runtimeState = routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
       const executionState = routeSourceState('currentExecution');
       const terminalState = routeSourceState('terminalExecutions');
-      // Failed and unavailable sources render Unavailable; cached failures render Stale;
-      // neither state is allowed to fall through to a healthy empty label.
       const executionSource = cockpitSourceLabel('currentExecution', latestRouteExecution ? `${latestRouteExecution.execution_id} · ${cockpitExecutionLegLabel(latestRouteExecution)}` : '', 'No active execution', executionState);
       const terminalSource = cockpitSourceLabel('terminalExecutions', latestTerminalExecutions.length ? `${latestTerminalExecutions[0].execution_id} · ${routePhaseLabel(latestTerminalExecutions[0].phase)}` : '', 'No terminal route execution', terminalState);
-      if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) {
-        return { label: 'Unknown', heartbeat: 'Heartbeat unknown', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      }
+      const unknown = () => ({ label: 'Unknown', heartbeat: 'Heartbeat unknown', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) });
+      if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) return unknown();
       if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      if (!latestRouteRuntime.compiled_support) return { label: 'Unknown', heartbeat: 'Unknown · runtime support unavailable', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      const phase = latestRouteExecution ? variantKey(latestRouteExecution.phase) : null;
-      const phaseLabel = phase === 'AwaitingSettlement' ? 'Confirming' : phase === 'ReconciliationRequired' ? 'Reconciling' : phase === 'HeldInventory' ? 'Blocked' : phase === 'Aborted' ? 'Stopped' : phase && phase !== 'Completed' ? 'Executing' : 'Scanning';
+      if (!latestRouteRuntime.compiled_support) return { ...unknown(), heartbeat: 'Unknown · runtime support unavailable' };
+      if (executionState === 'loading' || executionState === 'failed' || executionState === 'unavailable') return unknown();
+      const phaseLabel = latestRouteExecution
+        ? cockpitExecutionPhaseLabel(latestRouteExecution)
+        : routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete)
+          ? 'Evaluating' : executionState === 'stale' ? 'Unknown' : 'Scanning';
+      if (executionState === 'stale' && !latestRouteExecution) return { ...unknown(), heartbeat: `Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)}` };
       const gatesOff = !latestRouteRuntime.live_authorized || !latestRouteRuntime.enabled || latestRouteRuntime.dry_run;
-      if (executionState === 'failed' || executionState === 'unavailable') {
-        return { label: 'Unknown', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      }
-      if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phaseLabel)) {
-        return { label: phaseLabel, heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      }
-      if (gatesOff) {
-        return { label: 'Stopped', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      }
-      return { label: phaseLabel === 'Blocked' ? 'Blocked' : phaseLabel, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      const heartbeat = latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped';
+      if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phaseLabel)) return { label: phaseLabel, heartbeat, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (gatesOff) return { label: 'Stopped', heartbeat, phase: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      return { label: phaseLabel, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
     }
 
     function renderCockpit() {
@@ -3401,7 +3430,7 @@
       const attn = attentionItems();
 
       el.innerHTML = `
-        <div class="status-strip" data-cockpit-state data-cockpit-states="Stopped Scanning Executing Confirming Reconciling Blocked Unknown">
+        <div class="status-strip" data-cockpit-state data-cockpit-states="Stopped Scanning Evaluating Preparing Executing Confirming Reconciling Blocked Unknown">
           <button type="button" class="status-chip info" onclick="goTo('markets')">
             <span class="status-chip-label">Bot state</span>
             <span class="status-chip-value">${esc(cockpit.label)}</span>
@@ -3760,6 +3789,7 @@
 
     window.doRunVolumeCycle = async function (poolId, btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       btnLoading(btn, 'Running…');
       try {
         const report = await authenticatedActor.trigger_volume_cycle();
@@ -3770,6 +3800,7 @@
     };
     window.doVolumeRebalance = async function (poolId, btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       btnLoading(btn, 'Rebalancing…');
       try {
         await authenticatedActor.trigger_volume_rebalance();
@@ -4016,7 +4047,7 @@
     function volumeCostCardHtml() {
       const stats = latestVolumeStats;
       const statsState = routeSourceState('volumeStats');
-      if (!stats || ['failed', 'unavailable'].includes(statsState)) return `<div class="card" style="margin-bottom:var(--sp-4)"><div class="card-header">Volume cost ${sourceStampHtml('volumeStats')}</div><div class="text-negative">${esc(sourceStateLabel('volumeStats'))}</div></div>`;
+      if (!stats || ['failed', 'unavailable'].includes(statsState)) return `<div class="card" style="margin-bottom:var(--sp-4)"><div class="card-header">Volume cost ${sourceStampHtml('volumeStats')}</div><div class="text-negative">${sourceStateLabel('volumeStats')}</div></div>`;
       let tCost = 0, tVol = 0, tTrades = 0, tToday = 0, tCap = 0;
       const rows = VOLUME_POOLS.map(p => {
         const st = stats[p.statsKey].state, cfg = stats[p.statsKey].config;
@@ -4077,12 +4108,12 @@
                   const v = (t.noVol || !vol) ? null : bi(vol[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
                   const o = (!isAdmin || !op) ? null : bi(op[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
                   const total = [a, v, o].some(value => value != null) ? (a || 0) + (v || 0) + (o || 0) : null;
-                  return `<tr data-balance-source="${esc(sourceStateLabel('legacyBalances'))}">
+                  return `<tr data-balance-source="${sourceStateLabel('legacyBalances')}">
                     <td>${tokenLogo(t.sym)}${t.sym}${t.noVol ? ' <span class="mark">*</span>' : ''}</td>
-                    <td>${a != null ? fmt(a, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('legacyBalances') ? 'Unavailable' : esc(sourceStateLabel('legacyBalances'))}</span>`}</td>
-                    <td>${v != null ? fmt(v, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('volumeBalances') ? 'Unavailable' : esc(sourceStateLabel('volumeBalances'))}</span>`}</td>
-                    <td>${o != null ? fmt(o, t.dec > 6 ? 4 : 2) : (!isAdmin ? '<span class="dash">login</span>' : `<span class="dash">${esc(sourceStateLabel('operatorBalances'))}</span>`)}</td>
-                    <td>${total == null ? `<span class="dash">${esc(sourceStateLabel('legacyBalances'))}</span>` : fmt(total, t.dec > 6 ? 4 : 2)}</td>
+                    <td>${a != null ? fmt(a, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('legacyBalances') ? 'Unavailable' : sourceStateLabel('legacyBalances')}</span>`}</td>
+                    <td>${v != null ? fmt(v, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('volumeBalances') ? 'Unavailable' : sourceStateLabel('volumeBalances')}</span>`}</td>
+                    <td>${o != null ? fmt(o, t.dec > 6 ? 4 : 2) : (!isAdmin ? '<span class="dash">login</span>' : `<span class="dash">${sourceStateLabel('operatorBalances')}</span>`)}</td>
+                    <td>${total == null ? `<span class="dash">${sourceStateLabel('legacyBalances')}</span>` : fmt(total, t.dec > 6 ? 4 : 2)}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -4493,12 +4524,21 @@
     window.leverStrategyS = () => flipLever('Strategy S', () => authenticatedActor.set_bob_execution_enabled(true).then(checkRes), () => authenticatedActor.set_bob_execution_enabled(false).then(checkRes), currentConfig.bob_execution_enabled);
     window.leverVolume = () => flipLever('Volume engine', () => authenticatedActor.resume_volume(), () => authenticatedActor.pause_volume(), !!(latestVolumeStats && latestVolumeStats.volume_paused));
     function checkRes(r) { if (r && 'Err' in r) throw new Error(r.Err); return r; }
+    function requireFreshVolumeStats() {
+      if (routeSourceState('volumeStats') === 'fresh' && latestVolumeStats) return true;
+      toast(`Volume status ${sourceStateText('volumeStats')}; refresh before changing it`, 'error');
+      return false;
+    }
+    const volumeFlip = window.leverVolume;
+    window.leverVolume = () => { if (!requireFreshVolumeStats()) return; return volumeFlip(); };
 
     window.leverVolumePool = async function (poolId) {
       if (state.levers['pool-' + poolId] === 'applying') return;
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const pool = VOLUME_POOLS.find(p => p.id === poolId);
-      const status = latestVolumeStats[pool.statsKey];
+      const status = latestVolumeStats && pool ? latestVolumeStats[pool.statsKey] : null;
+      if (!pool || !status) { toast('Volume status unavailable; refresh before changing it', 'error'); return; }
       const cfg = status.config;
       state.levers['pool-' + poolId] = 'applying';
       renderOps();
@@ -4512,11 +4552,21 @@
       finally { delete state.levers['pool-' + poolId]; renderOps(); }
     };
 
-    function leverHtml(key, name, sub, on, onClick) {
+    function leverHtml(key, name, sub, on, onClick, sourceName = 'volumeStats') {
       const applying = state.levers[key] === 'applying';
+      const source = routeSources[sourceName];
+      const sourceState = routeSourceState(sourceName);
+      const authoritative = sourceState === 'fresh';
+      const actionable = authoritative || applying;
+      const label = applying ? 'Applying' : authoritative ? (on ? 'On' : 'Off')
+        : sourceState === 'stale' ? `Stale · ${sourceLastSuccessLabel(source)}`
+          : sourceState === 'loading' ? 'Loading…'
+            : sourceState === 'failed' ? `Failed${source.error ? ` · ${source.error}` : ''}`
+              : 'Unavailable';
+      const pressed = authoritative && !!on;
       return `<div class="lever">
-        <div class="lever-head"><span class="lever-name">${esc(name)}</span><button type="button" class="lever-toggle${on ? ' on' : ''}${applying ? ' applying' : ''}" aria-pressed="${on}" aria-label="${esc(name)} ${on ? 'on' : 'off'}" ${applying ? 'disabled' : ''} onclick="${onClick}"><span>${applying ? 'Applying' : on ? 'On' : 'Off'}</span></button></div>
-        <div class="lever-sub">${applying ? '<span class="mini-spin"></span>applying…' : esc(sub)}</div>
+        <div class="lever-head"><span class="lever-name">${esc(name)}</span><button type="button" class="lever-toggle${pressed ? ' on' : ''}${applying ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="${esc(name)} ${esc(label)}" ${actionable ? '' : 'disabled'} onclick="${actionable ? onClick : ''}"><span>${esc(label)}</span></button></div>
+        <div class="lever-sub">${applying ? '<span class="mini-spin"></span>applying…' : authoritative ? esc(sub) : esc(sourceStateText(sourceName))}</div>
       </div>`;
     }
 
@@ -4677,6 +4727,7 @@
     }
     window.saveVolumePoolConfig = async function (poolId) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const pool = VOLUME_POOLS.find(p => p.id === poolId);
       const prefix = pool.prefix;
       const cfg = latestVolumeStats[pool.statsKey].config;
@@ -4696,6 +4747,7 @@
     };
     window.saveVolumeGlobal = async function (btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const interval = BigInt(parseInt(document.getElementById('vol-global-interval').value || '0'));
       const drift = BigInt(parseInt(document.getElementById('vol-global-drift').value || '0'));
       btnLoading(btn);
@@ -4842,9 +4894,11 @@
       const routeAutomation = routeAutomationState();
       const executionCopy = routeAutomation.state === 'On'
         ? 'execution authorized · settlement checks required'
-        : routeAutomation.state === 'Off' || routeAutomation.state === 'Blocked'
+        : routeAutomation.state === 'Off'
           ? 'quote-only · disabled'
-          : `${routeAutomation.label} · execution status unknown`;
+          : routeAutomation.state === 'Blocked'
+            ? `Blocked · ${routeAutomation.reason || 'automation blocked'}`
+            : `${routeAutomation.label} · execution status unknown`;
 
       el.innerHTML = `
         <div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">${routeRuntimeHtml()}</div>
@@ -4866,8 +4920,8 @@
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Levers <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched weekly</span></div>
           <div class="lever-grid">
-            ${leverHtml('vol', 'Volume engine', 'Master run/pause', !(stats && stats.volume_paused), 'leverVolume()')}
-            ${stats ? VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', stats[p.statsKey].config.enabled, `leverVolumePool('${p.id}')`)).join('') : ''}
+            ${leverHtml('vol', 'Volume engine', 'Master run/pause', !!(stats && !stats.volume_paused), 'leverVolume()')}
+            ${VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', !!(stats && stats[p.statsKey] && stats[p.statsKey].config.enabled), `leverVolumePool('${p.id}')`)).join('')}
           </div>
           <div class="divider"></div>
           <label>Volume pool config</label>
@@ -5245,11 +5299,14 @@
       const filter = state.ledgerFilter;
       const rows = filter ? ledgerCache.entries.filter(e => e.stratId === filter) : ledgerCache.entries;
       const sourceState = routeSourceState('legacyLedger');
+      const staleNotice = sourceState === 'stale'
+        ? `<tr><td colspan="6" class="ledger-detail-state ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.legacyLedger))}</td></tr>`
+        : '';
       tbody.innerHTML = ['failed', 'unavailable'].includes(sourceState)
         ? `<tr><td colspan="6" class="ledger-detail-state negative">${sourceState === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources.legacyLedger))}</td></tr>`
-        : rows.length
+        : staleNotice + (rows.length
         ? rows.map(ledgerEntryHtml).join('')
-        : `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades on this page</td></tr>`;
+        : `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades on this page</td></tr>`);
       const countEl = document.getElementById('ledger-count');
       if (countEl) countEl.textContent = window._lastSummary ? `${rows.length} shown of ${bi(window._lastSummary.total_legs)} legs all-time` : '';
       const prevBtn = document.getElementById('ledger-prev'), nextBtn = document.getElementById('ledger-next'), pageEl = document.getElementById('ledger-page');
@@ -5390,14 +5447,18 @@
       const entries = await loadActivity();
       if (seq !== activityLoadSeq) return; // superseded — drop this response entirely
       const activityState = routeSourceState('activity');
-      (Array.isArray(entries) ? entries : []).forEach(e => { if (e.category) seenActivityCategories.add(e.category); });
+      const activityEntries = Array.isArray(entries) ? entries : [];
+      activityEntries.forEach(e => { if (e.category) seenActivityCategories.add(e.category); });
       renderActivityFilterOptions(filter);
       const failedActivity = ['failed', 'unavailable'].includes(activityState);
-      const filtered = filter && Array.isArray(entries) ? entries.filter(e => e.category === filter) : (Array.isArray(entries) ? entries : []);
+      const filtered = filter ? activityEntries.filter(e => e.category === filter) : activityEntries;
       const list = document.getElementById('activity-list');
       if (!list) return;
+      const staleNotice = activityState === 'stale'
+        ? `<div class="ledger-note ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.activity))}</div>`
+        : '';
       const catColors = { trade: 'var(--accent)', swap: 'var(--info)', volume: 'var(--v-bob)', volume_swap: 'var(--v-bob)', dry_run: 'var(--text-tertiary)', recover: 'var(--warning)', admin: 'var(--v-partydex)', withdraw: 'var(--warning)', pool_deposit: 'var(--profit)', pool_redeem: 'var(--v-bob)', pool_exchange: 'var(--info)', approval: 'var(--text-secondary)', arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)' };
-      list.innerHTML = failedActivity
+      list.innerHTML = staleNotice + (failedActivity
         ? `<div class="text-negative">${activityState === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources.activity))}</div>`
         : filtered.length
         ? [...filtered].reverse().map(e => `<div class="activity-entry"><span class="activity-ts">${fmtTime(e.timestamp)}</span><span class="activity-cat" style="color:${catColors[e.category] || 'var(--text-tertiary)'}">${esc(e.category)}</span>${esc(e.message)}</div>`).join('')
@@ -5405,11 +5466,11 @@
             // Filtering is client-side over one 50-record page, so an empty
             // result usually means "none on THIS page", not "none ever" — say
             // which, rather than implying the category has never been written.
-            ? `<div class="text-ter">No <span class="text-sec">${esc(filter)}</span> entries on page ${activityPage + 1}${entries.length ? ` (of ${entries.length} shown)` : ''} — try Next, or All categories.</div>`
-            : `<div class="text-ter">No activity recorded</div>`);
+            ? `<div class="text-ter">No <span class="text-sec">${esc(filter)}</span> entries on page ${activityPage + 1}${activityEntries.length ? ` (of ${activityEntries.length} shown)` : ''} — try Next, or All categories.</div>`
+            : `<div class="text-ter">No activity recorded</div>`));
       const prevBtn = document.getElementById('activity-prev'), nextBtn = document.getElementById('activity-next'), pageEl = document.getElementById('activity-page');
       if (prevBtn) prevBtn.disabled = activityPage === 0;
-      if (nextBtn) nextBtn.disabled = entries.length < ACTIVITY_PAGE_SIZE;
+      if (nextBtn) nextBtn.disabled = activityEntries.length < ACTIVITY_PAGE_SIZE;
       if (pageEl) pageEl.textContent = `Page ${activityPage + 1}`;
     }
     window.activityPrev = () => { if (activityPage > 0) { activityPage--; loadActivityIntoDom(); } };

@@ -8,7 +8,7 @@ echo "== Six-asset route-arbitrage acceptance =="
 
 tests=(
   route_registry route_graph route_accounting route_policy route_observation
-  route_storage account_mutation_lock route_execution route_execution_detail route_rumi route_icpswap route_scheduler dashboard_route_ui
+  route_storage account_mutation_lock route_execution route_execution_detail route_rumi route_icpswap route_scheduler dashboard_route_ui dashboard_candid_wire
   stage1_retirement legacy_freeze state_decode candid
 )
 for test_name in "${tests[@]}"; do

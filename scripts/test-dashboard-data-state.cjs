@@ -202,7 +202,7 @@ vm.runInContext(loadRouteDataSection, context);
   assert.equal(todayMetrics.failed, '1');
   context.cockpitStates.currentExecution = 'stale';
   const staleCurrent = vm.runInContext('cockpitStatus()', context);
-  assert.equal(staleCurrent.label, 'Scanning', 'current source degradation must not override runtime status');
+  assert.equal(staleCurrent.label, 'Unknown', 'stale current execution without cached value must remain Unknown');
   assert.match(staleCurrent.executionSource.label, /^Stale/);
   context.cockpitStates.currentExecution = 'fresh';
   context.cockpitStates.terminalExecutions = 'unavailable';

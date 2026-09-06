@@ -72,6 +72,13 @@ assert.match(html, /get_route_arb_config_v1/);
 assert.match(html, /Promise\.allSettled|markSourceFailed\(routeSources\.(legacyBalances|volumeBalances|operatorBalances)/);
 assert.doesNotMatch(html, /get_route_wallet_balances_v1[^\n]*[?][^\n]*0n/);
 
+// ExecutionRecordV1.realized_profit is an opt int (arbitrary precision), not
+// an opt int64. The Rust Candid wire regression covers [123n] and >i64 values.
+assert.match(html, /realized_profit:\s*I\.Opt\(I\.Int\)/);
+assert.doesNotMatch(html, /realized_profit:\s*I\.Opt\(I\.Int64\)/);
+const wireTest = readFileSync('src/arb_bot/tests/dashboard_candid_wire.rs', 'utf8');
+assert.match(wireTest, /encode_one[\s\S]*decode_one/);
+
 // Cockpit hierarchy and phase precedence are contractual.
 const cockpit = section('    function renderCockpit()', '    // ═══════ Markets');
 const today = cockpit.indexOf('data-cockpit-today-results');
@@ -84,5 +91,27 @@ assert.match(html, /settlement|reconciliation/i);
 assert.match(html, /Leg .*of/);
 assert.match(html, /data-diagnostics-manual-scan/);
 assert.match(html, /runtime query|Runtime status unavailable|Unknown/);
+assert.match(html, /Evaluating/);
+assert.match(html, /Preparing/);
+assert.match(html, /total unavailable/);
+assert.doesNotMatch(html, /execution\.total_legs|execution\.leg_count|execution\.route_leg_count/);
+assert.doesNotMatch(html, /routeAutomation\.state === 'Blocked'[\s\S]{0,180}quote-only/);
+assert.match(html, /route-reconciliation[\s\S]{0,260}goTo\('diagnostics'\)/);
+
+// Volume controls and lazy historical surfaces must expose source degradation.
+assert.match(html, /volumeStats.*stale|stale.*volumeStats/i);
+assert.match(html, /sourceState === 'loading'[\s\S]{0,500}Loading/);
+assert.match(html, /sourceState === 'failed'[\s\S]{0,500}Failed/);
+assert.match(html, /Stale · .*sourceLastSuccessLabel\(routeSources\.legacyLedger\)/);
+assert.match(html, /Stale · .*sourceLastSuccessLabel\(routeSources\.activity\)/);
+
+// Hostile source errors must be escaped before a source label can enter
+// innerHTML (especially Cockpit's balance hero values).
+const sourceSection = html.slice(html.indexOf('    function createSourceState()'), html.indexOf('    // ═══════ Button loading states'));
+const sourceContext = vm.createContext({ Date, console: { error() {} }, esc: value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) });
+vm.runInContext(sourceSection, sourceContext);
+vm.runInContext("function routeSourceState(name, staleAfterMs = null) { return sourceDisplayState(routeSources[name], staleAfterMs); }", sourceContext);
+vm.runInContext("routeSources.legacyBalances.status = 'failed'; routeSources.legacyBalances.error = '<img src=x onerror=alert(1)>';", sourceContext);
+assert.equal(vm.runInContext("sourceStateLabel('legacyBalances')", sourceContext), 'Failed · &lt;img src=x onerror=alert(1)&gt;');
 
 console.log('PASS: final frontend review regressions are covered');
