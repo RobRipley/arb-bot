@@ -1475,6 +1475,10 @@
     let routeLedgerHasMore = false;
     let routeLedgerIncomplete = false;
     let routeLedgerLoadedCount = 0;
+    let routeLedgerRequestedPage = 0;
+    let routeLedgerRequestGeneration = 0;
+    let routeLedgerRequestPromise = null;
+    let routeLedgerRequestPage = null;
     let routeDataRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
     let routeRuntimeAuthoritativeRefreshPromise = null;
@@ -4749,7 +4753,7 @@
           <div class="ledger-leg-head"><span class="ledger-leg-title">Leg ${index + 1} of ${count} · ${esc(routeLedgerStatusLabel(leg.status))}</span><span class="text-ter">${esc(from)} → ${esc(to)}</span></div>
           <div class="ledger-leg-grid">
             <div><div class="ledger-detail-group-label">Route</div><div class="ledger-detail-kv"><span class="k">Venue</span><span class="v">${esc(routeLedgerVenueLabel(leg.venue))}</span></div><div class="ledger-detail-kv"><span class="k">Pool</span><span class="v">${esc(leg.pool_id || 'Unavailable')} · ${esc(routeLedgerPrincipalLabel(leg.pool_principal))}</span></div><div class="ledger-detail-kv"><span class="k">Path / edge</span><span class="v">${esc(leg.edge_id || 'Unavailable')} · ${esc(from)} → ${esc(to)}</span></div></div>
-            <div><div class="ledger-detail-group-label">Quote and request</div><div class="ledger-detail-kv"><span class="k">Requested input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted output</span><span class="v">${routeLedgerAmount(leg.quoted_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Minimum accepted</span><span class="v">${routeLedgerAmount(leg.minimum_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Ledger fees</span><span class="v">${routeLedgerAmount(leg.input_fee_native, leg.from)} + ${routeLedgerAmount(leg.output_fee_native, leg.to)}</span></div></div>
+            <div><div class="ledger-detail-group-label">Quote and request</div><div class="ledger-detail-kv"><span class="k">Requested input</span><span class="v">Unavailable · not separately recorded</span></div><div class="ledger-detail-kv"><span class="k">Quoted input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted output</span><span class="v">${routeLedgerAmount(leg.quoted_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Minimum accepted</span><span class="v">${routeLedgerAmount(leg.minimum_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Ledger fees</span><span class="v">${routeLedgerAmount(leg.input_fee_native, leg.from)} + ${routeLedgerAmount(leg.output_fee_native, leg.to)}</span></div></div>
             <div><div class="ledger-detail-group-label">Actual settlement</div><div class="ledger-detail-kv"><span class="k">Actual input debit</span><span class="v">${actualInput}</span></div><div class="ledger-detail-kv"><span class="k">Effective input</span><span class="v">${routeLedgerLegValue(leg.actual_effective_input_native, leg.from, statusKey, 'actual')}</span></div><div class="ledger-detail-kv"><span class="k">Actual output</span><span class="v">${actualOutput}</span></div><div class="ledger-detail-kv"><span class="k">Refund</span><span class="v">${refund}</span></div></div>
           </div>
           <div class="ledger-detail-group"><div class="ledger-detail-group-label">Submission, receipt, and settlement evidence</div>${routeLedgerEvidenceGroupHtml(leg, 'Submission evidence', /submit|request|prepared/i)}${routeLedgerEvidenceGroupHtml(leg, 'Receipt evidence', /receipt|tx|transfer/i)}${routeLedgerEvidenceGroupHtml(leg, 'Settlement evidence', /settle|reconcil|balance/i)}<div class="ledger-detail-kv"><span class="k">Prepared</span><span class="v">${leg.prepared_at_ns ? fmtTime(leg.prepared_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Submitted</span><span class="v">${leg.submitted_at_ns ? fmtTime(leg.submitted_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Settled</span><span class="v">${leg.settled_at_ns ? fmtTime(leg.settled_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Reconciled</span><span class="v">${leg.reconciled_at_ns ? fmtTime(leg.reconciled_at_ns) : 'Unavailable'}</span></div>${routeLedgerIncidentHtml(leg)}</div>
@@ -4761,6 +4765,19 @@
       if (status === 'failed') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''} <button type="button" class="btn btn-sm btn-ghost" data-ledger-retry-execution-id="${esc(executionId)}">Retry</button></div>`;
       if (status === 'unavailable') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''}</div>`;
       return '<div class="ledger-detail-state">Unavailable</div>';
+    }
+    function routeLedgerCurrentDisclosureButton(executionId) {
+      const body = document.getElementById('route-ledger-body');
+      if (body && typeof body.querySelectorAll === 'function') {
+        for (const button of body.querySelectorAll('[data-ledger-execution-id]')) {
+          if (button.getAttribute('data-ledger-execution-id') === executionId) return button;
+        }
+      }
+      return null;
+    }
+    function focusRouteLedgerDisclosure(executionId) {
+      const current = routeLedgerCurrentDisclosureButton(executionId);
+      if (current && typeof current.focus === 'function') current.focus();
     }
     function routeLedgerEntryHtml(record) {
       const executionId = String(record.execution_id || 'unknown');
@@ -4830,7 +4847,7 @@
           routeExecutionDetails.set(id, { status: 'failed', error: message });
           if (document.getElementById(`ledger-detail-${id}`)) document.getElementById(`ledger-detail-${id}`).querySelector('td').innerHTML = routeLedgerDetailStateHtml('failed', message, id);
           return null;
-        } finally { routeExecutionDetailLoads.delete(id); button.focus(); }
+        } finally { routeExecutionDetailLoads.delete(id); focusRouteLedgerDisclosure(id); }
       })();
       routeExecutionDetailLoads.set(id, load);
       return load;
@@ -4942,16 +4959,22 @@
       if (routeLedgerIncomplete) parts.push(`Incomplete · bounded at ${routeLedgerLoadedCount} route records`);
       return parts.length ? `<div class="ledger-note route-ledger-status ${display === 'stale' || routeLedgerIncomplete ? 'ts-stale' : 'negative'}" id="route-ledger-status">${parts.join(' · ')}</div>` : '<div class="ledger-note route-ledger-status" id="route-ledger-status"></div>';
     }
-    async function loadRouteLedgerPage(page = routeLedgerPage) {
+    async function loadRouteLedgerPage(page = routeLedgerRequestedPage) {
       const source = routeSources.routeLedgerExecutions;
+      const boundedPage = Math.max(0, Number(page) || 0);
+      if (routeLedgerRequestPromise && routeLedgerRequestPage === boundedPage) return routeLedgerRequestPromise;
+      routeLedgerRequestedPage = boundedPage;
+      const generation = ++routeLedgerRequestGeneration;
+      const request = (async () => {
       if (!anonymousActor || typeof anonymousActor.get_terminal_route_executions_v1 !== 'function') {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
         markSourceUnavailable(source, 'route ledger is unavailable');
         renderRouteLedgerTable();
         return false;
       }
-      const boundedPage = Math.max(0, Number(page) || 0);
       const offset = BigInt(boundedPage) * ROUTE_LEDGER_PAGE_SIZE;
       if (offset >= ROUTE_LEDGER_MAX) {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
         routeLedgerIncomplete = true;
         routeLedgerHasMore = false;
         routeLedgerLoadedCount = Number(ROUTE_LEDGER_MAX);
@@ -4960,6 +4983,7 @@
       }
       try {
         const result = await anonymousActor.get_terminal_route_executions_v1(offset, ROUTE_LEDGER_PAGE_SIZE);
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
         if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route ledger query failed');
         const rows = Array.isArray(result.Ok) ? result.Ok.slice().sort((a, b) => {
           const left = BigInt(a.updated_at_ns || 0), right = BigInt(b.updated_at_ns || 0);
@@ -4973,9 +4997,21 @@
         renderRouteLedgerTable();
         return true;
       } catch (error) {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
         markSourceFailed(source, error);
         renderRouteLedgerTable();
         return false;
+      }
+      })();
+      routeLedgerRequestPromise = request;
+      routeLedgerRequestPage = boundedPage;
+      try {
+        return await request;
+      } finally {
+        if (generation === routeLedgerRequestGeneration && routeLedgerRequestPromise === request) {
+          routeLedgerRequestPromise = null;
+          routeLedgerRequestPage = null;
+        }
       }
     }
     function renderRouteLedgerTable() {
@@ -4989,12 +5025,12 @@
       const page = document.getElementById('route-ledger-page');
       const prev = document.getElementById('route-ledger-prev');
       const next = document.getElementById('route-ledger-next');
-      if (page) page.textContent = `Page ${routeLedgerPage + 1}`;
-      if (prev) prev.disabled = routeLedgerPage === 0;
+      if (page) page.textContent = `Page ${routeLedgerRequestedPage + 1}`;
+      if (prev) prev.disabled = routeLedgerRequestedPage === 0;
       if (next) next.disabled = !routeLedgerHasMore;
     }
-    window.routeLedgerPrev = () => { if (routeLedgerPage > 0) loadRouteLedgerPage(routeLedgerPage - 1); };
-    window.routeLedgerNext = () => { if (routeLedgerHasMore) loadRouteLedgerPage(routeLedgerPage + 1); };
+    window.routeLedgerPrev = () => { if (routeLedgerRequestedPage > 0) loadRouteLedgerPage(routeLedgerRequestedPage - 1); };
+    window.routeLedgerNext = () => { if (routeLedgerHasMore) loadRouteLedgerPage(routeLedgerRequestedPage + 1); };
     window.ledgerPrev = () => { if (tradesPage > 0) { tradesPage--; loadLedgerPage(); } };
     window.ledgerNext = () => { if (ledgerHasMore) { tradesPage++; loadLedgerPage(); } };
     function ledgerPagesizeHtml() {
@@ -5083,7 +5119,7 @@
           </div>
           <div class="pagination">
             <button class="btn btn-sm btn-ghost" id="route-ledger-prev" type="button" onclick="routeLedgerPrev()">◂ Prev</button>
-            <span id="route-ledger-page">Page ${routeLedgerPage + 1}</span>
+            <span id="route-ledger-page">Page ${routeLedgerRequestedPage + 1}</span>
             <button class="btn btn-sm btn-ghost" id="route-ledger-next" type="button" onclick="routeLedgerNext()">Next ▸</button>
           </div>
         </div>
@@ -5129,7 +5165,7 @@
         </div>
       `;
       bindRouteLedgerDisclosureHandlers();
-      loadRouteLedgerPage();
+      loadRouteLedgerPage(routeLedgerRequestedPage);
       loadLedgerPage();
       // Populate synchronously so the select is never briefly empty, and so the
       // active filter is visibly restored the instant the view re-renders.

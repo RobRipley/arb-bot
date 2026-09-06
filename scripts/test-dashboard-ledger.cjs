@@ -107,10 +107,14 @@ function makeContext(actor, details = new Map()) {
             hidden: false,
             innerHTML: '',
             textContent: '',
-            attrs: { 'aria-expanded': 'false' },
+            attrs: { 'aria-expanded': 'false', ...(id.startsWith('ledger-disclosure-') ? { 'data-ledger-execution-id': id.slice('ledger-disclosure-'.length) } : {}) },
             getAttribute(name) { return this.attrs[name] || null; },
             setAttribute(name, value) { this.attrs[name] = String(value); },
             querySelector() { return this; },
+            querySelectorAll(selector) {
+              if (selector !== '[data-ledger-execution-id]') return [];
+              return Array.from(elements.values()).filter(candidate => candidate.getAttribute && candidate.getAttribute('data-ledger-execution-id'));
+            },
             focus() { this.focused = true; },
           };
           elements.set(id, element);
@@ -154,6 +158,8 @@ for (const count of [2, 3, 4, 6]) {
   assert.match(rendered, /Pool/);
   assert.match(rendered, /Quoted input/);
   assert.match(rendered, /Requested input/);
+  assert.match(rendered, /Requested input<\/span><span class="v">Unavailable · not separately recorded/);
+  assert.equal((rendered.match(/Requested input/g) || []).length, count, 'requested input must not duplicate quoted input');
   assert.match(rendered, /Actual output/);
   assert.match(rendered, /Refund/);
   assert.match(rendered, /Submission evidence/);
@@ -202,6 +208,11 @@ assert.match(summary, /<button[^>]+type="button"/);
 assert.match(summary, /aria-expanded="false"/);
 assert.match(summary, /aria-controls="ledger-detail-keyboard-exec"/);
 
+const dashboardSource = readFileSync('src/arb_bot/src/dashboard.html', 'utf8');
+for (const marker of ['routeLedgerRequestGeneration', 'routeLedgerRequestedPage', 'routeLedgerCurrentDisclosureButton', 'querySelectorAll']) {
+  assert.match(dashboardSource, new RegExp(marker), `historical ledger race guard is missing ${marker}`);
+}
+
 (async () => {
   assert.equal(noEagerCalls.length, 0, 'rendering summary rows must not fetch details');
   await vm.runInContext("toggleLedgerExecution('exec-3')", context);
@@ -242,6 +253,89 @@ assert.match(summary, /aria-controls="ledger-detail-keyboard-exec"/);
   await vm.runInContext("toggleLedgerExecution('unavailable-exec')", unavailableFixture.context);
   await vm.runInContext("toggleLedgerExecution('unavailable-exec')", unavailableFixture.context);
   assert.match(unavailableFixture.elements.get('ledger-detail-unavailable-exec').innerHTML, /Unavailable/);
+
+  let releaseRerenderDetail;
+  const rerenderDetailPromise = new Promise(resolve => { releaseRerenderDetail = resolve; });
+  const rerenderFixture = makeContext({
+    get_route_execution_detail_v1: async () => rerenderDetailPromise,
+  });
+  const makeDisclosure = id => ({
+    id: `ledger-disclosure-${id}`,
+    attrs: { 'aria-expanded': 'false', 'data-ledger-execution-id': id },
+    textContent: '',
+    getAttribute(name) { return this.attrs[name] || null; },
+    setAttribute(name, value) { this.attrs[name] = String(value); },
+    focus() { this.focused = true; },
+  });
+  const oldDisclosure = makeDisclosure('rerender-exec');
+  const oldDetail = { id: 'ledger-detail-rerender-exec', hidden: false, innerHTML: '', querySelector() { return this; } };
+  let currentDisclosure = oldDisclosure;
+  rerenderFixture.elements.set('ledger-disclosure-rerender-exec', oldDisclosure);
+  rerenderFixture.elements.set('ledger-detail-rerender-exec', oldDetail);
+  rerenderFixture.elements.set('route-ledger-body', { querySelectorAll() { return [currentDisclosure]; } });
+  const pendingRerenderDetail = vm.runInContext("toggleLedgerExecution('rerender-exec')", rerenderFixture.context);
+  await Promise.resolve();
+  const newDisclosure = makeDisclosure('rerender-exec');
+  const newDetail = { id: 'ledger-detail-rerender-exec', hidden: false, innerHTML: '', querySelector() { return this; } };
+  currentDisclosure = newDisclosure;
+  rerenderFixture.elements.set('ledger-disclosure-rerender-exec', newDisclosure);
+  rerenderFixture.elements.set('ledger-detail-rerender-exec', newDetail);
+  releaseRerenderDetail({ Ok: detail('rerender-exec', 2) });
+  await pendingRerenderDetail;
+  assert.equal(oldDisclosure.focused, undefined, 'async rerender must not focus detached disclosure');
+  assert.equal(newDisclosure.focused, true, 'async rerender must focus current disclosure');
+
+  const paginationElements = new Map();
+  const paginationRequests = [];
+  const paginationContext = vm.createContext({
+    BigInt,
+    Date,
+    Number,
+    Object,
+    Array,
+    Promise,
+    console: { error() {} },
+    window: {},
+    routeSources: { routeLedgerExecutions: { status: 'fresh', value: [], error: null, lastSuccessMs: 1, lastAttemptMs: 1 } },
+    anonymousActor: {
+      get_terminal_route_executions_v1(offset, limit) {
+        return new Promise(resolve => paginationRequests.push({ offset: Number(offset), limit: Number(limit), resolve }));
+      },
+    },
+    routeSourceError: source => source.error ? `: ${source.error}` : '',
+    sourceLastSuccessLabel: () => 'as of test',
+    markSourceFresh: (source, value) => Object.assign(source, { status: 'fresh', value, error: null }),
+    markSourceFailed: (source, error) => Object.assign(source, { status: 'failed', error: String(error) }),
+    markSourceUnavailable: (source, reason) => Object.assign(source, { status: 'unavailable', error: String(reason) }),
+    routeLedgerEntryHtml: row => `<tr>${row.execution_id}</tr>`,
+    bindRouteLedgerDisclosureHandlers() {},
+    esc: value => String(value),
+    document: {
+      getElementById(id) {
+        if (!paginationElements.has(id)) paginationElements.set(id, { innerHTML: '', outerHTML: '', textContent: '', disabled: false });
+        return paginationElements.get(id);
+      },
+    },
+  });
+  const paginationStart = dashboardSource.indexOf('    function routeLedgerSourceHtml');
+  const paginationEnd = dashboardSource.indexOf('    window.ledgerPrev', paginationStart);
+  assert.notEqual(paginationStart, -1);
+  assert.notEqual(paginationEnd, -1);
+  vm.runInContext(`let routeLedgerPage = 0; let routeLedgerHasMore = false; let routeLedgerIncomplete = false; let routeLedgerLoadedCount = 0; let routeLedgerRequestedPage = 0; let routeLedgerRequestGeneration = 0; let routeLedgerRequestPromise = null; let routeLedgerRequestPage = null; const ROUTE_LEDGER_PAGE_SIZE = 25n; const ROUTE_LEDGER_MAX = 10000n;\n${dashboardSource.slice(paginationStart, paginationEnd)}`, paginationContext);
+  const firstPage = vm.runInContext('loadRouteLedgerPage(0)', paginationContext);
+  assert.equal(paginationRequests.length, 1, 'initial route page should issue one request');
+  paginationRequests[0].resolve({ Ok: Array.from({ length: 25 }, (_, index) => ({ execution_id: `page-0-${index}`, updated_at_ns: BigInt(index) })) });
+  await firstPage;
+  const nextPage = vm.runInContext('window.routeLedgerNext()', paginationContext);
+  const duplicateNext = vm.runInContext('loadRouteLedgerPage(1)', paginationContext);
+  assert.equal(paginationRequests.length, 2, 'background rerender must dedupe the requested page');
+  const previousPage = vm.runInContext('window.routeLedgerPrev()', paginationContext);
+  assert.equal(paginationRequests.length, 3, 'rapid Next then Prev should issue only the new requested page');
+  paginationRequests[2].resolve({ Ok: [{ execution_id: 'page-0-returned', updated_at_ns: 3n }] });
+  await previousPage;
+  paginationRequests[1].resolve({ Ok: [{ execution_id: 'stale-page-1', updated_at_ns: 4n }] });
+  await Promise.all([nextPage, duplicateNext]);
+  assert.equal(paginationContext.routeSources.routeLedgerExecutions.value[0].execution_id, 'page-0-returned', 'stale page response must not overwrite newer requested rows');
   console.log('dashboard ledger behavior tests passed');
 })().catch(error => {
   console.error(error);
