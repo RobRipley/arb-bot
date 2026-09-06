@@ -76,6 +76,18 @@ vm.runInContext(runtimeSection, context);
 const staleRuntimeHtml = vm.runInContext('routeRuntimeHtml()', context);
 assert(staleRuntimeHtml.includes('Blocked · stale runtime status'));
 assert(!staleRuntimeHtml.includes('onclick='));
+const stoppedRuntime = `{ compiled_support: true, live_authorized: false, enabled: false, dry_run: true, last_tick_ns: 0n, last_error: [], last_realized_profit: [], last_profit_class: [] }`;
+const activeRuntime = `{ compiled_support: true, live_authorized: true, enabled: true, dry_run: false, last_tick_ns: 0n, last_error: [], last_realized_profit: [], last_profit_class: [] }`;
+assert.equal(vm.runInContext(`routeRuntimePayloadTimestampMs({ Ok: ${stoppedRuntime} }, 12345)`, context), 12345);
+assert.equal(vm.runInContext(`routeRuntimePayloadTimestampMs({ Ok: ${activeRuntime} }, 12345)`, context), 0);
+vm.runInContext(`markSourceFresh(routeSources.runtime, ${stoppedRuntime}, Date.now()); latestRouteRuntime = routeSources.runtime.value;`, context);
+const stoppedRuntimeHtml = vm.runInContext('routeRuntimeHtml()', context);
+assert(stoppedRuntimeHtml.includes('Start arbitrage'));
+assert(stoppedRuntimeHtml.includes('onclick='));
+vm.runInContext(`markSourceFresh(routeSources.runtime, ${activeRuntime}, 0); routeSources.runtime.lastAttemptMs = Date.now(); latestRouteRuntime = routeSources.runtime.value;`, context);
+const activeZeroRuntimeHtml = vm.runInContext('routeRuntimeHtml()', context);
+assert(activeZeroRuntimeHtml.includes('Blocked · stale runtime status'));
+assert(!activeZeroRuntimeHtml.includes('onclick='));
 
 const operationsSection = html.slice(html.indexOf('    function routeWalletHtml'), html.indexOf('    function routeTradingLabel'));
 vm.runInContext(operationsSection, context);

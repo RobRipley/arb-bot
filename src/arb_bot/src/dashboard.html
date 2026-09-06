@@ -2472,9 +2472,12 @@
       const value = Number(timestampNs);
       return Number.isFinite(value) ? value / 1e6 : null;
     }
-    function routeRuntimePayloadTimestampMs(result) {
+    function routeRuntimePayloadTimestampMs(result, nowMs = Date.now()) {
       const payload = result && result.Ok ? result.Ok : result;
-      return payload && payload.last_tick_ns != null ? routeTimestampMs(payload.last_tick_ns) : null;
+      if (!payload || payload.last_tick_ns == null) return null;
+      const tickMs = routeTimestampMs(payload.last_tick_ns);
+      const active = Boolean(payload.live_authorized && payload.enabled && !payload.dry_run);
+      return tickMs === 0 && !active ? nowMs : tickMs;
     }
     function routeQuoteStaleAfterMs() {
       const ns = currentConfig && (currentConfig.max_quote_age_ns ?? currentConfig.quote_max_age_ns);
