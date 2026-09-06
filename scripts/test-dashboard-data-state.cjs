@@ -148,6 +148,12 @@ Object.assign(context, {
   TERMINAL_EXECUTIONS_MAX: 1000n,
   terminalExecutionsIncomplete: false,
   terminalExecutionsLoadedCount: 0,
+  routeExecutionDetails: new Map(),
+  routeExecutionDetailLoads: new Map(),
+  currentExecutionDetailGeneration: 0,
+  routeRuntimeQueryGeneration: 0,
+  state: { activeView: 'cockpit' },
+  renderCockpit() {},
 });
 const terminalRows = Array.from({ length: 125 }, (_, index) => ({
   execution_id: `exec-${index}`,

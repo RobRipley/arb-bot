@@ -96,6 +96,14 @@ assert.match(html, /Preparing/);
 assert.match(html, /total unavailable/);
 assert.doesNotMatch(html, /execution\.total_legs|execution\.leg_count|execution\.route_leg_count/);
 assert.doesNotMatch(html, /routeAutomation\.state === 'Blocked'[\s\S]{0,180}quote-only/);
+assert.match(html, /currentExecutionDetail/);
+assert.match(html, /loadCurrentExecutionDetail/);
+assert.match(html, /cockpitExecutionPhaseCopy/);
+assert.match(html, /activeDetail\.asset_path|asset_path/);
+assert.match(html, /flipLever\('vol',[\s\S]{0,260}resume_volume/);
+assert.match(html, /!latestVolumeStats\.volume_paused/);
+assert.doesNotMatch(html, /const actionable = authoritative \|\| applying/);
+
 assert.match(html, /route-reconciliation[\s\S]{0,260}goTo\('diagnostics'\)/);
 
 // Volume controls and lazy historical surfaces must expose source degradation.
@@ -113,5 +121,78 @@ vm.runInContext(sourceSection, sourceContext);
 vm.runInContext("function routeSourceState(name, staleAfterMs = null) { return sourceDisplayState(routeSources[name], staleAfterMs); }", sourceContext);
 vm.runInContext("routeSources.legacyBalances.status = 'failed'; routeSources.legacyBalances.error = '<img src=x onerror=alert(1)>';", sourceContext);
 assert.equal(vm.runInContext("sourceStateLabel('legacyBalances')", sourceContext), 'Failed · &lt;img src=x onerror=alert(1)&gt;');
+// Active execution detail supplies the authoritative route leg count and phase copy.
+const phaseStart = html.indexOf('    function routeExecutionLegCount');
+const phaseEnd = html.indexOf('    function cockpitTodayResults', phaseStart);
+const phaseContext = vm.createContext({
+  routeExecutionDetails: new Map(),
+  routeSources: { candidates: { value: null }, currentExecutionDetail: { executionId: 'active-1', status: 'fresh', value: { detail_available: true, asset_path: ['a', 'b', 'c', 'a'], legs: [{}, {}, {}] } } },
+  routeOpt: value => Array.isArray(value) ? (value.length ? value[0] : null) : value,
+  variantKey: value => value && typeof value === 'object' ? Object.keys(value)[0] : String(value),
+});
+vm.runInContext(html.slice(phaseStart, phaseEnd), phaseContext);
+assert.equal(vm.runInContext("cockpitExecutionLegLabel({ execution_id: 'active-1', route_id: 'route-1', current_leg_index: 1, phase: { LegSubmitted: null } })", phaseContext), 'Leg 2 of 3');
+assert.equal(vm.runInContext("cockpitExecutionPhaseCopy({ execution_id: 'active-1', route_id: 'route-1', current_leg_index: 1, phase: { LegSubmitted: null } })", phaseContext), 'Submitting leg 2 of 3');
+
+// Volume master direction and Applying lock are exercised through the real VM helpers.
+const leverStart = html.indexOf('    async function flipLever');
+const leverEnd = html.indexOf('    // ═══════ Ops — Setup', leverStart);
+const volumeCalls = [];
+const leverContext = vm.createContext({
+  window: {}, state: { levers: {} }, authenticatedActor: { resume_volume: async () => volumeCalls.push('resume'), pause_volume: async () => volumeCalls.push('pause') },
+  latestVolumeStats: { volume_paused: true }, currentConfig: { paused: false, rumi_amm_paused: false, bob_execution_enabled: false },
+  requireAuth: () => true, routeSourceState: () => 'fresh', sourceStateText: () => 'Fresh', requireFreshVolumeStats: () => true, renderOps: () => {}, loadConfig: async () => {}, loadVolumeData: async () => {}, fetchHealth: async () => {}, toast: () => {}, checkRes: value => value,
+  Promise, console,
+});
+vm.runInContext(html.slice(leverStart, leverEnd), leverContext);
+vm.runInContext('window.leverVolume()', leverContext).then(() => {
+  assert.deepEqual(volumeCalls, ['resume'], 'paused volume must call resume exactly once');
+  return vm.runInContext('latestVolumeStats.volume_paused = false; window.leverVolume()', leverContext);
+}).then(() => {
+  assert.deepEqual(volumeCalls, ['resume', 'pause'], 'running volume must call pause exactly once');
+}).catch(error => { console.error(error); process.exitCode = 1; });
+
+
+// Current-detail reads are bounded, deduplicated, and generation-safe.
+const detailLoaderStart = html.indexOf('    async function loadCurrentExecutionDetail');
+const detailLoaderEnd = html.indexOf('    async function loadRouteData', detailLoaderStart);
+(async () => {
+  let calls = 0;
+  const pending = [];
+  const detailContext = vm.createContext({
+    routeSources: { currentExecutionDetail: { status: 'loading', value: null, error: null, lastSuccessMs: null, lastAttemptMs: null } },
+    routeExecutionDetails: new Map(), routeExecutionDetailLoads: new Map(), currentExecutionDetailGeneration: 0,
+    routeRuntimeQueryGeneration: 1, anonymousActor: { get_route_execution_detail_v1: id => { calls += 1; return new Promise(resolve => pending.push({ id, resolve })); } },
+    state: { activeView: 'cockpit' }, renderCockpit: () => {}, markSourceFresh: (source, value) => Object.assign(source, { status: 'fresh', value, error: null, lastSuccessMs: 1 }),
+    markSourceFailed: (source, error) => Object.assign(source, { status: 'failed', error: String(error) }), markSourceUnavailable: (source, error) => Object.assign(source, { status: 'unavailable', value: null, error }),
+    Date, Promise,
+  });
+  vm.runInContext(html.slice(detailLoaderStart, detailLoaderEnd), detailContext);
+  const first = vm.runInContext("loadCurrentExecutionDetail({ execution_id: 'active-1' }, 1)", detailContext);
+  const duplicate = vm.runInContext("loadCurrentExecutionDetail({ execution_id: 'active-1' }, 1)", detailContext);
+  assert.equal(calls, 1, 'active detail query must deduplicate in-flight reads');
+  pending[0].resolve({ Ok: { detail_available: true, asset_path: ['a', 'b', 'a'], legs: [{}, {}] } });
+  await first; await duplicate;
+  assert.equal(vm.runInContext("routeSources.currentExecutionDetail.status", detailContext), 'fresh');
+  const old = vm.runInContext("loadCurrentExecutionDetail({ execution_id: 'active-old' }, 1)", detailContext);
+  const current = vm.runInContext("loadCurrentExecutionDetail({ execution_id: 'active-new' }, 1)", detailContext);
+  pending[1].resolve({ Ok: { detail_available: true, asset_path: ['a', 'b'], legs: [{}] } });
+  await current;
+  pending[2].resolve({ Ok: { detail_available: true, asset_path: ['a', 'b', 'c'], legs: [{}, {}] } });
+  await old;
+  assert.equal(vm.runInContext("routeSources.currentExecutionDetail.executionId", detailContext), 'active-new', 'late old detail must not repaint current execution');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+const leverHtmlStart = html.indexOf('    function leverHtml');
+const leverHtmlEnd = html.indexOf('    // ═══════ Ops — Setup', leverHtmlStart);
+const applyingContext = vm.createContext({
+  state: { levers: { vol: 'applying' } }, routeSources: { volumeStats: { error: null, lastSuccessMs: 1 } },
+  routeSourceState: () => 'fresh', sourceLastSuccessLabel: () => 'as of now', sourceStateText: () => 'Fresh',
+  esc: value => String(value),
+});
+vm.runInContext(html.slice(leverHtmlStart, leverHtmlEnd), applyingContext);
+const applyingMarkup = vm.runInContext("leverHtml('vol', 'Volume engine', 'Master run/pause', true, 'leverVolume()')", applyingContext);
+assert.match(applyingMarkup, /disabled/);
+assert.doesNotMatch(applyingMarkup, /onclick=\"leverVolume\(\)\"/);
 
 console.log('PASS: final frontend review regressions are covered');

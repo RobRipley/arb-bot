@@ -1482,6 +1482,7 @@
     let routeDataRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
     let routeRuntimeAuthoritativeRefreshPromise = null;
+    let currentExecutionDetailGeneration = 0;
     let manualQuoteScanGeneration = 0;
     let manualQuoteScan = {
       phase: 'ready',
@@ -1567,6 +1568,7 @@
       reservations: createSourceState(),
       heldPositions: createSourceState(),
       currentExecution: createSourceState(),
+      currentExecutionDetail: createSourceState(),
       terminalExecutions: createSourceState(),
       routeLedgerExecutions: createSourceState(),
       runtime: createSourceState(),
@@ -3152,6 +3154,57 @@
       });
     }
 
+    async function loadCurrentExecutionDetail(execution, requestGeneration = null) {
+      const source = routeSources.currentExecutionDetail;
+      const id = execution && execution.execution_id ? String(execution.execution_id) : null;
+      if (!id) {
+        ++currentExecutionDetailGeneration;
+        source.executionId = null;
+        markSourceUnavailable(source, 'no active execution');
+        return null;
+      }
+      const cached = routeExecutionDetails.get(id);
+      if (cached && cached.status === 'fresh') {
+        source.executionId = id;
+        markSourceFresh(source, cached.value);
+        return cached.value;
+      }
+      if (cached && cached.status === 'loading' && routeExecutionDetailLoads.has(id)) return routeExecutionDetailLoads.get(id);
+      const generation = ++currentExecutionDetailGeneration;
+      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
+        const error = 'route execution detail is unavailable';
+        routeExecutionDetails.set(id, { status: 'unavailable', error });
+        markSourceUnavailable(source, error);
+        return null;
+      }
+      routeExecutionDetails.set(id, { status: 'loading' });
+      const sameExecution = source.executionId === id;
+      Object.assign(source, { executionId: id, status: 'loading', value: sameExecution ? source.value : null, error: null, lastAttemptMs: Date.now() });
+      if (!sameExecution) source.lastSuccessMs = null;
+      const load = (async () => {
+        try {
+          const result = await anonymousActor.get_route_execution_detail_v1(id);
+          if (generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
+          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok });
+          markSourceFresh(source, result.Ok);
+          if (state.activeView === 'cockpit') renderCockpit();
+          return result.Ok;
+        } catch (error) {
+          if (generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          const message = error && error.message ? error.message : String(error);
+          routeExecutionDetails.set(id, { status: 'failed', error: message });
+          markSourceFailed(source, error);
+          if (state.activeView === 'cockpit') renderCockpit();
+          return null;
+        } finally {
+          if (routeExecutionDetailLoads.get(id) === load) routeExecutionDetailLoads.delete(id);
+        }
+      })();
+      routeExecutionDetailLoads.set(id, load);
+      return load;
+    }
+
     async function loadRouteData() {
       if (typeof routeRuntimeAuthoritativeRefreshPromise !== 'undefined' && routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
@@ -3207,6 +3260,7 @@
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];
         latestRouteExecution = routeOpt(current);
+        void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration);
         latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
         routeArbConfig = routeConfig || null;
         if (authenticatedActor) {
@@ -3314,8 +3368,13 @@
     }
     function routeExecutionLegCount(execution) {
       if (!execution) return null;
+      const activeSource = routeSources.currentExecutionDetail;
+      const activeDetail = activeSource && activeSource.executionId === String(execution.execution_id)
+        && (activeSource.status === 'fresh' || activeSource.status === 'stale') ? activeSource.value : null;
+      if (activeDetail && activeDetail.detail_available && Array.isArray(activeDetail.legs) && activeDetail.legs.length) return activeDetail.legs.length;
+      if (activeDetail && Array.isArray(activeDetail.asset_path) && activeDetail.asset_path.length > 1) return activeDetail.asset_path.length - 1;
       const detail = typeof routeExecutionDetails !== 'undefined' ? routeExecutionDetails.get(execution.execution_id) : null;
-      if (detail && detail.status === 'fresh' && detail.value && detail.value.detail_available && Array.isArray(detail.value.legs) && detail.value.legs.length) {
+      if (detail && (detail.status === 'fresh' || detail.status === 'stale') && detail.value && detail.value.detail_available && Array.isArray(detail.value.legs) && detail.value.legs.length) {
         return detail.value.legs.length;
       }
       const candidates = routeSources.candidates && routeSources.candidates.value;
@@ -3348,6 +3407,15 @@
         default: return 'Unknown';
       }
     }
+    function cockpitExecutionPhaseCopy(execution) {
+      const phase = cockpitExecutionPhaseLabel(execution);
+      if (!execution || !phase || ['Scanning', 'Stopped', 'Blocked', 'Unknown'].includes(phase)) return phase;
+      const leg = cockpitExecutionLegLabel(execution).replace(/^Leg /, 'leg ');
+      const rawPhase = variantKey(execution.phase);
+      if (rawPhase === 'LegSubmitted') return `Submitting ${leg}`;
+      if (phase === 'Evaluating') return `Evaluating remaining route after ${leg}`;
+      return `${phase} ${leg}`;
+    }
 
     function cockpitTodayResults(terminalState) {
       if (terminalState !== 'fresh') {
@@ -3374,24 +3442,26 @@
     function cockpitStatus() {
       const runtimeState = routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
       const executionState = routeSourceState('currentExecution');
+      const executionDetailState = routeSourceState('currentExecutionDetail');
       const terminalState = routeSourceState('terminalExecutions');
-      const executionSource = cockpitSourceLabel('currentExecution', latestRouteExecution ? `${latestRouteExecution.execution_id} · ${cockpitExecutionLegLabel(latestRouteExecution)}` : '', 'No active execution', executionState);
+      const phaseCopy = latestRouteExecution ? cockpitExecutionPhaseCopy(latestRouteExecution) : null;
+      const detailSource = cockpitSourceLabel('currentExecutionDetail', phaseCopy || '', 'No active execution detail', executionDetailState);
+      const executionSource = cockpitSourceLabel('currentExecution', latestRouteExecution ? `${latestRouteExecution.execution_id} · ${phaseCopy}` : '', 'No active execution', executionState);
+      if (latestRouteExecution && executionState === 'fresh') executionSource.label += ` · ${detailSource.label}`;
       const terminalSource = cockpitSourceLabel('terminalExecutions', latestTerminalExecutions.length ? `${latestTerminalExecutions[0].execution_id} · ${routePhaseLabel(latestTerminalExecutions[0].phase)}` : '', 'No terminal route execution', terminalState);
-      const unknown = () => ({ label: 'Unknown', heartbeat: 'Heartbeat unknown', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) });
+      const unknown = (heartbeat = 'Heartbeat unknown') => ({ label: 'Unknown', heartbeat, phase: 'Unknown', phaseCopy: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) });
       if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) return unknown();
-      if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      if (!latestRouteRuntime.compiled_support) return { ...unknown(), heartbeat: 'Unknown · runtime support unavailable' };
+      if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', phaseCopy: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (!latestRouteRuntime.compiled_support) return unknown('Unknown · runtime support unavailable');
       if (executionState === 'loading' || executionState === 'failed' || executionState === 'unavailable') return unknown();
-      const phaseLabel = latestRouteExecution
-        ? cockpitExecutionPhaseLabel(latestRouteExecution)
-        : routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete)
-          ? 'Evaluating' : executionState === 'stale' ? 'Unknown' : 'Scanning';
-      if (executionState === 'stale' && !latestRouteExecution) return { ...unknown(), heartbeat: `Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)}` };
+      const phase = latestRouteExecution ? cockpitExecutionPhaseLabel(latestRouteExecution) : routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete) ? 'Evaluating' : executionState === 'stale' ? 'Unknown' : 'Scanning';
+      const displayPhase = latestRouteExecution ? phaseCopy : phase;
+      if (executionState === 'stale' && !latestRouteExecution) return unknown(`Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)}`);
       const gatesOff = !latestRouteRuntime.live_authorized || !latestRouteRuntime.enabled || latestRouteRuntime.dry_run;
       const heartbeat = latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped';
-      if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phaseLabel)) return { label: phaseLabel, heartbeat, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      if (gatesOff) return { label: 'Stopped', heartbeat, phase: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      return { label: phaseLabel, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phase)) return { label: phase, heartbeat, phase, phaseCopy: displayPhase, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (gatesOff) return { label: 'Stopped', heartbeat, phase: 'Stopped', phaseCopy: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      return { label: phase, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase, phaseCopy: displayPhase, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
     }
 
     function renderCockpit() {
@@ -3440,7 +3510,7 @@
 
         <div class="card" data-cockpit-phase style="margin-bottom:var(--sp-4)">
           <div class="card-header">Current phase</div>
-          <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phase)}</span></div>
+          <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phaseCopy || cockpit.phase)}</span></div>
           <div class="stat-row" data-cockpit-execution-state><span>Execution</span><span>${esc(cockpit.executionSource.label)}</span></div>
           <div class="stat-row"><span>Leg</span><span>${esc(latestRouteExecution ? cockpitExecutionLegLabel(latestRouteExecution) : 'Unavailable')}</span></div>
         </div>
@@ -4522,7 +4592,7 @@
     window.leverArb = () => flipLever('Arb engine', () => authenticatedActor.resume(), () => authenticatedActor.pause(), !currentConfig.paused);
     window.leverRumiAmm = () => flipLever('Rumi AMM', () => authenticatedActor.set_rumi_amm_paused(true).then(checkRes), () => authenticatedActor.set_rumi_amm_paused(false).then(checkRes), currentConfig.rumi_amm_paused);
     window.leverStrategyS = () => flipLever('Strategy S', () => authenticatedActor.set_bob_execution_enabled(true).then(checkRes), () => authenticatedActor.set_bob_execution_enabled(false).then(checkRes), currentConfig.bob_execution_enabled);
-    window.leverVolume = () => flipLever('Volume engine', () => authenticatedActor.resume_volume(), () => authenticatedActor.pause_volume(), !!(latestVolumeStats && latestVolumeStats.volume_paused));
+    window.leverVolume = () => flipLever('vol', () => authenticatedActor.resume_volume(), () => authenticatedActor.pause_volume(), !!(latestVolumeStats && !latestVolumeStats.volume_paused));
     function checkRes(r) { if (r && 'Err' in r) throw new Error(r.Err); return r; }
     function requireFreshVolumeStats() {
       if (routeSourceState('volumeStats') === 'fresh' && latestVolumeStats) return true;
@@ -4557,7 +4627,7 @@
       const source = routeSources[sourceName];
       const sourceState = routeSourceState(sourceName);
       const authoritative = sourceState === 'fresh';
-      const actionable = authoritative || applying;
+      const actionable = authoritative && !applying;
       const label = applying ? 'Applying' : authoritative ? (on ? 'On' : 'Off')
         : sourceState === 'stale' ? `Stale · ${sourceLastSuccessLabel(source)}`
           : sourceState === 'loading' ? 'Loading…'
@@ -5266,9 +5336,9 @@
         </div>`;
     }
 
-    // Route execution details are fetched only after an operator expands a
-    // terminal execution. The cache survives routine view re-renders and
-    // keeps a failed request distinct from an unavailable historical detail.
+    // Route execution details are loaded lazily for terminal disclosures and
+    // for the single active execution. The cache survives routine view
+    // re-renders and keeps failed reads distinct from unavailable methods.
     const routeExecutionDetails = new Map();
     const routeExecutionDetailLoads = new Map();
     let ledgerCache = { entries: [], summaryCount: 0 };
