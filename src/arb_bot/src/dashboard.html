@@ -410,6 +410,7 @@
   .price-axis-group { margin-top: var(--sp-4); padding-top: var(--sp-3); border-top: 1px dashed var(--border-strong); }
   .price-axis-label { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: var(--sp-2); }
   .price-axis-label .price-axis-note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
+  .price-badge-row-stable { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   @media (max-width: 560px) { .price-badge-row { grid-template-columns: 1fr; } }
 
   /* ═══════════════════ MARKETS ═══════════════════ */
@@ -1247,7 +1248,6 @@
       { id: 'icpswap-cketh-ckusdc', principal: 'mvcvq-3iaaa-aaaag-qjykq-cai', input: 'cketh', output: 'ckusdc', group: 'ckBTC / ckETH' },
       { id: 'icpswap-ckbtc-ckusdc', principal: 'mhecj-xyaaa-aaaag-qjyjq-cai', input: 'ckbtc', output: 'ckusdc', group: 'ckBTC / ckETH' },
       { id: 'icpswap-ckbtc-icusd', principal: 'jhf2q-qyaaa-aaaar-qcg3q-cai', input: 'ckbtc', output: 'icusd', group: 'ckBTC / ckETH' },
-      { id: 'icpswap-ckusdt-ckbtc', principal: 'ipfno-pqaaa-aaaag-qkevq-cai', input: 'ckbtc', output: 'ckusdt', group: 'ckBTC / ckETH' },
       { id: 'icpswap-cketh-icusd', principal: 'jjhxy-liaaa-aaaar-qcg2q-cai', input: 'cketh', output: 'icusd', group: 'ckBTC / ckETH' },
     ];
     const ACTIVE_3POOL_PRICE_PAIRS = [
@@ -2866,7 +2866,7 @@
             if (!groupPrices.length) return '';
             return `<div class="price-axis-group">
               <div class="price-axis-label">${esc(group)}</div>
-              <div class="price-badge-row">${groupPrices.map(activeRoutePriceBadge).join('')}</div>
+              <div class="price-badge-row${group === 'Stable routes' ? ' price-badge-row-stable' : ''}">${groupPrices.map(activeRoutePriceBadge).join('')}</div>
             </div>`;
           }).join('')
         : `<div class="route-empty${status === 'failed' || status === 'unavailable' ? ' negative' : ''}">${sourceStateLabel('activePrices', ACTIVE_ROUTE_PRICE_REFRESH_MS * 2)}</div>`;

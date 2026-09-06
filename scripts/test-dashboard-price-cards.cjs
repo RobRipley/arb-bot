@@ -41,7 +41,12 @@ const price = {
 };
 context.routeSources.activePrices.value = [
   price,
-  { ...price, id: 'stable', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6 },
+  { ...price, id: 'stable-icusd-ckusdt-icpswap', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'ICPSwap' },
+  { ...price, id: 'stable-icusd-ckusdc-icpswap', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'ICPSwap' },
+  { ...price, id: 'stable-ckusdt-ckusdc-icpswap', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'ICPSwap' },
+  { ...price, id: 'stable-icusd-ckusdt-rumi', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'Rumi 3pool' },
+  { ...price, id: 'stable-icusd-ckusdc-rumi', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'Rumi 3pool' },
+  { ...price, id: 'stable-ckusdt-ckusdc-rumi', group: 'Stable routes', input: 'icusd', output: 'ckusdc', inputNative: 100_000_000n, outputNative: 998000n, inputDecimals: 8, outputDecimals: 6, venue: 'Rumi 3pool' },
   { ...price, id: 'btc', group: 'ckBTC / ckETH' },
 ];
 
@@ -62,6 +67,9 @@ assert.equal(context.renderCount, 1, 'card click must repaint the Cockpit');
 const grouped = vm.runInContext('cockpitPriceBadgesHtml()', context);
 assert(grouped.indexOf('Stable routes') < grouped.indexOf('ckBTC / ckETH'), 'stable routes must precede ckBTC/ckETH');
 assert.match(html, /\.price-badge-row \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(220px, 1fr\)\)/, 'cards must use a consistent grid');
+assert.match(grouped, /price-badge-row price-badge-row-stable/, 'stable quotes must use their own three-column comparison grid');
+assert.match(html, /\.price-badge-row-stable \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\); \}/, 'stable pairs must align by venue in two rows');
+assert.doesNotMatch(html, /id: 'icpswap-ckusdt-ckbtc'/, 'the unusable ckBTC/ckUSDT pool must not be presented as a live market quote');
 assert.match(html, /window\.toggleActiveRoutePrice/, 'the card toggle must be exposed to click handlers');
 
 console.log('PASS: quote cards use a fixed grid, stable routes precede ckBTC/ckETH, and cards invert their displayed rate');
