@@ -97,9 +97,6 @@ set_bob_execution_enabled
 set_bob_params
 set_bob_pools
 backfill_trade_legs
-prepare_route_execution_v1
-advance_route_execution_v1
-reconcile_route_execution_v1
 '
 
 # ── Preserved local/query compatibility, no fund-moving or retired-venue call ──
@@ -165,9 +162,21 @@ withdraw
 recover_partydex_balance
 '
 
+# New executor paths remain separately authorized and globally serialized.
+ROUTE_EXECUTION='
+prepare_route_execution_v1
+advance_route_execution_v1
+reconcile_route_execution_v1
+'
+
+RUNTIME_CONFIG='
+get_route_runtime_status_v1
+set_route_runtime_authorized_v1
+'
+
 all_classified() {
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
-    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$ROUTE_OBSERVATION" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$ROUTE_OBSERVATION" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" "$ROUTE_EXECUTION" "$RUNTIME_CONFIG" \
     | grep -v '^[[:space:]]*$' | sort -u
 }
 

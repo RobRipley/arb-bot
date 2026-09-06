@@ -1184,6 +1184,11 @@ json_storable!(crate::route_arb::ExecutionRecordV1);
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
 thread_local! {
+    // MemoryId 26 is the versioned durable executor, independent of heap snapshots.
+    static ROUTE_RUNTIME: RefCell<StableCell<Vec<u8>, Memory>> = RefCell::new(
+        StableCell::init(MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(26))), Vec::new())
+            .expect("initialize route runtime")
+    );
     static MEMORY_MANAGER: RefCell<MemoryManager<DefaultMemoryImpl>> =
         RefCell::new(MemoryManager::init(DefaultMemoryImpl::default()));
 
@@ -1762,9 +1767,15 @@ pub fn put_held_position(position: crate::route_arb::HeldPositionV1) -> Result<(
     if position.reason.len() > 512 || position.lots.is_empty() || position.lots.len() > 6 {
         return Err("held position must have 1..=6 lots and a <=512-byte reason".to_string());
     }
-    let existing = get_held_positions_page(0, 100)?;
-    if existing.iter().any(|row| row.position_id == position.position_id) {
-        return Err("held position id already exists".to_string());
+    let mut existing = Vec::new();
+    for offset in [0,100,200] { existing.extend(get_held_positions_page(offset,100)?); }
+    if let Some(row) = existing.iter().find(|row| row.position_id == position.position_id) {
+        if row.originating_execution_id == position.originating_execution_id
+            && row.originating_route_id == position.originating_route_id
+            && row.basis == position.basis && row.lots == position.lots {
+            return Ok(()); // Idempotent retry after reservations and held log persisted.
+        }
+        return Err("held position id already exists with different inventory".to_string());
     }
     if HELD_POSITIONS.with(|log| log.borrow().len()) >= 256 {
         return Err("held-position cap reached".to_string());
@@ -1818,7 +1829,7 @@ fn validate_execution_record(record: &crate::route_arb::ExecutionRecordV1) -> Re
     }
     for evidence in &record.evidence {
         validate_durable_text("evidence_kind", &evidence.evidence_kind)?;
-        validate_durable_text("source_reference", &evidence.source_reference)?;
+        if evidence.source_reference.len() > 16_384 { return Err("source evidence exceeds 16KiB".into()); }
     }
     let encoded = serde_json::to_vec(record).map_err(|error| format!("execution encoding failed: {error}"))?;
     if encoded.len() > 65_536 {
@@ -1847,6 +1858,12 @@ pub fn complete_current_route_execution(record: crate::route_arb::ExecutionRecor
     }
     TERMINAL_ROUTE_EXECUTIONS.with(|log| {
         let mut log = log.borrow_mut();
+        if let Some(previous) = log.len().checked_sub(1).and_then(|i|log.get(i)) {
+            if previous.execution_id == record.execution_id {
+                if previous.phase != record.phase { return Err("terminal phase changed on retry".into()); }
+                return Ok(());
+            }
+        }
         if log.len() >= 10_000 {
             return Err("terminal execution history reached its 10,000-record cap".to_string());
         }
@@ -2040,4 +2057,46 @@ pub fn load_from_stable_memory() {
         }
     }
     ensure_legacy_route_reservations();
+}
+
+/// The runtime writes complete typed state before any outbound mutation.
+pub(crate) fn runtime_bytes() -> Vec<u8> {
+    ROUTE_RUNTIME.with(|cell| cell.borrow().get().clone())
+}
+pub(crate) fn set_runtime_bytes(bytes: Vec<u8>) -> Result<(), String> {
+    if bytes.len() > 262_144 { return Err("runtime stable capacity exceeded".into()); }
+    ROUTE_RUNTIME.with(|cell| cell.borrow_mut().set(bytes)
+        .map(|_| ()).map_err(|e| format!("runtime persistence failed: {e:?}")))
+}
+pub(crate) fn admit_route_capacity(config: &crate::route_arb::RouteArbConfigV1) -> Result<(), String> {
+    if HELD_POSITIONS.with(|log| log.borrow().len()) >= u64::from(config.max_open_held_positions) {
+        return Err("held-position capacity exhausted before submission".into());
+    }
+    if TERMINAL_ROUTE_EXECUTIONS.with(|log| log.borrow().len()) >= u64::from(config.max_terminal_execution_records) {
+        return Err("terminal history capacity exhausted before submission".into());
+    }
+    // Reserve headroom for all six assets before a route starts.
+    if latest_reservations().len() + 6 > 256 {
+        return Err("reservation capacity exhausted before submission".into());
+    }
+    Ok(())
+}
+/// Only the source-bound reconciler calls this after all ambiguity is resolved.
+pub(crate) fn release_reconciled_route_lock(operation_id: &str) -> Result<(), String> {
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let lock = cell.get().lock.as_ref().ok_or("mutation lock missing")?;
+        if lock.operation_id != operation_id || lock.owner != crate::route_arb::MutationOwnerV1::RouteExecution {
+            return Err("route does not own mutation lock".into());
+        }
+        cell.set(crate::route_arb::MutationLockSlotV1::default())
+            .map(|_| ()).map_err(|e| format!("release reconciled route lock: {e:?}"))
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn reopen_runtime_cell_for_test() {
+    ROUTE_RUNTIME.with(|cell| {
+        *cell.borrow_mut() = StableCell::init(MEMORY_MANAGER.with(|m|m.borrow().get(MemoryId::new(26))),Vec::new()).unwrap();
+    });
 }

@@ -127,7 +127,7 @@ did_record_fields() { # $1=type name  $2=file
     index($0, s) { inb = 1; next }
     inb && /^};/ { inb = 0 }
     inb' "$2" \
-  | grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*:' \
+  | grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]*:' \
   | sed -E 's/[[:space:]]//g; s/:$//' | sort -u
 }
 
@@ -163,8 +163,8 @@ did_record_opt_fields() { # $1=type name  $2=file
     index($0, s) { inb = 1; next }
     inb && /^};/ { inb = 0 }
     inb' "$2" \
-  | grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*: opt ' \
-  | sed -E 's/[[:space:]]*//; s/: opt .*$//' | sort -u
+  | grep -oE '^[[:space:]]*[a-z_][a-z0-9_]*[[:space:]]*:[[:space:]]*opt ' \
+  | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:[[:space:]]*opt[[:space:]].*$//' | sort -u
 }
 
 # Names of fields wrapped `IDL.Opt(...)` inside a dashboard

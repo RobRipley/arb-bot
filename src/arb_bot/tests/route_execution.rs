@@ -79,15 +79,13 @@ fn timeout_is_checked_and_deterioration_holds_inventory() {
 }
 
 #[test]
-fn public_executor_is_structurally_inert() {
+fn public_executor_delegates_to_durable_runtime_with_admin_guard() {
     let source = include_str!("../src/lib.rs");
     for method in ["prepare_route_execution_v1", "advance_route_execution_v1", "reconcile_route_execution_v1"] {
         let tail = source.split(&format!("fn {method}")).nth(1).unwrap();
         let body = tail.split("\n#[").next().unwrap();
-        assert!(body.contains("live route execution is not authorized in this release"));
-        assert!(!body.contains("icpswap_swap"));
-        assert!(!body.contains("pool_swap"));
-        assert!(!body.contains("depositFromAndSwap"));
+        assert!(body.contains("require_admin()"));
+        assert!(body.contains("route_runtime::"));
     }
 }
 
