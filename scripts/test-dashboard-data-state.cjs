@@ -151,6 +151,7 @@ Object.assign(context, {
   routeExecutionDetails: new Map(),
   routeExecutionDetailLoads: new Map(),
   currentExecutionDetailGeneration: 0,
+  currentExecutionDetailLoad: null,
   routeRuntimeQueryGeneration: 0,
   state: { activeView: 'cockpit' },
   renderCockpit() {},
@@ -168,7 +169,7 @@ routeActor.get_terminal_route_executions_v1 = async (offset, limit) => {
 };
 vm.runInContext(terminalLoaderSection, context);
 vm.runInContext(loadRouteDataSection, context);
-(async () => {
+async function main() {
   await vm.runInContext('loadRouteData()', context);
   assert.equal(vm.runInContext('routeSources.terminalExecutions.status', context), 'fresh');
   assert.equal(vm.runInContext('latestTerminalExecutions.length', context), 125, 'today metrics must fetch beyond the old 20-row page');
@@ -228,6 +229,25 @@ vm.runInContext(loadRouteDataSection, context);
   delete routeActor.get_route_mutation_lock_v1;
   await vm.runInContext('loadRouteData()', context);
   assert.equal(vm.runInContext('routeSources.lock.status', context), 'unavailable');
+  return 'complete';
+}
+
+let completed = false;
+const timeout = setTimeout(() => {
+  if (!completed) {
+    console.error('FAIL: async dashboard data-state harness did not reach completion sentinel');
+    process.exitCode = 1;
+  }
+}, 5000);
+main().then(result => {
+  assert.equal(result, 'complete', 'async dashboard data-state harness completion sentinel');
+  completed = true;
+  clearTimeout(timeout);
+  console.log('PASS: source-state transitions and explicit freshness guards are covered');
   console.log('PASS: route loader preserves cached values and distinguishes unavailable methods');
-})().catch(error => { console.error(error); process.exitCode = 1; });
-console.log('PASS: source-state transitions and explicit freshness guards are covered');
+}).catch(error => {
+  completed = true;
+  clearTimeout(timeout);
+  console.error(error);
+  process.exitCode = 1;
+});

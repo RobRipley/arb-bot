@@ -3154,54 +3154,53 @@
       });
     }
 
-    async function loadCurrentExecutionDetail(execution, requestGeneration = null) {
+    async function loadCurrentExecutionDetail(execution, requestGeneration = null, forceRefresh = false) {
       const source = routeSources.currentExecutionDetail;
       const id = execution && execution.execution_id ? String(execution.execution_id) : null;
       if (!id) {
         ++currentExecutionDetailGeneration;
+        currentExecutionDetailLoad = null;
         source.executionId = null;
         markSourceUnavailable(source, 'no active execution');
         return null;
       }
-      const cached = routeExecutionDetails.get(id);
-      if (cached && cached.status === 'fresh') {
-        source.executionId = id;
-        markSourceFresh(source, cached.value);
-        return cached.value;
+      const existing = currentExecutionDetailLoad;
+      if (existing && existing.id === id && existing.requestGeneration === requestGeneration) {
+        return existing.promise;
       }
-      if (cached && cached.status === 'loading' && routeExecutionDetailLoads.has(id)) return routeExecutionDetailLoads.get(id);
+      if (!forceRefresh && source.executionId === id && source.status === 'fresh' && source.value) {
+        source.executionId = id;
+        return source.value;
+      }
       const generation = ++currentExecutionDetailGeneration;
       if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
         const error = 'route execution detail is unavailable';
-        routeExecutionDetails.set(id, { status: 'unavailable', error });
+        currentExecutionDetailLoad = null;
         markSourceUnavailable(source, error);
         return null;
       }
-      routeExecutionDetails.set(id, { status: 'loading' });
-      const sameExecution = source.executionId === id;
-      Object.assign(source, { executionId: id, status: 'loading', value: sameExecution ? source.value : null, error: null, lastAttemptMs: Date.now() });
-      if (!sameExecution) source.lastSuccessMs = null;
+      const loadRecord = { id, requestGeneration, generation, promise: null };
+      Object.assign(source, { executionId: id, status: 'loading', value: null, error: null, lastAttemptMs: Date.now() });
       const load = (async () => {
         try {
           const result = await anonymousActor.get_route_execution_detail_v1(id);
-          if (generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          if (currentExecutionDetailLoad !== loadRecord || generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
           if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
-          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok });
           markSourceFresh(source, result.Ok);
           if (state.activeView === 'cockpit') renderCockpit();
           return result.Ok;
         } catch (error) {
-          if (generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          if (currentExecutionDetailLoad !== loadRecord || generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
           const message = error && error.message ? error.message : String(error);
-          routeExecutionDetails.set(id, { status: 'failed', error: message });
           markSourceFailed(source, error);
           if (state.activeView === 'cockpit') renderCockpit();
           return null;
         } finally {
-          if (routeExecutionDetailLoads.get(id) === load) routeExecutionDetailLoads.delete(id);
+          if (currentExecutionDetailLoad === loadRecord) currentExecutionDetailLoad = null;
         }
       })();
-      routeExecutionDetailLoads.set(id, load);
+      loadRecord.promise = load;
+      currentExecutionDetailLoad = loadRecord;
       return load;
     }
 
@@ -3260,7 +3259,7 @@
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];
         latestRouteExecution = routeOpt(current);
-        void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration);
+        void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration, true);
         latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
         routeArbConfig = routeConfig || null;
         if (authenticatedActor) {
@@ -5157,6 +5156,38 @@
       if (status === 'unavailable') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''}</div>`;
       return '<div class="ledger-detail-state">Unavailable</div>';
     }
+    function routeExecutionDetailIsTerminal(detail) {
+      const phase = variantKey(detail && detail.record && detail.record.phase);
+      return ['Completed', 'Aborted', 'HeldInventory'].includes(phase);
+    }
+    async function loadTerminalExecutionDetail(executionId, retry = false) {
+      const id = String(executionId);
+      const cached = routeExecutionDetails.get(id);
+      if (!retry && cached && cached.status === 'fresh' && cached.final === true) return cached.value;
+      if (routeExecutionDetailLoads.has(id)) return routeExecutionDetailLoads.get(id);
+      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
+        routeExecutionDetails.set(id, { status: 'unavailable', error: 'route execution detail is unavailable' });
+        return null;
+      }
+      routeExecutionDetails.set(id, { status: 'loading' });
+      const load = (async () => {
+        try {
+          const result = await anonymousActor.get_route_execution_detail_v1(id);
+          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
+          if (!routeExecutionDetailIsTerminal(result.Ok)) throw new Error('terminal route detail is not final');
+          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok, final: true });
+          return result.Ok;
+        } catch (error) {
+          const message = error && error.message ? error.message : String(error);
+          routeExecutionDetails.set(id, { status: 'failed', error: message });
+          return null;
+        } finally {
+          if (routeExecutionDetailLoads.get(id) === load) routeExecutionDetailLoads.delete(id);
+        }
+      })();
+      routeExecutionDetailLoads.set(id, load);
+      return load;
+    }
     function routeLedgerCurrentDisclosureButton(executionId) {
       const body = document.getElementById('route-ledger-body');
       if (body && typeof body.querySelectorAll === 'function') {
@@ -5202,7 +5233,7 @@
       const expanded = Boolean(state.expandedRows && state.expandedRows.has(executionId));
       const cached = routeExecutionDetails.get(executionId);
       const detailHtml = expanded
-        ? (cached && cached.status === 'fresh' ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
+        ? (cached && cached.status === 'fresh' && cached.final === true ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
         : '';
       const pnl = routeLedgerPnlHtml(record);
       const startAsset = Array.isArray(record.start_asset)
@@ -5236,40 +5267,23 @@
       if (state.expandedRows) state.expandedRows.add(id);
       const cached = routeExecutionDetails.get(id);
       if (cached && !retry) {
-        if (cached.status === 'fresh') detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
-        else if (cached.status === 'loading') detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+        if (cached.status === 'fresh' && cached.final === true) detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
+        else if (cached.status === 'loading') {
+          detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+          button.focus();
+          return routeExecutionDetailLoads.get(id) || false;
+        }
         else detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml(cached.status, cached.error, id);
         button.focus();
-        return cached.status === 'fresh';
+        return cached.status === 'fresh' && cached.final === true;
       }
-      if (routeExecutionDetailLoads.has(id)) {
-        detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
-        button.focus();
-        return routeExecutionDetailLoads.get(id);
-      }
-      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
-        routeExecutionDetails.set(id, { status: 'unavailable', error: 'route execution detail is unavailable' });
-        detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('unavailable', 'route execution detail is unavailable', id);
-        button.focus();
-        return false;
-      }
-      routeExecutionDetails.set(id, { status: 'loading' });
       detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
-      const load = (async () => {
-        try {
-          const result = await anonymousActor.get_route_execution_detail_v1(id);
-          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
-          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok });
-          if (state.expandedRows && state.expandedRows.has(id) && document.getElementById(`ledger-detail-${id}`)) document.getElementById(`ledger-detail-${id}`).querySelector('td').innerHTML = routeLegDetailHtml(result.Ok);
-          return result.Ok;
-        } catch (error) {
-          const message = error && error.message ? error.message : String(error);
-          routeExecutionDetails.set(id, { status: 'failed', error: message });
-          if (document.getElementById(`ledger-detail-${id}`)) document.getElementById(`ledger-detail-${id}`).querySelector('td').innerHTML = routeLedgerDetailStateHtml('failed', message, id);
-          return null;
-        } finally { routeExecutionDetailLoads.delete(id); focusRouteLedgerDisclosure(id); }
-      })();
-      routeExecutionDetailLoads.set(id, load);
+      const load = loadTerminalExecutionDetail(id, true);
+      load.then(result => {
+        const currentDetail = document.getElementById(`ledger-detail-${id}`);
+        if (!currentDetail) return;
+        currentDetail.querySelector('td').innerHTML = result ? routeLegDetailHtml(result) : routeLedgerDetailStateHtml('failed', routeExecutionDetails.get(id)?.error, id);
+      }).finally(() => focusRouteLedgerDisclosure(id));
       return load;
     }
     function bindRouteLedgerDisclosureHandlers() {
@@ -5336,11 +5350,12 @@
         </div>`;
     }
 
-    // Route execution details are loaded lazily for terminal disclosures and
-    // for the single active execution. The cache survives routine view
-    // re-renders and keeps failed reads distinct from unavailable methods.
+    // Terminal disclosures keep only a final, immutable detail response.
+    // Active execution snapshots live in routeSources.currentExecutionDetail
+    // and are refreshed by each authoritative route generation.
     const routeExecutionDetails = new Map();
     const routeExecutionDetailLoads = new Map();
+    let currentExecutionDetailLoad = null;
     let ledgerCache = { entries: [], summaryCount: 0 };
     async function loadLedgerPage() {
       const tbody = document.getElementById('ledger-body');

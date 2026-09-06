@@ -53,7 +53,7 @@ Fresh local acceptance output from the exact checkout:
 - `node scripts/test-dashboard-runtime.cjs`: runtime state and configuration-failure checks passed.
 - `bash -n scripts/check-route-arb-acceptance.sh`, `bash -n scripts/check-stage1-disposition.sh`, dashboard `node --check --input-type=module`, and `git diff --check` passed.
 
-The release artifact was `4,078,475` bytes with a `2,974,132`-byte Wasm code section, leaving `9,608,780` bytes below the current `12,582,912`-byte executable-code limit. Its SHA-256 is `a6d4ae94b8e52d05de7d8657c2a4856bc00129349ce0778ca552eda8d684c4d8`. This is source and artifact evidence for this checkout only. It does not prove that the dashboard was deployed, that the new query exists in a deployed canister, that a runtime is authorized or enabled, or that any venue settled a live trade.
+The release artifact was `4,078,859` bytes with a `2,974,132`-byte Wasm code section, leaving `9,608,780` bytes below the current `12,582,912`-byte executable-code limit. Its SHA-256 is `929a44b39bf30796f08108c34457d8be898b1c5cfd563b8a3afa83be81c0f5fd`. This is source and artifact evidence for this checkout only. It does not prove that the dashboard was deployed, that the new query exists in a deployed canister, that a runtime is authorized or enabled, or that any venue settled a live trade.
 
 ## Required invariant and remaining proof
 
