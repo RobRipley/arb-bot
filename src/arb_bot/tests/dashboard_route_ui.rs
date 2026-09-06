@@ -122,6 +122,30 @@ fn volume_controls_remain_available_as_a_separate_engine() {
 }
 
 #[test]
+fn automatic_arbitrage_control_is_ops_only_and_native() {
+    let route_panel = rendered_region(
+        "function routeArbitrageHtml()",
+        "async function loadTerminalExecutionsForToday",
+    );
+    let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
+    let runtime = rendered_region("function routeRuntimeHtml()", "window.setRouteTrading");
+
+    assert!(route_panel.contains("route-arbitrage-status") || route_panel.contains("routeTradingLabel"));
+    assert!(route_panel.contains("goTo('ops')") || route_panel.contains("Ops"));
+    assert!(!route_panel.contains("setRouteTrading("), "route panel must not mutate automatic arbitrage");
+
+    assert!(ops.contains("data-ops-automatic-control"));
+    assert!(runtime.contains("aria-pressed"), "automation control must expose pressed state");
+    for label in ["On", "Off", "Applying", "Blocked", "Unknown", "Starting", "Stopping", "Stopped"] {
+        assert!(ops.contains(label) || runtime.contains(label), "Ops control missing state label: {label}");
+    }
+    assert!(DASHBOARD.contains("Start automatic arbitrage"));
+    assert!(DASHBOARD.contains("New swaps will stop. Any previously submitted swap will continue to be reconciled."));
+    assert!(!DASHBOARD.contains("<div class=\"lever-toggle"), "lever controls must be native buttons");
+    assert!(DASHBOARD.contains("<button type=\"button\" class=\"lever-toggle"));
+}
+
+#[test]
 fn dashboard_has_exactly_five_primary_views_with_one_mount_each() {
     let nav = rendered_region("const VIEWS = [", "function renderNav()");
     let expected = [

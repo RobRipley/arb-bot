@@ -487,12 +487,14 @@
   .lever { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-input); padding: var(--sp-4); }
   .lever-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }
   .lever-name { font-size: 12.5px; font-weight: 500; }
-  .lever-toggle { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--surface-3); border: 1px solid var(--border-emphasis); cursor: pointer; flex-shrink: 0; }
+  .lever-toggle { position: relative; width: auto; min-width: 78px; height: 28px; padding: 4px 9px 4px 30px; border-radius: 14px; background: var(--surface-3); border: 1px solid var(--border-emphasis); color: var(--text-secondary); cursor: pointer; flex-shrink: 0; font: 600 10px var(--font-data); letter-spacing: .04em; text-transform: uppercase; text-align: left; }
   .lever-toggle::after { content: ''; position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-tertiary); transition: .15s; }
-  .lever-toggle.on { background: var(--accent-dim); border-color: var(--border-focus); }
+  .lever-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lever-toggle.on, .lever-toggle[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--border-focus); color: var(--accent); }
   .lever-toggle.on::after { transform: translateX(16px); background: var(--accent); }
+  .lever-toggle[aria-pressed="true"]::after { transform: translateX(16px); background: var(--accent); }
   .lever-sub { font-size: 11px; color: var(--text-tertiary); }
-  .lever-toggle.applying { opacity: 0.5; pointer-events: none; }
+  .lever-toggle.applying, .lever-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
   .mini-spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: -1px; margin-right: 5px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .setup-ok { color: var(--text-tertiary); font-family: var(--font-data); font-size: 11px; }
@@ -2644,28 +2646,58 @@
       `;
     }
     function routeTradingLabel() {
-      const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : latestRouteRuntime ? 'fresh' : 'loading';
-      if (runtimeState === 'loading' && !latestRouteRuntime) return 'Status unavailable';
-      if (runtimeState === 'failed' || runtimeState === 'unavailable') return 'Runtime unavailable';
-      if (runtimeState === 'stale') return `Blocked · stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}`;
-      if (!latestRouteRuntime) return runtimeState === 'stale' ? 'Stale runtime status' : 'Status unavailable';
-      if (!latestRouteRuntime.compiled_support) return 'Not implemented';
-      const label = latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run ? 'Automatic arbitrage on' : 'Trading stopped';
-      return label;
+      const automation = routeAutomationState();
+      if (automation.state === 'Blocked') return `Blocked · ${automation.reason}`;
+      if (automation.state === 'Unknown') return 'Unknown';
+      return automation.label;
+    }
+    function routeAutomationState() {
+      const pending = typeof state === 'object' && state.levers ? state.levers.routeAutomation : null;
+      if (pending) {
+        return {
+          state: 'Applying',
+          label: pending === 'starting' ? 'Starting' : 'Stopping',
+          targetOn: pending === 'starting',
+          gatesOn: Boolean(latestRouteRuntime && latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run),
+          reason: pending === 'starting' ? 'Applying start request' : 'Applying stop request',
+        };
+      }
+      const runtimeState = typeof routeSourceState === 'function'
+        ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS)
+        : latestRouteRuntime ? 'fresh' : 'loading';
+      const runtime = latestRouteRuntime;
+      const gatesOn = Boolean(runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run);
+      if (!runtime || runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable') {
+        return { state: 'Unknown', label: 'Unknown', targetOn: false, gatesOn, reason: runtimeState === 'loading' ? 'Loading runtime status' : 'Runtime status unavailable' };
+      }
+      if (runtimeState === 'stale' && gatesOn) {
+        return { state: 'Blocked', label: 'Blocked', targetOn: true, gatesOn, reason: `stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}` };
+      }
+      if (!runtime.compiled_support) {
+        return { state: 'Blocked', label: 'Blocked', targetOn: gatesOn, gatesOn, reason: 'Runtime support unavailable' };
+      }
+      return gatesOn
+        ? { state: 'On', label: 'On', targetOn: true, gatesOn, reason: 'All runtime gates are enabled' }
+        : { state: 'Off', label: 'Stopped', targetOn: false, gatesOn, reason: 'New trades are stopped' };
     }
     function routeRuntimeHtml() {
       const runtime = latestRouteRuntime;
+      const automation = routeAutomationState();
       const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : runtime ? 'fresh' : 'failed';
-      const runtimeDisplay = runtimeState === 'loading' ? 'Loading runtime status' : routeTradingLabel();
       const runtimeFresh = runtimeState === 'fresh';
-      const on = runtimeFresh && runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run;
+      // Stale active runtime is rendered as: Blocked · stale runtime status.
+      const runtimeDisplay = automation.state === 'Blocked' ? routeTradingLabel() : automation.label;
+      const canToggle = isAdmin && (automation.state === 'On' || automation.state === 'Off');
+      const pressed = automation.state === 'On' || (automation.state === 'Applying' && automation.targetOn) || (automation.state === 'Blocked' && automation.gatesOn);
       const profit = runtime ? routeOpt(runtime.last_realized_profit) : null;
       const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
       const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
       const decimals = unit === 'ICP' ? 8 : 6;
-      return `<div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Automatic arbitrage</div>
-        <div class="route-list-row"><span>${esc(runtimeDisplay)}</span>
-        ${isAdmin && runtimeFresh && runtime && runtime.compiled_support ? `<button class="btn ${on ? 'btn-danger' : 'btn-primary'}" onclick="setRouteTrading(${!on})">${on ? 'Stop new trades' : 'Start arbitrage'}</button>` : ''}</div>
+      const toggle = isAdmin ? `<button type="button" class="lever-toggle${pressed ? ' on' : ''}${automation.state === 'Applying' ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="Automatic arbitrage ${automation.label.toLowerCase()}" title="${automation.state === 'Off' ? 'Start arbitrage' : automation.state === 'On' ? 'Stop new trades' : automation.label}" ${canToggle ? `onclick="setRouteTrading(${!pressed})"` : 'disabled'}><span>${esc(automation.label)}</span></button>` : '';
+      const reason = automation.reason ? `<div class="route-wallet-meta">${esc(automation.reason)}${runtimeState === 'stale' ? ` · ${esc(sourceLastSuccessLabel(routeSources.runtime))}` : ''}</div>` : '';
+      return `<div class="card" style="margin-top:var(--sp-4)" data-route-automation-state="${automation.state}"><div class="card-header">Automatic arbitrage</div>
+        <div class="route-list-row"><span>${esc(runtimeDisplay)}</span>${toggle}</div>
+        ${reason}
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
         <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
@@ -2676,14 +2708,28 @@
         body: enabled ? 'The bot will trade using its configured assets, pools, size limits and minimum profit thresholds. Each leg must settle before the next begins.' : 'New swaps will stop. Any previously submitted swap will continue to be reconciled.',
         confirmLabel: enabled ? 'Start arbitrage' : 'Stop new trades', danger: enabled,
         onConfirm: async () => {
+          if (typeof state === 'object' && state.levers) state.levers.routeAutomation = enabled ? 'starting' : 'stopping';
+          if (typeof renderOps === 'function') renderOps();
           try {
             if (enabled) {
               const config = await authenticatedActor.get_route_arb_config_v1();
               unwrapResult(await authenticatedActor.set_route_arb_config_v1({ ...config, enabled: true, dry_run: false }));
             }
-            latestRouteRuntime = unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
-            await loadRouteData(); renderAll(); toast(routeTradingLabel(), 'success');
+            unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
+            await loadRouteData();
+            // The mutation response is intentionally ignored. Clear Applying
+            // only after the runtime query has completed so the next paint is
+            // derived from authoritative state rather than optimistic state.
+            if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
+            renderAll();
+            const refreshed = routeAutomationState();
+            if ((enabled && refreshed.state !== 'On') || (!enabled && refreshed.state !== 'Off')) throw new Error(`runtime refresh reported ${refreshed.label}`);
+            toast(`${refreshed.label} — confirmed by runtime refresh`, 'success');
           } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await loadRouteData(); renderAll(); }
+          finally {
+            if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
+            if (typeof renderOps === 'function') renderOps();
+          }
         }
       });
     };
@@ -2715,7 +2761,7 @@
       return `<div id="route-arb-panel">
         <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
           <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
-        <div class="route-disclosure">icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Start arbitrage control and working settlement support at every venue.</div>
+        <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
@@ -4041,7 +4087,7 @@
     function leverHtml(key, name, sub, on, onClick) {
       const applying = state.levers[key] === 'applying';
       return `<div class="lever">
-        <div class="lever-head"><span class="lever-name">${esc(name)}</span><div class="lever-toggle${on ? ' on' : ''}${applying ? ' applying' : ''}" onclick="${onClick}"></div></div>
+        <div class="lever-head"><span class="lever-name">${esc(name)}</span><button type="button" class="lever-toggle${on ? ' on' : ''}${applying ? ' applying' : ''}" aria-pressed="${on}" aria-label="${esc(name)} ${on ? 'on' : 'off'}" ${applying ? 'disabled' : ''} onclick="${onClick}"><span>${applying ? 'Applying' : on ? 'On' : 'Off'}</span></button></div>
         <div class="lever-sub">${applying ? '<span class="mini-spin"></span>applying…' : esc(sub)}</div>
       </div>`;
     }
@@ -4349,7 +4395,10 @@
       const el = document.getElementById('view-ops');
       const c = currentConfig;
       if (!isAdmin) {
-        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see the volume controls and admin tools.</div></div>`;
+        el.innerHTML = `<div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">
+          ${routeRuntimeHtml()}
+          <div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to change automation settings. Runtime status is read-only.</div></div>
+        </div>`;
         return;
       }
       if (!c) { el.innerHTML = `<div class="card">Loading config…</div>`; return; }
@@ -4361,7 +4410,7 @@
         : 'Loading route policy…';
 
       el.innerHTML = `
-        <div data-ops-automatic-control aria-label="Automatic arbitrage">${routeRuntimeHtml()}</div>
+        <div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">${routeRuntimeHtml()}</div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Route arbitrage policy</div>
           <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
