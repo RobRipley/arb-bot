@@ -1,7 +1,160 @@
 use arb_bot::route_arb::{
-    Asset, HeldBasisV1, HeldLotV1, HeldPositionV1, MutationOwnerV1,
-    OwnershipReservationV1, ReservationKindV1,
+    Asset, CandidateClass, ExecutionPhaseV1, ExecutionRecordV1, HeldBasisV1, HeldLotV1,
+    HeldPositionV1, MutationOwnerV1, OwnershipReservationV1, ReconciliationEvidenceV1,
+    ReservationKindV1, RouteExecutionDetailV1, RouteExecutionLegStatusV1, RouteExecutionLegV1,
+    VenueKind,
 };
+
+fn detail_fixture() -> RouteExecutionDetailV1 {
+    RouteExecutionDetailV1 {
+        record: ExecutionRecordV1 {
+            execution_id: "route-storage-detail".into(),
+            route_id: "route-storage-route".into(),
+            canonical_cycle_id: None,
+            candidate_class: CandidateClass::StablePar,
+            phase: ExecutionPhaseV1::Completed,
+            current_leg_index: 0,
+            planned_input_native: 100,
+            required_min_output_native: 99,
+            quote_timestamp_ns: 1,
+            submission_started_at_ns: Some(2),
+            adapter_request_fingerprint: None,
+            evidence: vec![],
+            reconciliation_query_count: 3,
+            incident: None,
+            updated_at_ns: 3,
+            realized_profit: Some(1),
+            start_asset: Some(Asset::CkUsdc),
+        },
+        asset_path: vec![Asset::CkUsdc, Asset::IcUsd],
+        legs: vec![RouteExecutionLegV1 {
+            leg_index: 0,
+            status: RouteExecutionLegStatusV1::Settled,
+            edge_id: "fixture-edge".into(),
+            pool_id: "fixture-pool".into(),
+            pool_principal: candid::Principal::anonymous(),
+            venue: VenueKind::Rumi3Pool,
+            from: Asset::CkUsdc,
+            to: Asset::IcUsd,
+            quoted_input_native: 100,
+            requested_input_native: Some(99),
+            quoted_output_native: Some(101),
+            minimum_output_native: 99,
+            input_fee_native: 1,
+            output_fee_native: 1,
+            actual_input_debit_native: Some(101),
+            actual_effective_input_native: Some(100),
+            actual_output_credit_native: Some(100),
+            refund_credit_native: None,
+            prepared_at_ns: Some(2),
+            submitted_at_ns: Some(3),
+            settled_at_ns: Some(4),
+            reconciled_at_ns: Some(5),
+            evidence: vec![ReconciliationEvidenceV1 {
+                evidence_kind: "block".into(),
+                source_reference: "fixture".into(),
+                amount_native: 100,
+                observed_at_ns: 5,
+            }],
+            incident: None,
+        }],
+        detail_available: true,
+    }
+}
+
+#[test]
+fn detail_capacity_rejects_65537_encoded_bytes() {
+    let mut detail = detail_fixture();
+    detail.legs[0].evidence = (0..5)
+        .map(|index| ReconciliationEvidenceV1 {
+            evidence_kind: format!("evidence-{index}"),
+            source_reference: "x".repeat(16_384),
+            amount_native: 1,
+            observed_at_ns: index,
+        })
+        .collect();
+    let error = arb_bot::state::put_route_execution_detail(detail).unwrap_err();
+    assert!(error.contains("65,536-byte cap"));
+}
+
+#[test]
+fn terminal_detail_retry_is_idempotent_but_changed_detail_is_rejected() {
+    let detail = detail_fixture();
+    arb_bot::state::put_route_execution_detail(detail.clone()).unwrap();
+    arb_bot::state::put_route_execution_detail(detail.clone()).unwrap();
+    let mut changed = detail;
+    changed.legs[0].actual_output_credit_native = Some(98);
+    assert!(arb_bot::state::put_route_execution_detail(changed).is_err());
+    assert_eq!(
+        arb_bot::state::get_route_execution_detail("route-storage-detail")
+            .unwrap()
+            .unwrap()
+            .legs[0]
+            .actual_output_credit_native,
+        Some(100)
+    );
+}
+
+#[test]
+fn detail_map_is_empty_for_pre_detail_runtime_without_changing_current_record() {
+    let record = ExecutionRecordV1 {
+        execution_id: "pre-detail-current".into(),
+        route_id: "pre-detail-route".into(),
+        canonical_cycle_id: None,
+        candidate_class: CandidateClass::StablePar,
+        phase: ExecutionPhaseV1::Planned,
+        current_leg_index: 0,
+        planned_input_native: 0,
+        required_min_output_native: 0,
+        quote_timestamp_ns: 0,
+        submission_started_at_ns: None,
+        adapter_request_fingerprint: None,
+        evidence: vec![],
+        reconciliation_query_count: 0,
+        incident: None,
+        updated_at_ns: 0,
+        realized_profit: None,
+        start_asset: None,
+    };
+    arb_bot::state::put_current_route_execution(record.clone()).unwrap();
+    assert!(arb_bot::state::get_route_execution_detail("pre-detail-current")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        arb_bot::state::find_route_execution_record("pre-detail-current")
+            .unwrap()
+            .unwrap(),
+        record
+    );
+}
+
+#[test]
+fn detail_index_has_total_entry_cap_but_allows_idempotent_replacement() {
+    let mut first_inserted = None;
+    let mut inserted = 0u64;
+    for index in 0..arb_bot::state::HARD_MAX_ROUTE_EXECUTION_DETAILS {
+        let mut detail = detail_fixture();
+        detail.record.execution_id = format!("route-storage-capacity-{index}");
+        match arb_bot::state::put_route_execution_detail(detail.clone()) {
+            Ok(()) => {
+                inserted += 1;
+                first_inserted.get_or_insert(detail);
+            }
+            Err(error) => {
+                assert!(error.contains("capacity"));
+                break;
+            }
+        }
+    }
+    assert!(inserted >= arb_bot::state::HARD_MAX_ROUTE_EXECUTION_DETAILS - 3);
+    let existing = first_inserted.expect("capacity fixture insertion");
+    arb_bot::state::put_route_execution_detail(existing.clone()).unwrap();
+    let mut new_detail = existing;
+    new_detail.record.execution_id = "route-storage-capacity-overflow".into();
+    assert!(arb_bot::state::put_route_execution_detail(new_detail)
+        .unwrap_err()
+        .contains("capacity"));
+}
 
 #[test]
 fn durable_lock_is_exclusive_and_owner_bound() {

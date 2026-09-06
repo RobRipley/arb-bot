@@ -8,7 +8,7 @@ echo "== Six-asset route-arbitrage acceptance =="
 
 tests=(
   route_registry route_graph route_accounting route_policy route_observation
-  route_storage account_mutation_lock route_execution route_rumi route_icpswap route_scheduler dashboard_route_ui
+  route_storage account_mutation_lock route_execution route_execution_detail route_rumi route_icpswap route_scheduler dashboard_route_ui dashboard_candid_wire
   stage1_retirement legacy_freeze state_decode candid
 )
 for test_name in "${tests[@]}"; do
@@ -37,8 +37,38 @@ sed -n '/<script type="module">/,/<\/script>/p' src/arb_bot/src/dashboard.html \
   | sed '1d;$d' > "$dashboard_js"
 node --check --input-type=module < "$dashboard_js"
 echo "PASS: dashboard module JavaScript parses."
+node scripts/test-dashboard-data-state.cjs
 node scripts/test-dashboard-health.cjs
 node scripts/test-dashboard-runtime.cjs
+node scripts/test-dashboard-observation.cjs
+node scripts/test-dashboard-ledger.cjs
+node scripts/test-dashboard-final-fixes.cjs
+
+echo "== Diagnostics ownership guard =="
+diagnostics_markers=(
+  'data-diagnostics-group="runtime"'
+  'data-diagnostics-group="execution"'
+  'data-diagnostics-group="reservations"'
+  'data-diagnostics-group="observation"'
+  'data-diagnostics-group="legacy"'
+  'data-diagnostics-source="runtime"'
+  'data-diagnostics-source="lock"'
+  'data-diagnostics-source="currentExecution"'
+  'data-diagnostics-source="terminalExecutions"'
+  'data-diagnostics-source="reservations"'
+  'data-diagnostics-source="heldPositions"'
+  'data-diagnostics-source="observation"'
+  'data-diagnostics-source="health"'
+  'data-diagnostics-source="config"'
+  'data-diagnostics-manual-scan'
+)
+for marker in "${diagnostics_markers[@]}"; do
+  if ! rg -Fq "$marker" src/arb_bot/src/dashboard.html; then
+    echo "FAIL: Diagnostics ownership marker missing: $marker" >&2
+    exit 1
+  fi
+done
+echo "PASS: Diagnostics owns the bounded route internals and source-state markers."
 
 echo "== release Wasm build =="
 cargo clean -p arb_bot

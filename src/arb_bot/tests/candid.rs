@@ -39,6 +39,15 @@ fn candid_interface_matches_committed_did() {
     }
 }
 
+#[test]
+fn route_execution_detail_query_exposes_additive_detail_shape() {
+    let generated = arb_bot::generated_candid_interface();
+    assert!(generated.contains("get_route_execution_detail_v1"));
+    for field in ["detail_available", "record", "asset_path", "legs"] {
+        assert!(generated.contains(field), "generated interface missing detail field: {field}");
+    }
+}
+
 /// Convenience: prints the interface currently generated from the Rust
 /// signatures. Ignored by default; run with `--ignored` to dump it when
 /// reconciling drift against arb_bot.did.

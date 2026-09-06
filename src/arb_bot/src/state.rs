@@ -2,6 +2,8 @@ use candid::{CandidType, Deserialize, Principal};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::cell::RefCell;
+#[cfg(test)]
+use std::cell::Cell;
 
 use ic_stable_structures::{
     memory_manager::{MemoryId, MemoryManager, VirtualMemory},
@@ -10,6 +12,11 @@ use ic_stable_structures::{
 };
 
 type Memory = VirtualMemory<DefaultMemoryImpl>;
+
+/// Maximum number of execution detail rows retained in the current-state
+/// index. Terminal execution records remain independently bounded by their
+/// existing 10,000-entry history cap.
+pub const HARD_MAX_ROUTE_EXECUTION_DETAILS: u64 = 10_000;
 
 fn default_principal() -> Principal {
     Principal::anonymous()
@@ -1161,6 +1168,7 @@ json_storable!(crate::route_arb::OwnershipReservationV1);
 json_storable!(crate::route_arb::HeldPositionV1);
 json_storable!(crate::route_arb::ExecutionSlotV1);
 json_storable!(crate::route_arb::ExecutionRecordV1);
+json_storable!(crate::route_arb::RouteExecutionDetailV1);
 
 // ─── Stable memory layout ───
 //
@@ -1180,6 +1188,7 @@ json_storable!(crate::route_arb::ExecutionRecordV1);
 // MemoryId 23:      OWNERSHIP_RESERVATION_INDEX (bounded current-state map)
 // MemoryId 24:      OWNERSHIP_RESERVATION_MIGRATED marker
 // MemoryId 25:      LEGACY_BOB_ASSET_FROZEN marker
+// MemoryId 27:      ROUTE_EXECUTION_DETAILS (bounded detail index)
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -1312,6 +1321,15 @@ thread_local! {
             false,
         ).expect("init LEGACY_BOB_ASSET_FROZEN"),
     );
+
+    // Per-leg route execution detail is additive to the pre-detail layout.
+    static ROUTE_EXECUTION_DETAILS: RefCell<StableBTreeMap<String, crate::route_arb::RouteExecutionDetailV1, Memory>> =
+        RefCell::new(StableBTreeMap::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(27))),
+        ));
+
+    #[cfg(test)]
+    static FAIL_NEXT_ROUTE_EXECUTION_DETAIL: Cell<bool> = const { Cell::new(false) };
 
     // Heap cache mirroring META_CELL for fast reads.
     static STATE: RefCell<Option<BotState>> = RefCell::default();
@@ -1836,6 +1854,110 @@ fn validate_execution_record(record: &crate::route_arb::ExecutionRecordV1) -> Re
         return Err("execution record exceeds 65,536-byte cap".to_string());
     }
     Ok(())
+}
+
+pub fn validate_route_execution_detail(
+    detail: &crate::route_arb::RouteExecutionDetailV1,
+) -> Result<(), String> {
+    validate_execution_record(&detail.record)?;
+    if detail.legs.is_empty() || detail.legs.len() > 6 {
+        return Err("route execution detail must contain 1..=6 legs".into());
+    }
+    if detail.asset_path.len() != detail.legs.len() + 1 {
+        return Err("route execution detail asset path does not match leg count".into());
+    }
+    for (expected, leg) in detail.legs.iter().enumerate() {
+        if usize::from(leg.leg_index) != expected {
+            return Err("route execution detail leg indices must be ascending from zero".into());
+        }
+        for (label, value) in [
+            ("edge_id", leg.edge_id.as_str()),
+            ("pool_id", leg.pool_id.as_str()),
+        ] {
+            validate_durable_text(label, value)?;
+        }
+        if let Some(incident) = &leg.incident {
+            if incident.len() > 16_384 {
+                return Err("route execution incident exceeds 16KiB".into());
+            }
+        }
+        for evidence in &leg.evidence {
+            validate_durable_text("evidence_kind", &evidence.evidence_kind)?;
+            if evidence.source_reference.len() > 16_384 {
+                return Err("source evidence exceeds 16KiB".into());
+            }
+        }
+    }
+    let evidence_count = detail.record.evidence.len()
+        + detail.legs.iter().map(|leg| leg.evidence.len()).sum::<usize>();
+    if evidence_count > 64 {
+        return Err("route execution detail evidence exceeds 64-item cap".into());
+    }
+    let encoded = serde_json::to_vec(detail)
+        .map_err(|error| format!("route execution detail encoding failed: {error}"))?;
+    if encoded.len() > 65_536 {
+        return Err("route execution detail exceeds 65,536-byte cap".into());
+    }
+    Ok(())
+}
+
+pub fn put_route_execution_detail(
+    detail: crate::route_arb::RouteExecutionDetailV1,
+) -> Result<(), String> {
+    validate_route_execution_detail(&detail)?;
+    #[cfg(test)]
+    if FAIL_NEXT_ROUTE_EXECUTION_DETAIL.with(|flag| flag.replace(false)) {
+        return Err("injected route execution detail projection failure".into());
+    }
+    ROUTE_EXECUTION_DETAILS.with(|map| {
+        let mut map = map.borrow_mut();
+        if let Some(previous) = map.get(&detail.record.execution_id) {
+            if previous.record.phase.is_terminal() {
+                if previous == detail {
+                    return Ok(());
+                }
+                return Err("terminal route execution detail changed on retry".into());
+            }
+        } else if map.len() >= HARD_MAX_ROUTE_EXECUTION_DETAILS {
+            return Err("route execution detail capacity exhausted".into());
+        }
+        map.insert(detail.record.execution_id.clone(), detail);
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn fail_next_route_execution_detail_for_test() {
+    FAIL_NEXT_ROUTE_EXECUTION_DETAIL.with(|flag| flag.set(true));
+}
+
+pub fn get_route_execution_detail(
+    execution_id: &str,
+) -> Result<Option<crate::route_arb::RouteExecutionDetailV1>, String> {
+    validate_durable_text("execution_id", execution_id)?;
+    ROUTE_EXECUTION_DETAILS.with(|map| Ok(map.borrow().get(&execution_id.to_string())))
+}
+
+pub fn find_route_execution_record(
+    execution_id: &str,
+) -> Result<Option<crate::route_arb::ExecutionRecordV1>, String> {
+    validate_durable_text("execution_id", execution_id)?;
+    if let Some(record) = get_current_route_execution() {
+        if record.execution_id == execution_id {
+            return Ok(Some(record));
+        }
+    }
+    TERMINAL_ROUTE_EXECUTIONS.with(|log| {
+        let log = log.borrow();
+        for index in (0..log.len()).rev() {
+            if let Some(record) = log.get(index) {
+                if record.execution_id == execution_id {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    })
 }
 
 pub fn get_current_route_execution() -> Option<crate::route_arb::ExecutionRecordV1> {

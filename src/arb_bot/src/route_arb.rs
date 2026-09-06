@@ -196,6 +196,35 @@ pub fn directed_edges() -> Vec<DirectedEdge> {
     edges
 }
 
+/// Resolve the immutable route registry entries selected by a quote while
+/// checking that their asset transitions still describe the selected path.
+pub fn resolve_route_edges(
+    edge_ids: &[String],
+    asset_path: &[Asset],
+) -> Result<Vec<DirectedEdge>, String> {
+    if asset_path.len() != edge_ids.len() + 1 {
+        return Err("route asset path does not match edge count".into());
+    }
+    let registry = directed_edges();
+    edge_ids
+        .iter()
+        .enumerate()
+        .map(|(index, edge_id)| {
+            let edge = registry
+                .iter()
+                .find(|edge| edge.edge_id == *edge_id)
+                .cloned()
+                .ok_or_else(|| format!("unknown route edge: {edge_id}"))?;
+            if edge.from != asset_path[index] || edge.to != asset_path[index + 1] {
+                return Err(format!(
+                    "route edge does not match asset path at leg {index}"
+                ));
+            }
+            Ok(edge)
+        })
+        .collect()
+}
+
 pub fn canonical_cycle_id<S: AsRef<str>>(edge_ids: &[S]) -> String {
     if edge_ids.is_empty() {
         return String::new();
@@ -1365,6 +1394,64 @@ pub struct ExecutionRecordV1 {
     /// None for held inventory and historical records without attributable P&L.
     #[serde(default)]
     pub realized_profit: Option<i128>,
+    /// Exact parent input asset for new executions. Historical records may not
+    /// have preserved this field and therefore decode as unavailable.
+    #[serde(default)]
+    pub start_asset: Option<Asset>,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub enum RouteExecutionLegStatusV1 {
+    Quoted,
+    Prepared,
+    Submitted,
+    AwaitingSettlement,
+    Settled,
+    Refunded,
+    RejectedBeforeDebit,
+    ReconciliationRequired,
+    HeldInventory,
+    Aborted,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RouteExecutionLegV1 {
+    pub leg_index: u8,
+    pub status: RouteExecutionLegStatusV1,
+    pub edge_id: String,
+    pub pool_id: String,
+    pub pool_principal: Principal,
+    pub venue: VenueKind,
+    pub from: Asset,
+    pub to: Asset,
+    pub quoted_input_native: u64,
+    /// Exact venue request amount, excluding the input ledger fee. This is
+    /// distinct from the quote's input amount and is unavailable for legacy
+    /// records that predate durable per-leg requests.
+    #[serde(default)]
+    pub requested_input_native: Option<u64>,
+    pub quoted_output_native: Option<u64>,
+    pub minimum_output_native: u64,
+    pub input_fee_native: u64,
+    pub output_fee_native: u64,
+    pub actual_input_debit_native: Option<u64>,
+    pub actual_effective_input_native: Option<u64>,
+    pub actual_output_credit_native: Option<u64>,
+    pub refund_credit_native: Option<u64>,
+    pub prepared_at_ns: Option<u64>,
+    pub submitted_at_ns: Option<u64>,
+    pub settled_at_ns: Option<u64>,
+    pub reconciled_at_ns: Option<u64>,
+    pub evidence: Vec<ReconciliationEvidenceV1>,
+    pub incident: Option<String>,
+}
+
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct RouteExecutionDetailV1 {
+    pub record: ExecutionRecordV1,
+    pub asset_path: Vec<Asset>,
+    pub legs: Vec<RouteExecutionLegV1>,
+    pub detail_available: bool,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1416,6 +1503,7 @@ pub fn prepare_execution(
         quote_timestamp_ns: candidate.quote_timestamp_ns, submission_started_at_ns: None,
         adapter_request_fingerprint: None, evidence: Vec::new(),
         reconciliation_query_count: 0, incident: None, updated_at_ns: now_ns, realized_profit: None,
+        start_asset: Some(candidate.start_asset),
     })
 }
 

@@ -27,6 +27,22 @@ impl From<&DirectedEdge> for RuntimeEdge {
         }
     }
 }
+#[derive(Deserialize, Serialize, Clone, Debug)]
+struct RuntimeLegTrace {
+    leg_index: u8,
+    edge: RuntimeEdge,
+    quoted_input_native: u64,
+    quoted_output_native: Option<u64>,
+    minimum_output_native: u64,
+    input_fee_native: u64,
+    output_fee_native: u64,
+    submitted_at_ns: Option<u64>,
+    settled_at_ns: Option<u64>,
+    reconciled_at_ns: Option<u64>,
+    settlement: Option<RuntimeSettlement>,
+    status: RouteExecutionLegStatusV1,
+    incident: Option<String>,
+}
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct RuntimeRequest {
     pub intent_id: [u8; 32],
@@ -73,6 +89,10 @@ pub struct RuntimeExecution {
     pub settlements: Vec<RuntimeSettlement>,
     pub submitted_intents: Vec<(RuntimeRequest, AdapterIntent)>,
     pub realized_profit: Option<i128>,
+    #[serde(default)]
+    pub detail: Option<RouteExecutionDetailV1>,
+    #[serde(default)]
+    leg_traces: Vec<RuntimeLegTrace>,
 }
 #[derive(Deserialize, Serialize, Clone, Debug, Default)]
 struct DurableRuntime {
@@ -109,16 +129,117 @@ fn load() -> Result<DurableRuntime, String> {
 fn save(s: &DurableRuntime) -> Result<(), String> {
     state::set_runtime_bytes(serde_json::to_vec(s).map_err(|e| e.to_string())?)
 }
+fn detail_for(ex: &RuntimeExecution) -> RouteExecutionDetailV1 {
+    let detail_available = ex.leg_traces.len() == ex.original.legs.len() && !ex.leg_traces.is_empty();
+    let legs = if detail_available {
+        ex.leg_traces
+            .iter()
+            .map(|trace| {
+                let settlement = trace.settlement.as_ref();
+                let request = ex
+                    .request
+                    .as_ref()
+                    .filter(|request| request.leg_index == trace.leg_index)
+                    .or_else(|| {
+                        ex.submitted_intents
+                            .iter()
+                            .find(|(request, _)| request.leg_index == trace.leg_index)
+                            .map(|(request, _)| request)
+                    });
+                let reconciled_at_ns = trace.reconciled_at_ns.or_else(|| {
+                    settlement.and_then(|settlement| {
+                        settlement.evidence.iter().map(|e| e.observed_at_ns).max()
+                    })
+                });
+                RouteExecutionLegV1 {
+                    leg_index: trace.leg_index,
+                    status: trace.status.clone(),
+                    edge_id: trace.edge.edge_id.clone(),
+                    pool_id: trace.edge.pool_id.clone(),
+                    pool_principal: trace.edge.pool_principal,
+                    venue: trace.edge.venue,
+                    from: trace.edge.from,
+                    to: trace.edge.to,
+                    quoted_input_native: trace.quoted_input_native,
+                    requested_input_native: request.map(|request| request.input_native),
+                    quoted_output_native: trace.quoted_output_native,
+                    minimum_output_native: trace.minimum_output_native,
+                    input_fee_native: trace.input_fee_native,
+                    output_fee_native: trace.output_fee_native,
+                    actual_input_debit_native: settlement.map(|s| s.input_debit_native),
+                    actual_effective_input_native: settlement.map(|s| s.effective_input_native),
+                    actual_output_credit_native: settlement.map(|s| s.output_credit_native),
+                    refund_credit_native: settlement.map(|s| s.refund_credit_native),
+                    prepared_at_ns: request.map(|request| request.prepared_at_ns),
+                    submitted_at_ns: trace.submitted_at_ns,
+                    settled_at_ns: trace.settled_at_ns,
+                    reconciled_at_ns,
+                    evidence: settlement.map(|s| s.evidence.clone()).unwrap_or_default(),
+                    incident: trace.incident.clone(),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    RouteExecutionDetailV1 {
+        record: ex.record.clone(),
+        asset_path: ex.original.asset_path.clone(),
+        legs,
+        detail_available,
+    }
+}
+pub fn route_execution_detail(ex: &RuntimeExecution) -> RouteExecutionDetailV1 {
+    detail_for(ex)
+}
+fn runtime_snapshot(ex: &RuntimeExecution) -> RuntimeExecution {
+    let mut snapshot = ex.clone();
+    // An empty trace is the upgrade marker for a pre-detail runtime. Keep the
+    // field absent so recovery never manufactures per-leg facts.
+    snapshot.detail = (!ex.leg_traces.is_empty()).then(|| detail_for(ex));
+    snapshot
+}
+pub fn get_durable_detail(
+    execution_id: &str,
+) -> Result<Option<RouteExecutionDetailV1>, String> {
+    let durable = load()?;
+    let runtime = durable
+        .current
+        .as_ref()
+        .filter(|execution| execution.record.execution_id == execution_id)
+        .or_else(|| {
+            durable
+                .last_terminal
+                .as_ref()
+                .filter(|execution| execution.record.execution_id == execution_id)
+        });
+    if let Some(execution) = runtime {
+        return Ok(Some(
+            execution
+                .detail
+                .clone()
+                .unwrap_or_else(|| detail_for(execution)),
+        ));
+    }
+    if let Some(detail) = state::get_route_execution_detail(execution_id)? {
+        return Ok(Some(detail));
+    }
+    Ok(None)
+}
 fn persist(ex: &RuntimeExecution) -> Result<(), String> {
     let mut s = load()?;
-    let bytes = serde_json::to_vec(ex).map_err(|e| e.to_string())?;
+    let snapshot = runtime_snapshot(ex);
+    let bytes = serde_json::to_vec(&snapshot).map_err(|e| e.to_string())?;
     let config = config().0;
     if bytes.len() > config.max_execution_record_bytes as usize {
         return Err("typed execution exceeds configured durable record capacity".into());
     }
-    s.current = Some(ex.clone());
+    s.current = Some(snapshot);
     save(&s)?;
     state::put_current_route_execution(ex.record.clone())?;
+    if !ex.leg_traces.is_empty() {
+        state::put_route_execution_detail(detail_for(ex))?;
+    }
     if ex.record.phase.is_terminal() {
         Ok(())
     } else {
@@ -399,8 +520,18 @@ fn route_item(ex: &RuntimeExecution, tail: bool) -> Result<RouteWorkItem, String
         .ok_or("persisted route no longer in admitted universe")?;
     if tail {
         let index = usize::from(ex.record.current_leg_index);
-        item.route.edges = item.route.edges[index..].to_vec();
-        item.route.asset_path = item.route.asset_path[index..].to_vec();
+        item.route.edges = item
+            .route
+            .edges
+            .get(index..)
+            .ok_or("persisted route current leg index is outside route edges")?
+            .to_vec();
+        item.route.asset_path = item
+            .route
+            .asset_path
+            .get(index..)
+            .ok_or("persisted route current leg index is outside route asset path")?
+            .to_vec();
         item.principal_native = ex.current_wallet_native;
     }
     Ok(item)
@@ -410,6 +541,180 @@ fn fingerprint<T: Serialize>(value: &T) -> Result<[u8; 32], String> {
 }
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+fn trace_mut(ex: &mut RuntimeExecution, leg_index: u8) -> Result<&mut RuntimeLegTrace, String> {
+    ex.leg_traces
+        .iter_mut()
+        .find(|trace| trace.leg_index == leg_index)
+        .ok_or_else(|| format!("missing route execution trace for leg {leg_index}"))
+}
+
+/// Rebuild only the durable trace facts that can be derived from fields that
+/// existed before the detail read model was introduced. Quote metadata comes
+/// from the preserved candidate and request metadata comes from the persisted
+/// request/intent lists. Settlement values are copied only from persisted
+/// RuntimeSettlement values; this helper never derives movement from a quote.
+fn recover_legacy_traces(ex: &mut RuntimeExecution) -> Result<(), String> {
+    if !ex.leg_traces.is_empty() {
+        validate_terminal_settlements(ex)?;
+        return Ok(());
+    }
+    validate_runtime_route(ex)?;
+    let edges = resolve_route_edges(&ex.original.venue_edges, &ex.original.asset_path)?;
+    let mut traces = initial_leg_traces(&ex.original, &edges)?;
+
+    for (request, _) in &ex.submitted_intents {
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("legacy request references unknown leg {}", request.leg_index))?;
+        trace.quoted_input_native = request.input_native;
+        trace.minimum_output_native = request.min_output_native;
+        trace.input_fee_native = request.input_fee_native;
+        trace.output_fee_native = request.output_fee_native;
+    }
+    if let Some(request) = &ex.request {
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("current request references unknown leg {}", request.leg_index))?;
+        trace.quoted_input_native = request.input_native;
+        trace.minimum_output_native = request.min_output_native;
+        trace.input_fee_native = request.input_fee_native;
+        trace.output_fee_native = request.output_fee_native;
+    }
+
+    if ex.settlements.len() > ex.submitted_intents.len() {
+        return Err("legacy runtime has settlement facts without persisted requests".into());
+    }
+    for (index, settlement) in ex.settlements.iter().enumerate() {
+        let request = ex
+            .submitted_intents
+            .get(index)
+            .map(|(request, _)| request)
+            .ok_or("legacy settlement request missing")?;
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("legacy settlement references unknown leg {}", request.leg_index))?;
+        trace.settlement = Some(settlement.clone());
+        trace.settled_at_ns = settlement.evidence.iter().map(|e| e.observed_at_ns).max();
+        trace.reconciled_at_ns = trace.settled_at_ns;
+        trace.status = if settlement.refund_credit_native > 0 {
+            RouteExecutionLegStatusV1::Refunded
+        } else if settlement.effective_input_native != request.input_native
+            || settlement.output_credit_native < request.min_output_native
+        {
+            RouteExecutionLegStatusV1::HeldInventory
+        } else {
+            RouteExecutionLegStatusV1::Settled
+        };
+    }
+
+    let current_index = ex.record.current_leg_index;
+    if let Some(trace) = traces.iter_mut().find(|trace| trace.leg_index == current_index) {
+        match ex.record.phase {
+            ExecutionPhaseV1::Planned => {}
+            ExecutionPhaseV1::LegPrepared => trace.status = RouteExecutionLegStatusV1::Prepared,
+            ExecutionPhaseV1::LegSubmitted => {
+                trace.status = RouteExecutionLegStatusV1::Submitted;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::AwaitingSettlement => {
+                trace.status = RouteExecutionLegStatusV1::AwaitingSettlement;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::ReconciliationRequired => {
+                trace.status = RouteExecutionLegStatusV1::ReconciliationRequired;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::LegSettled => {}
+            ExecutionPhaseV1::RemainingRouteRequoted => {}
+            ExecutionPhaseV1::Completed => {}
+            ExecutionPhaseV1::Aborted => trace.status = RouteExecutionLegStatusV1::Aborted,
+            ExecutionPhaseV1::HeldInventory => {
+                trace.status = RouteExecutionLegStatusV1::HeldInventory
+            }
+        }
+        trace.incident = ex.record.incident.clone();
+    }
+    ex.leg_traces = traces;
+    validate_terminal_settlements(ex)?;
+    Ok(())
+}
+
+fn validate_terminal_settlements(ex: &RuntimeExecution) -> Result<(), String> {
+    let required = match ex.record.phase {
+        ExecutionPhaseV1::LegSettled => Some(usize::from(ex.record.current_leg_index) + 1),
+        ExecutionPhaseV1::Completed => Some(ex.original.legs.len()),
+        _ => None,
+    };
+    if let Some(required) = required {
+        if (0..required).any(|index| {
+            ex.leg_traces
+                .iter()
+                .find(|trace| usize::from(trace.leg_index) == index)
+                .and_then(|trace| trace.settlement.as_ref())
+                .is_none()
+        }) {
+            return Err("legacy terminal runtime lacks matching persisted settlement".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_route(ex: &RuntimeExecution) -> Result<(), String> {
+    let leg_count = ex.original.legs.len();
+    if leg_count == 0 || leg_count > 6 {
+        return Err("runtime route leg count is outside the supported 1..=6 range".into());
+    }
+    if ex.original.asset_path.len() != leg_count + 1 {
+        return Err("runtime route asset path does not match leg count".into());
+    }
+    if usize::from(ex.record.current_leg_index) >= leg_count {
+        return Err("runtime current leg index is outside the route".into());
+    }
+    Ok(())
+}
+
+fn initial_leg_traces(
+    candidate: &RouteCandidateReportV1,
+    edges: &[DirectedEdge],
+) -> Result<Vec<RuntimeLegTrace>, String> {
+    if candidate.legs.len() != edges.len() || candidate.asset_path.len() != edges.len() + 1 {
+        return Err("route quote legs do not match resolved route edges".into());
+    }
+    candidate
+        .legs
+        .iter()
+        .zip(edges)
+        .enumerate()
+        .map(|(index, (leg, edge))| {
+            let leg_index = u8::try_from(index)
+                .map_err(|_| "route leg index exceeds nat8 capacity".to_string())?;
+            if leg.edge_id != edge.edge_id
+                || leg.from != edge.from
+                || leg.to != edge.to
+            {
+                return Err(format!("route quote edge does not match selected route at leg {index}"));
+            }
+            Ok(RuntimeLegTrace {
+                leg_index,
+                edge: edge.into(),
+                quoted_input_native: native(leg.venue_input)?,
+                quoted_output_native: Some(native(leg.gross_output)?),
+                minimum_output_native: native(leg.wallet_after)?,
+                input_fee_native: native(leg.entry_ledger_fee)?,
+                output_fee_native: native(leg.output_ledger_fee)?,
+                submitted_at_ns: None,
+                settled_at_ns: None,
+                reconciled_at_ns: None,
+                settlement: None,
+                status: RouteExecutionLegStatusV1::Quoted,
+                incident: None,
+            })
+        })
+        .collect()
 }
 async fn prepare_next<I: RuntimeIo>(
     io: &I,
@@ -465,8 +770,17 @@ async fn prepare_next<I: RuntimeIo>(
     ex.record.adapter_request_fingerprint = Some(hex(&fingerprint(&intent)?));
     ex.record.submission_started_at_ns = None;
     ex.record.updated_at_ns = io.now();
-    ex.request = Some(req);
+    ex.request = Some(req.clone());
     ex.intent = Some(intent);
+    let leg_index = ex.record.current_leg_index;
+    let trace = trace_mut(ex, leg_index)?;
+    trace.quoted_input_native = req.input_native;
+    trace.quoted_output_native = Some(native(leg.gross_output)?);
+    trace.minimum_output_native = req.min_output_native;
+    trace.input_fee_native = req.input_fee_native;
+    trace.output_fee_native = req.output_fee_native;
+    trace.status = RouteExecutionLegStatusV1::Prepared;
+    trace.incident = None;
     persist(ex)
 }
 pub async fn prepare(route_id: &str) -> Result<ExecutionRecordV1, String> {
@@ -522,6 +836,8 @@ pub async fn prepare_with<I: RuntimeIo>(
     }
     let minimum_final_native = final_floor(&c, &selected)?;
     let current_wallet_native = native(selected.principal_native)?;
+    let resolved_edges = resolve_route_edges(&selected.venue_edges, &selected.asset_path)?;
+    let leg_traces = initial_leg_traces(&selected, &resolved_edges)?;
     s.sequence = s
         .sequence
         .checked_add(1)
@@ -538,12 +854,18 @@ pub async fn prepare_with<I: RuntimeIo>(
         settlements: vec![],
         submitted_intents: vec![],
         realized_profit: None,
+        detail: None,
+        leg_traces,
     };
     state::acquire_mutation_lock(&execution_id, MutationOwnerV1::RouteExecution, io.now())?;
     // Persist planned route and sequence before the first read-only await too.
-    s.current = Some(ex.clone());
+    let snapshot = runtime_snapshot(&ex);
+    s.current = Some(snapshot);
     save(&s)?;
     state::put_current_route_execution(ex.record.clone())?;
+    // Establish the detail row before the first quote await. A crash or
+    // upgrade at that boundary must leave an explicit, quote-only read model.
+    state::put_route_execution_detail(detail_for(&ex))?;
     reserve_active(&ex, true)?;
     let result = async {
         let item = route_item(&ex, false)?;
@@ -619,6 +941,20 @@ fn lot(asset: Asset, amount: u64) -> HeldLotV1 {
 fn finish(ex: &mut RuntimeExecution, now: u64) -> Result<(), String> {
     ex.record.updated_at_ns = now;
     ex.record.realized_profit = ex.realized_profit;
+    if let Some(trace) = ex
+        .leg_traces
+        .iter_mut()
+        .find(|trace| trace.leg_index == ex.record.current_leg_index)
+    {
+        match ex.record.phase {
+            ExecutionPhaseV1::Aborted => trace.status = RouteExecutionLegStatusV1::Aborted,
+            ExecutionPhaseV1::HeldInventory => {
+                trace.status = RouteExecutionLegStatusV1::HeldInventory
+            }
+            _ => {}
+        }
+        trace.incident = ex.record.incident.clone();
+    }
     persist(ex)?;
     state::complete_current_route_execution(ex.record.clone())?;
     reserve_active(ex, false)?;
@@ -628,7 +964,7 @@ fn finish(ex: &mut RuntimeExecution, now: u64) -> Result<(), String> {
     let mut s = load()?;
     s.current = None;
     s.last_served_icp = ex.original.candidate_class == CandidateClass::IcpReturning;
-    s.last_terminal = Some(ex.clone());
+    s.last_terminal = Some(runtime_snapshot(ex));
     save(&s)?;
     state::mutate_state(|s| s.route_observation = None);
     Ok(())
@@ -637,10 +973,12 @@ pub fn has_current() -> Result<bool, String> {
     Ok(load()?.current.is_some())
 }
 fn current(id: &str) -> Result<RuntimeExecution, String> {
-    let ex = load()?.current.ok_or("no active runtime execution")?;
+    let mut ex = load()?.current.ok_or("no active runtime execution")?;
     if ex.record.execution_id != id {
         return Err("execution id mismatch".into());
     }
+    validate_runtime_route(&ex)?;
+    recover_legacy_traces(&mut ex)?;
     Ok(ex)
 }
 pub async fn advance(id: &str) -> Result<ExecutionRecordV1, String> {
@@ -673,7 +1011,11 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
                 finish(&mut ex, io.now())?;
                 return Ok(ex.record);
             }
-            let asset = ex.original.asset_path[next];
+            let asset = *ex
+                .original
+                .asset_path
+                .get(next)
+                .ok_or("next route leg asset is outside route asset path")?;
             if let Err(e) = guard_generation(&ex).and_then(|_| authorized()) {
                 let amount = ex.current_wallet_native;
                 hold(&mut ex, vec![lot(asset, amount)], e, io.now())?;
@@ -712,7 +1054,11 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
                 ex.record.incident = Some(e);
                 finish(&mut ex, io.now())?;
             } else {
-                let asset = ex.original.asset_path[usize::from(ex.record.current_leg_index)];
+                let asset = *ex
+                    .original
+                    .asset_path
+                    .get(usize::from(ex.record.current_leg_index))
+                    .ok_or("current route leg asset is outside route asset path")?;
                 let amount = ex.current_wallet_native;
                 hold(&mut ex, vec![lot(asset, amount)], e, io.now())?;
             }
@@ -735,7 +1081,11 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
             ex.record.incident = Some(e);
             finish(&mut ex, io.now())?;
         } else {
-            let asset = ex.original.asset_path[usize::from(ex.record.current_leg_index)];
+            let asset = *ex
+                .original
+                .asset_path
+                .get(usize::from(ex.record.current_leg_index))
+                .ok_or("current route leg asset is outside route asset path")?;
             let amount = ex.current_wallet_native;
             hold(&mut ex, vec![lot(asset, amount)], e, io.now())?;
         }
@@ -744,12 +1094,18 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
     state::admit_route_capacity(&config().0)?;
     // This write is the economic idempotency boundary. A trap/upgrade after it
     // is conservative: all subsequent dispatches reconcile this exact intent.
+    let leg_index = ex.record.current_leg_index;
     ex.submitted_intents.push((
         ex.request.clone().ok_or("prepared request missing")?,
         ex.intent.clone().ok_or("prepared intent missing")?,
     ));
+    let submitted_at_ns = io.now();
+    let trace = trace_mut(&mut ex, leg_index)?;
+    trace.status = RouteExecutionLegStatusV1::Submitted;
+    trace.submitted_at_ns = Some(submitted_at_ns);
+    trace.incident = None;
     ex.record.phase = ExecutionPhaseV1::LegSubmitted;
-    ex.record.submission_started_at_ns = Some(io.now());
+    ex.record.submission_started_at_ns = Some(submitted_at_ns);
     ex.record.updated_at_ns = io.now();
     persist(&ex)?;
     state::mutate_state(|s| s.route_observation = None);
@@ -758,20 +1114,38 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
         .await;
     ex.record.phase = ExecutionPhaseV1::AwaitingSettlement;
     match response {
-        RuntimeSubmissionOutcome::Accepted => ex.record.incident = None,
+        RuntimeSubmissionOutcome::Accepted => {
+            ex.record.incident = None;
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::AwaitingSettlement;
+        }
         RuntimeSubmissionOutcome::Unknown(e) => {
-            ex.record.incident = Some(e.chars().take(512).collect())
+            let incident = e.chars().take(512).collect::<String>();
+            ex.record.incident = Some(incident.clone());
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::ReconciliationRequired;
+            trace.incident = Some(incident.clone());
         }
         RuntimeSubmissionOutcome::RejectedBeforeDebit(e) => {
-            ex.record.incident = Some(e.chars().take(512).collect());
+            let incident = e.chars().take(512).collect::<String>();
+            ex.record.incident = Some(incident.clone());
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::RejectedBeforeDebit;
+            trace.incident = Some(incident.clone());
+            ex.record.updated_at_ns = io.now();
+            persist(&ex)?;
             if ex.settlements.is_empty() {
                 ex.record.phase = ExecutionPhaseV1::Aborted;
                 ex.realized_profit = Some(0);
+                let trace = trace_mut(&mut ex, leg_index)?;
+                trace.status = RouteExecutionLegStatusV1::Aborted;
                 finish(&mut ex, io.now())?;
             } else {
                 let amount = ex.current_wallet_native;
                 let asset = ex.request.as_ref().ok_or("request missing")?.edge.from;
-                hold(&mut ex, vec![lot(asset, amount)], e, io.now())?;
+                let trace = trace_mut(&mut ex, leg_index)?;
+                trace.status = RouteExecutionLegStatusV1::HeldInventory;
+                hold(&mut ex, vec![lot(asset, amount)], incident, io.now())?;
             }
             return Ok(ex.record);
         }
@@ -811,16 +1185,23 @@ async fn reconcile_inner<I: RuntimeIo>(
     let settlement = match result {
         Ok(Some(s)) => s,
         other => {
-            ex.record.incident = Some(match other {
+            let incident: String = match other {
                 Err(e) => e.chars().take(512).collect(),
                 _ => "source-bound receipt is not yet complete".into(),
-            });
+            };
+            let leg_index = ex.record.current_leg_index;
+            ex.record.incident = Some(incident.clone());
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::AwaitingSettlement;
+            trace.incident = Some(incident);
             if io
                 .now()
                 .saturating_sub(ex.record.submission_started_at_ns.unwrap_or(io.now()))
                 >= config().0.settlement_timeout_ns
             {
                 ex.record.phase = ExecutionPhaseV1::ReconciliationRequired;
+                let trace = trace_mut(&mut ex, leg_index)?;
+                trace.status = RouteExecutionLegStatusV1::ReconciliationRequired;
                 state::mark_mutation_lock_reconciliation_required(&ex.record.execution_id)?;
             } else {
                 ex.record.phase = ExecutionPhaseV1::AwaitingSettlement;
@@ -850,6 +1231,15 @@ async fn reconcile_inner<I: RuntimeIo>(
     ex.record.evidence.extend(settlement.evidence.clone());
     ex.settlements.push(settlement.clone());
     ex.record.incident = None;
+    let leg_index = ex.record.current_leg_index;
+    let settled_at_ns = settlement.evidence.iter().map(|e| e.observed_at_ns).max();
+    {
+        let trace = trace_mut(&mut ex, leg_index)?;
+        trace.settlement = Some(settlement.clone());
+        trace.settled_at_ns = settled_at_ns;
+        trace.reconciled_at_ns = settled_at_ns;
+        trace.incident = None;
+    }
     if settlement.effective_input_native != r.input_native
         || settlement.refund_credit_native > 0
         || settlement.output_credit_native < r.min_output_native
@@ -866,6 +1256,8 @@ async fn reconcile_inner<I: RuntimeIo>(
             && ex.settlements.len() == 1
         {
             ex.record.phase = ExecutionPhaseV1::Aborted;
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = RouteExecutionLegStatusV1::Aborted;
             ex.realized_profit = Some(if r.edge.from == Asset::Icp {
                 i128::from(returned)
                     - i128::try_from(ex.original.principal_native).map_err(|_| "basis overflow")?
@@ -875,6 +1267,13 @@ async fn reconcile_inner<I: RuntimeIo>(
             });
             finish(&mut ex, io.now())?;
         } else {
+            let trace = trace_mut(&mut ex, leg_index)?;
+            trace.status = if settlement.refund_credit_native > 0 {
+                RouteExecutionLegStatusV1::Refunded
+            } else {
+                RouteExecutionLegStatusV1::HeldInventory
+            };
+            trace.incident = Some("fully reconciled partial fill or insufficient output".into());
             let mut lots = vec![];
             if returned > 0 {
                 let mut input_lot = lot(r.edge.from, returned);
@@ -907,6 +1306,8 @@ async fn reconcile_inner<I: RuntimeIo>(
         }
         ex.current_wallet_native = settlement.output_credit_native;
         ex.record.phase = ExecutionPhaseV1::LegSettled;
+        let trace = trace_mut(&mut ex, leg_index)?;
+        trace.status = RouteExecutionLegStatusV1::Settled;
         persist(&ex)?;
     }
     Ok(ex.record)
@@ -980,6 +1381,7 @@ mod tests {
         refunded: Cell<bool>,
         fail_quote: Cell<bool>,
         change_generation: Cell<bool>,
+        accepted: Cell<bool>,
         calls: RefCell<Vec<RuntimeRequest>>,
     }
     fn quoted(item: &RouteWorkItem, now: u64) -> RouteCandidateReportV1 {
@@ -1044,6 +1446,11 @@ mod tests {
                     state::get_mutation_lock().is_some(),
                     "whole/tail quote must hold account lock"
                 );
+                let execution = state::get_current_route_execution().expect("planned record");
+                let detail = state::get_route_execution_detail(&execution.execution_id)
+                    .unwrap()
+                    .expect("detail must exist before first quote await");
+                assert!(detail.detail_available);
                 self.quotes.set(self.quotes.get() + 1);
                 if self.change_generation.get() {
                     state::mutate_state(|s| s.route_arb_config_generation += 1);
@@ -1099,6 +1506,8 @@ mod tests {
                     RuntimeSubmissionOutcome::RejectedBeforeDebit(
                         "capacity refused before debit".into(),
                     )
+                } else if self.accepted.get() {
+                    RuntimeSubmissionOutcome::Accepted
                 } else {
                     RuntimeSubmissionOutcome::Unknown("lost response".into())
                 }
@@ -1198,6 +1607,171 @@ mod tests {
         assert!(state::get_mutation_lock().is_none());
         assert!(status().unwrap().last_realized_profit.unwrap() > 0);
         assert!(block_on(advance_with(&io, &ex.execution_id)).is_err());
+    }
+    #[test]
+    fn accepted_submission_persists_awaiting_settlement_leg_status() {
+        let (io, route) = setup(1);
+        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        io.accepted.set(true);
+        assert_eq!(
+            block_on(advance_with(&io, &ex.execution_id)).unwrap().phase,
+            ExecutionPhaseV1::AwaitingSettlement
+        );
+        let detail = state::get_route_execution_detail(&ex.execution_id)
+            .unwrap()
+            .expect("execution detail");
+        assert_eq!(detail.legs[0].status, RouteExecutionLegStatusV1::AwaitingSettlement);
+        assert!(detail.legs[0].submitted_at_ns.is_some());
+        assert_eq!(detail.record.start_asset, Some(Asset::CkUsdc));
+        assert!(detail.legs[0].requested_input_native.is_some());
+        assert_eq!(
+            block_on(reconcile_with(&io, &ex.execution_id)).unwrap().phase,
+            ExecutionPhaseV1::LegSettled
+        );
+        let settled = state::get_route_execution_detail(&ex.execution_id)
+            .unwrap()
+            .expect("settled execution detail");
+        assert_eq!(settled.legs[0].status, RouteExecutionLegStatusV1::Settled);
+        assert!(settled.legs[0].actual_output_credit_native.is_some());
+    }
+    #[test]
+    fn pre_detail_runtime_json_decodes_without_inferred_leg_facts() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        old_runtime["current"]
+            .as_object_mut()
+            .unwrap()
+            .remove("leg_traces");
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+        let recovered = load().unwrap().current.unwrap();
+        assert_eq!(recovered.record.execution_id, record.execution_id);
+        let detail = route_execution_detail(&recovered);
+        assert!(!detail.detail_available);
+        assert!(detail.legs.is_empty());
+    }
+
+    #[test]
+    fn pre_detail_runtime_continues_submission_and_reconciliation_after_upgrade() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        old_runtime["current"]
+            .as_object_mut()
+            .unwrap()
+            .remove("leg_traces");
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        io.accepted.set(true);
+        assert_eq!(
+            block_on(advance_with(&io, &record.execution_id))
+                .unwrap()
+                .phase,
+            ExecutionPhaseV1::AwaitingSettlement
+        );
+        assert_eq!(io.submissions.get(), 1);
+        assert_eq!(
+            block_on(reconcile_with(&io, &record.execution_id))
+                .unwrap()
+                .phase,
+            ExecutionPhaseV1::LegSettled
+        );
+        let detail = state::get_route_execution_detail(&record.execution_id)
+            .unwrap()
+            .expect("recovered detail");
+        assert!(detail.detail_available);
+        assert_eq!(detail.legs[0].status, RouteExecutionLegStatusV1::Settled);
+        assert!(detail.legs[0].actual_output_credit_native.is_some());
+    }
+
+    #[test]
+    fn pre_detail_completed_without_settlement_stays_unavailable_and_unarchived() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        let current = old_runtime["current"].as_object_mut().unwrap();
+        current.remove("leg_traces");
+        current.remove("detail");
+        current["record"]["phase"] = serde_json::json!("Completed");
+        current["record"]["current_leg_index"] = serde_json::json!(0);
+        current["settlements"] = serde_json::json!([]);
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        let error = block_on(advance_with(&io, &record.execution_id)).unwrap_err();
+        assert!(error.contains("settlement"));
+        assert!(state::get_mutation_lock().is_some());
+        assert!(state::get_terminal_route_executions_page(0, 100)
+            .unwrap()
+            .is_empty());
+        let detail = get_durable_detail(&record.execution_id).unwrap().unwrap();
+        assert!(!detail.detail_available);
+        assert!(detail.legs.is_empty());
+    }
+
+    #[test]
+    fn pre_detail_out_of_range_leg_index_fails_closed_without_route_indexing() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        let current = old_runtime["current"].as_object_mut().unwrap();
+        current.remove("leg_traces");
+        current["record"]["current_leg_index"] = serde_json::json!(u8::MAX);
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        let error = block_on(advance_with(&io, &record.execution_id)).unwrap_err();
+        assert!(error.contains("current leg index"), "{error}");
+        assert!(state::get_mutation_lock().is_some());
+    }
+
+    #[test]
+    fn traced_terminal_without_settlement_stays_unarchived() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        let current = old_runtime["current"].as_object_mut().unwrap();
+        current.remove("detail");
+        current["record"]["phase"] = serde_json::json!("Completed");
+        current["record"]["current_leg_index"] = serde_json::json!(0);
+        current["settlements"] = serde_json::json!([]);
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        let error = block_on(advance_with(&io, &record.execution_id)).unwrap_err();
+        assert!(error.contains("settlement"));
+        assert!(state::get_mutation_lock().is_some());
+        assert!(state::get_terminal_route_executions_page(0, 100)
+            .unwrap()
+            .is_empty());
+        let detail = get_durable_detail(&record.execution_id).unwrap().unwrap();
+        assert!(detail.detail_available);
+        assert_ne!(detail.legs[0].status, RouteExecutionLegStatusV1::Settled);
+        assert!(detail.legs[0].actual_output_credit_native.is_none());
+    }
+    #[test]
+    fn runtime_snapshot_survives_detail_projection_failure_at_creation_boundary() {
+        let (io, route) = setup(1);
+        state::fail_next_route_execution_detail_for_test();
+        let error = block_on(prepare_with(&io, &route)).unwrap_err();
+        assert!(error.contains("projection failure"));
+        let durable = load().unwrap().current.unwrap();
+        let expected = durable.detail.clone().expect("runtime detail snapshot");
+        assert!(expected.detail_available);
+        assert_eq!(
+            get_durable_detail(&durable.record.execution_id)
+                .unwrap()
+                .expect("durable detail"),
+            expected
+        );
+        assert!(state::get_mutation_lock().is_some());
     }
     #[test]
     fn changed_generation_during_whole_quote_aborts_and_releases_unused_lock() {

@@ -383,6 +383,8 @@ type ExecutionRecordV1 = record {
   // Stable-par USD6 for stable books; ICP e8s for IcpReturning.
   // None for held inventory and historical records without attributable P&L.
   realized_profit : opt int;
+  // Exact parent input asset for new executions; unavailable for historical records without it.
+  start_asset : opt Asset;
   candidate_class : CandidateClass;
   evidence : vec ReconciliationEvidenceV1;
   incident : opt text;
@@ -587,6 +589,52 @@ type ReconciliationEvidenceV1 = record {
   observed_at_ns : nat64;
   amount_native : nat64;
 };
+type VenueKind = variant { IcpSwap; Rumi3Pool };
+type RouteExecutionDetailV1 = record {
+  asset_path : vec Asset;
+  legs : vec RouteExecutionLegV1;
+  detail_available : bool;
+  "record" : ExecutionRecordV1;
+};
+type RouteExecutionLegStatusV1 = variant {
+  Quoted;
+  Refunded;
+  Prepared;
+  Submitted;
+  ReconciliationRequired;
+  Aborted;
+  HeldInventory;
+  Settled;
+  RejectedBeforeDebit;
+  AwaitingSettlement;
+};
+type RouteExecutionLegV1 = record {
+  to : Asset;
+  refund_credit_native : opt nat64;
+  leg_index : nat8;
+  status : RouteExecutionLegStatusV1;
+  minimum_output_native : nat64;
+  submitted_at_ns : opt nat64;
+  venue : VenueKind;
+  from : Asset;
+  prepared_at_ns : opt nat64;
+  input_fee_native : nat64;
+  actual_output_credit_native : opt nat64;
+  actual_input_debit_native : opt nat64;
+  quoted_output_native : opt nat64;
+  evidence : vec ReconciliationEvidenceV1;
+  incident : opt text;
+  pool_principal : principal;
+  settled_at_ns : opt nat64;
+  quoted_input_native : nat64;
+  // Exact venue request amount; unavailable for pre-detail historical records.
+  requested_input_native : opt nat64;
+  pool_id : text;
+  reconciled_at_ns : opt nat64;
+  actual_effective_input_native : opt nat64;
+  edge_id : text;
+  output_fee_native : nat64;
+};
 type ReservationKindV1 = variant {
   ActiveRoute;
   LegacyFreeze;
@@ -595,14 +643,15 @@ type ReservationKindV1 = variant {
 };
 type Result = variant { Ok : ExecutionRecordV1; Err : text };
 type Result_1 = variant { Ok; Err : text };
-type Result_2 = variant { Ok : vec HeldPositionV1; Err : text };
-type Result_3 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
-type Result_4 = variant { Ok : vec OwnershipReservationV1; Err : text };
-type Result_5 = variant { Ok : RuntimeStatus; Err : text };
-type Result_6 = variant { Ok : vec ExecutionRecordV1; Err : text };
-type Result_7 = variant { Ok : ObservationBatchResultV1; Err : text };
-type Result_8 = variant { Ok : record { nat64; nat64 }; Err : text };
-type Result_9 = variant { Ok : ObservationStartV1; Err : text };
+type Result_2 = variant { Ok : RouteExecutionDetailV1; Err : text };
+type Result_3 = variant { Ok : vec HeldPositionV1; Err : text };
+type Result_4 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
+type Result_5 = variant { Ok : vec OwnershipReservationV1; Err : text };
+type Result_6 = variant { Ok : RuntimeStatus; Err : text };
+type Result_7 = variant { Ok : vec ExecutionRecordV1; Err : text };
+type Result_8 = variant { Ok : ObservationBatchResultV1; Err : text };
+type Result_9 = variant { Ok : record { nat64; nat64 }; Err : text };
+type Result_10 = variant { Ok : ObservationStartV1; Err : text };
 type RouteArbConfigV1 = record {
   max_icp_principal_e8s : nat64;
   asset_controls : vec AssetControlV1;
@@ -860,22 +909,23 @@ service : (InitArgs) -> {
   get_config : () -> (BotConfig) query;
   get_current_route_execution_v1 : () -> (opt ExecutionRecordV1) query;
   get_errors : (nat64, nat64) -> (vec ErrorRecord) query;
-  get_held_positions_v1 : (nat64, nat64) -> (Result_2) query;
+  get_held_positions_v1 : (nat64, nat64) -> (Result_3) query;
   get_prices : () -> (PriceInfo);
   // Anonymous-safe stuck-state flags for the logged-out dashboard wedge
   // banner. Booleans only — details require the admin-gated `get_bot_health`.
   get_public_health : () -> (PublicHealth) query;
   get_route_arb_config_v1 : () -> (RouteArbConfigV1) query;
   get_route_arb_status_v1 : () -> (RouteArbStatusV1) query;
+  get_route_execution_detail_v1 : (text) -> (Result_2) query;
   get_route_mutation_lock_v1 : () -> (opt MutationLockV1) query;
   get_route_observation_v1 : () -> (opt ObservationAccumulatorV1) query;
-  get_route_observations_v1 : (nat64, nat64) -> (Result_3) query;
-  get_route_reservations_v1 : (nat64, nat64) -> (Result_4) query;
-  get_route_runtime_status_v1 : () -> (Result_5) query;
+  get_route_observations_v1 : (nat64, nat64) -> (Result_4) query;
+  get_route_reservations_v1 : (nat64, nat64) -> (Result_5) query;
+  get_route_runtime_status_v1 : () -> (Result_6) query;
   get_route_wallet_balances_v1 : () -> (vec WalletAssetBalanceV1);
   get_snapshots : (nat64, nat64) -> (vec CycleSnapshot) query;
   get_summary : () -> (TradeSummary) query;
-  get_terminal_route_executions_v1 : (nat64, nat64) -> (Result_6) query;
+  get_terminal_route_executions_v1 : (nat64, nat64) -> (Result_7) query;
   get_trade_history : (nat64, nat64) -> (vec TradeRecord) query;
   get_trade_legs : (nat64, nat64) -> (vec TradeLeg) query;
   get_volume_stats : () -> (VolumeStats) query;
@@ -902,7 +952,7 @@ service : (InitArgs) -> {
   // coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC
   pool_redeem : (nat8, nat64, nat64) -> ();
   prepare_route_execution_v1 : (text) -> (Result);
-  quote_route_observation_batch_v1 : (nat64, nat16) -> (Result_7);
+  quote_route_observation_batch_v1 : (nat64, nat16) -> (Result_8);
   reconcile_route_execution_v1 : (text) -> (Result);
   // Manual recovery lever for funds stranded INSIDE a PartyDEX pool's internal
   // balance (e.g. a trade settled but the post-trade withdraw failed). Sweeps
@@ -910,7 +960,7 @@ service : (InitArgs) -> {
   // Returns `(base_withdrawn, quote_withdrawn)` in native units. The normal
   // sweep-entire-available-balance on the next successful trade auto-recovers
   // otherwise; this is the escape hatch for the "pool never trades again" case.
-  recover_partydex_balance : (principal) -> (Result_8);
+  recover_partydex_balance : (principal) -> (Result_9);
   // Remove an admin principal (owner only)
   remove_admin : (principal) -> ();
   resume : () -> ();
@@ -951,7 +1001,7 @@ service : (InitArgs) -> {
   // an invalid intermediate state (e.g. floor temporarily above ceiling).
   set_icp_inventory_band : (nat64, nat64) -> (Result_1);
   set_route_arb_config_v1 : (RouteArbConfigV1) -> (Result_1);
-  set_route_runtime_authorized_v1 : (bool) -> (Result_5);
+  set_route_runtime_authorized_v1 : (bool) -> (Result_6);
   // Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
   // (every strategy that trades against `rumi_amm`) without touching the
   // other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
@@ -986,7 +1036,7 @@ service : (InitArgs) -> {
   set_volume_config : (VolumePool, VolumePoolConfig) -> (Result_1);
   set_volume_global : (nat64, nat64) -> ();
   setup_approvals : () -> (text);
-  start_route_observation_v1 : () -> (Result_9);
+  start_route_observation_v1 : () -> (Result_10);
   trigger_volume_cycle : () -> (text);
   trigger_volume_rebalance : () -> ();
   // Swap ICP ↔ icUSD using the volume subaccount.

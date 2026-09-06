@@ -117,6 +117,13 @@
     border-left: 2px solid transparent;
     transition: 0.15s;
     user-select: none;
+    width: 100%;
+    font-family: inherit;
+    text-align: left;
+    background: transparent;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
   }
   .nav-item:hover { color: var(--text-primary); background: rgba(255,255,255,0.03); }
   .nav-item.active {
@@ -334,6 +341,7 @@
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: var(--radius-md); padding: 9px 14px; cursor: pointer;
     transition: border-color .15s;
+    font: inherit; color: inherit; text-align: left;
   }
   .status-chip:hover { border-color: var(--border-strong); }
   .status-chip-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-tertiary); }
@@ -479,12 +487,14 @@
   .lever { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-input); padding: var(--sp-4); }
   .lever-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-2); }
   .lever-name { font-size: 12.5px; font-weight: 500; }
-  .lever-toggle { position: relative; width: 36px; height: 20px; border-radius: 10px; background: var(--surface-3); border: 1px solid var(--border-emphasis); cursor: pointer; flex-shrink: 0; }
+  .lever-toggle { position: relative; width: auto; min-width: 78px; height: 28px; padding: 4px 9px 4px 30px; border-radius: 14px; background: var(--surface-3); border: 1px solid var(--border-emphasis); color: var(--text-secondary); cursor: pointer; flex-shrink: 0; font: 600 10px var(--font-data); letter-spacing: .04em; text-transform: uppercase; text-align: left; }
   .lever-toggle::after { content: ''; position: absolute; top: 1px; left: 1px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-tertiary); transition: .15s; }
-  .lever-toggle.on { background: var(--accent-dim); border-color: var(--border-focus); }
+  .lever-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lever-toggle.on, .lever-toggle[aria-pressed="true"] { background: var(--accent-dim); border-color: var(--border-focus); color: var(--accent); }
   .lever-toggle.on::after { transform: translateX(16px); background: var(--accent); }
+  .lever-toggle[aria-pressed="true"]::after { transform: translateX(16px); background: var(--accent); }
   .lever-sub { font-size: 11px; color: var(--text-tertiary); }
-  .lever-toggle.applying { opacity: 0.5; pointer-events: none; }
+  .lever-toggle.applying, .lever-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
   .mini-spin { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: -1px; margin-right: 5px; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .setup-ok { color: var(--text-tertiary); font-family: var(--font-data); font-size: 11px; }
@@ -513,6 +523,28 @@
   .ledger-legs { font-size: 10.5px; color: var(--text-muted); }
   .table-wrap { overflow-x: auto; }
   .ledger-note { font-size: 11.5px; color: var(--text-muted); margin-top: var(--sp-3); }
+  .ledger-disclosure-row td { padding: 0; background: var(--surface-input); }
+  .ledger-detail { padding: var(--sp-4); border-top: 1px solid var(--border); }
+  .ledger-detail-list { list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
+  .ledger-leg { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--sp-4); background: var(--surface-1); }
+  .ledger-leg-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  .ledger-leg-title { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+  .ledger-leg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+  .ledger-detail-group { border-top: 1px solid var(--border); padding-top: var(--sp-3); margin-top: var(--sp-3); }
+  .ledger-detail-group-label { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .08em; margin-bottom: var(--sp-2); }
+  .ledger-detail-kv { display: flex; justify-content: space-between; gap: var(--sp-3); font-size: 11px; line-height: 1.45; }
+  .ledger-detail-kv + .ledger-detail-kv { margin-top: 4px; }
+  .ledger-detail-kv .k { color: var(--text-tertiary); }
+  .ledger-detail-kv .v { color: var(--text-secondary); text-align: right; word-break: break-word; }
+  .ledger-detail-state { padding: var(--sp-4); color: var(--text-secondary); font-size: 12px; }
+  .ledger-detail-state.negative { color: var(--loss); }
+  .ledger-legacy-heading { margin-bottom: var(--sp-3); }
+  @media (max-width: 900px) {
+    .ledger-leg-grid { grid-template-columns: 1fr; }
+    .ledger-leg-head { align-items: flex-start; flex-direction: column; }
+    .ledger-detail-kv { justify-content: flex-start; flex-direction: column; gap: 2px; }
+    .ledger-detail-kv .v { text-align: left; }
+  }
 
   /* ═══════════════════ MODAL ═══════════════════ */
 
@@ -559,7 +591,7 @@
     .sidebar-brand { padding: 0 var(--sp-3); white-space: nowrap; flex-shrink: 0; }
     .sidebar-brand small { display: none; }
     #nav-list { display: flex; align-items: center; overflow-x: auto; flex: 1; min-width: 0; }
-    .nav-item { border-left: none; border-bottom: 2px solid transparent; padding: var(--sp-3) 12px; white-space: nowrap; flex-shrink: 0; }
+    .nav-item { border-left: none; border-bottom: 2px solid transparent; padding: var(--sp-3) 12px; white-space: nowrap; flex-shrink: 0; width: auto; }
     .nav-item.active { border-bottom-color: var(--accent); }
     .sidebar-bottom { border-top: none; border-left: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); flex-direction: row; align-items: center; flex-shrink: 0; }
     .sidebar-principal { display: none; }
@@ -693,10 +725,9 @@
     <main class="content" id="content">
       <section class="view active" id="view-cockpit"></section>
       <section class="view" id="view-markets"></section>
-      <section class="view" id="view-charts"></section>
-      <section class="view" id="view-money"></section>
       <section class="view" id="view-ops"></section>
       <section class="view" id="view-ledger"></section>
+      <section class="view" id="view-diagnostics"></section>
     </main>
   </div>
 </div>
@@ -837,6 +868,7 @@
         volume_paused: I.Bool,
       });
       const RouteAsset = I.Variant({ Icp: I.Null, IcUsd: I.Null, CkUsdc: I.Null, CkUsdt: I.Null, CkBtc: I.Null, CkEth: I.Null });
+      const VenueKind = I.Variant({ IcpSwap: I.Null, Rumi3Pool: I.Null });
       const AssetControlV1 = I.Record({ asset: RouteAsset, enabled: I.Bool });
       const PoolControlV1 = I.Record({ pool_id: I.Text, enabled: I.Bool });
       const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
@@ -935,6 +967,27 @@
         quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
         adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
         reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
+        realized_profit: I.Opt(I.Int), start_asset: I.Opt(RouteAsset),
+      });
+      const RouteExecutionLegStatusV1 = I.Variant({
+        Quoted: I.Null, Refunded: I.Null, Prepared: I.Null, Submitted: I.Null,
+        ReconciliationRequired: I.Null, Aborted: I.Null, HeldInventory: I.Null,
+        Settled: I.Null, RejectedBeforeDebit: I.Null, AwaitingSettlement: I.Null,
+      });
+      const RouteExecutionLegV1 = I.Record({
+        to: RouteAsset, refund_credit_native: I.Opt(I.Nat64), leg_index: I.Nat8,
+        status: RouteExecutionLegStatusV1, minimum_output_native: I.Nat64,
+        submitted_at_ns: I.Opt(I.Nat64), venue: VenueKind, from: RouteAsset,
+        prepared_at_ns: I.Opt(I.Nat64), input_fee_native: I.Nat64,
+        actual_output_credit_native: I.Opt(I.Nat64), actual_input_debit_native: I.Opt(I.Nat64),
+        quoted_output_native: I.Opt(I.Nat64), evidence: I.Vec(ReconciliationEvidenceV1),
+        incident: I.Opt(I.Text), pool_principal: I.Principal, settled_at_ns: I.Opt(I.Nat64),
+        quoted_input_native: I.Nat64, requested_input_native: I.Opt(I.Nat64), pool_id: I.Text, reconciled_at_ns: I.Opt(I.Nat64),
+        actual_effective_input_native: I.Opt(I.Nat64), edge_id: I.Text, output_fee_native: I.Nat64,
+      });
+      const RouteExecutionDetailV1 = I.Record({
+        asset_path: I.Vec(RouteAsset), legs: I.Vec(RouteExecutionLegV1),
+        detail_available: I.Bool, record: ExecutionRecordV1,
       });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
@@ -997,6 +1050,7 @@
         get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
         get_current_route_execution_v1: I.Func([], [I.Opt(ExecutionRecordV1)], ['query']),
         get_terminal_route_executions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ExecutionRecordV1), Err: I.Text })], ['query']),
+        get_route_execution_detail_v1: I.Func([I.Text], [I.Variant({ Ok: RouteExecutionDetailV1, Err: I.Text })], ['query']),
         prepare_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         advance_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         reconcile_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
@@ -1130,7 +1184,7 @@
     else if (hostParts.length >= 4 && hostParts[2] === 'icp0') canisterId = hostParts[0];
     else { const p = new URLSearchParams(window.location.search); canisterId = p.get('canisterId') || prompt('Enter canister ID:'); }
 
-    let authClient = null, anonymousActor = null, currentConfig = null;
+    let authClient = null, anonymousActor = null, currentConfig = null, routeArbConfig = null;
     Object.defineProperty(window, 'authenticatedActor', {
       get() { return window._authActor; },
       set(v) { window._authActor = v; },
@@ -1415,15 +1469,123 @@
     let latestHeldPositions = [];
     let latestRouteExecution = null;
     let latestTerminalExecutions = [];
+    let terminalExecutionsIncomplete = false;
+    let terminalExecutionsLoadedCount = 0;
+    let routeLedgerPage = 0;
+    let routeLedgerHasMore = false;
+    let routeLedgerIncomplete = false;
+    let routeLedgerLoadedCount = 0;
+    let routeLedgerRequestedPage = 0;
+    let routeLedgerRequestGeneration = 0;
+    let routeLedgerRequestPromise = null;
+    let routeLedgerRequestPage = null;
     let routeDataRequestPromise = null;
+    let routeRuntimeQueryGeneration = 0;
+    let routeRuntimeAuthoritativeRefreshPromise = null;
+    let currentExecutionDetailGeneration = 0;
+    let manualQuoteScanGeneration = 0;
+    let manualQuoteScan = {
+      phase: 'ready',
+      observationId: null,
+      cursor: null,
+      batchCount: 0,
+      error: null,
+      startedAtNs: null,
+    };
+    let manualObservationProbe = { status: 'idle', cursor: 0n, limit: 100n, error: null, result: null };
     let healthRequestPromise = null;
     let publicHealthRequestPromise = null;
     let latestSnapshot = null;
     let latestVolumeStats = null;
+    let latestSummary = null;
     let loadAllTickCount = 0;
     let wedgeDismissedKey = null;
     let currentWedgeKey = null;
     let quoteTimer = null, volQuoteTimer = null;
+
+    // Route data is independently observable. A failed refresh must never be
+    // turned into a healthy empty value by a query fallback.
+    const ROUTE_RUNTIME_STALE_AFTER_MS = 30_000;
+    const TERMINAL_EXECUTIONS_PAGE_SIZE = 100n;
+    const TERMINAL_EXECUTIONS_MAX = 1000n;
+    const ROUTE_LEDGER_PAGE_SIZE = 25n;
+    const ROUTE_LEDGER_MAX = 10_000n;
+    function createSourceState() {
+      return { status: 'loading', value: null, error: null, lastSuccessMs: null, lastAttemptMs: null };
+    }
+    function markSourceFresh(source, value, nowMs = Date.now()) {
+      Object.assign(source, { status: 'fresh', value, error: null, lastSuccessMs: nowMs, lastAttemptMs: nowMs });
+    }
+    function markSourceFailed(source, error, nowMs = Date.now()) {
+      Object.assign(source, {
+        status: source.lastSuccessMs == null ? 'failed' : 'stale',
+        error: error && error.message ? error.message : String(error),
+        lastAttemptMs: nowMs,
+      });
+    }
+    function markSourceUnavailable(source, reason, nowMs = Date.now()) {
+      Object.assign(source, { status: 'unavailable', value: null, error: String(reason), lastAttemptMs: nowMs });
+    }
+    function sourceDisplayState(source, staleAfterMs, nowMs = Date.now()) {
+      if (source.status === 'fresh' && source.lastSuccessMs != null
+          && Number.isFinite(staleAfterMs) && nowMs - source.lastSuccessMs >= staleAfterMs) return 'stale';
+      return source.status;
+    }
+    function sourceLastSuccessLabel(source) {
+      return source.lastSuccessMs == null ? 'last success unknown' : `as of ${new Date(source.lastSuccessMs).toLocaleTimeString()}`;
+    }
+    function sourceStateText(name, staleAfterMs = null) {
+      const source = routeSources[name];
+      if (!source) return 'Unavailable';
+      const status = routeSourceState(name, staleAfterMs);
+      if (status === 'fresh') return 'Fresh';
+      if (status === 'stale') return `Stale · ${sourceLastSuccessLabel(source)}`;
+      if (status === 'loading') return 'Loading…';
+      return `${status === 'failed' ? 'Failed' : 'Unavailable'}${source.error ? ` · ${source.error}` : ''}`;
+    }
+    // Source labels are inserted into several innerHTML templates. Keep the
+    // raw form for callers that escape later, and make the HTML-facing helper
+    // safe by construction so a rejected query can never become markup.
+    function sourceStateLabel(name, staleAfterMs = null) { return esc(sourceStateText(name, staleAfterMs)); }
+    function sourceHasValue(name, staleAfterMs = null) {
+      const source = routeSources[name];
+      if (!source) return false;
+      const status = routeSourceState(name, staleAfterMs);
+      return (status === 'fresh' || status === 'stale') && source.value != null;
+    }
+    function sourceStampHtml(name, staleAfterMs = null) {
+      const status = routeSourceState(name, staleAfterMs);
+      if (status === 'fresh') return '<span class="source-stamp fresh">Fresh</span>';
+      if (status === 'stale') return `<span class="source-stamp stale">Stale · ${esc(sourceLastSuccessLabel(routeSources[name]))}</span>`;
+      if (status === 'loading') return '<span class="source-stamp loading">Loading…</span>';
+      return `<span class="source-stamp failed">${status === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources[name]))}</span>`;
+    }
+    const routeSources = {
+      status: createSourceState(),
+      observation: createSourceState(),
+      candidates: createSourceState(),
+      lock: createSourceState(),
+      reservations: createSourceState(),
+      heldPositions: createSourceState(),
+      currentExecution: createSourceState(),
+      currentExecutionDetail: createSourceState(),
+      terminalExecutions: createSourceState(),
+      routeLedgerExecutions: createSourceState(),
+      runtime: createSourceState(),
+      wallet: createSourceState(),
+      health: createSourceState(),
+      config: createSourceState(),
+      routeArbConfig: createSourceState(),
+      summary: createSourceState(),
+      legacyBalances: createSourceState(),
+      volumeBalances: createSourceState(),
+      operatorBalances: createSourceState(),
+      volumeStats: createSourceState(),
+      prices: createSourceState(),
+      snapshots: createSourceState(),
+      activity: createSourceState(),
+      legacyLedger: createSourceState(),
+    };
 
     // ═══════ Helpers ═══════
 
@@ -1554,6 +1716,23 @@
         }
         window._rawBals = window._rawBals || cache.balances;
         window._rawVolBals = window._rawVolBals || cache.volBalances;
+        // Cached values are useful evidence while the live read is pending,
+        // but they are never presented as fresh. Keep the value and its cache
+        // timestamp so a failed first read is visibly stale rather than a
+        // healthy empty/zero default.
+        const cachedSources = [
+          [routeSources.summary, cache.summary],
+          [routeSources.legacyBalances, cache.balances],
+          [routeSources.volumeBalances, cache.volBalances],
+          [routeSources.prices, cache.prices],
+        ];
+        for (const [source, value] of cachedSources) {
+          if (value != null) {
+            markSourceFresh(source, value, cache.ts);
+            source.status = 'stale';
+            source.lastAttemptMs = null;
+          }
+        }
         fresh.textContent = 'as of ' + new Date(cache.ts).toLocaleTimeString();
         state.coldPainted = true;
         renderAll();
@@ -1681,21 +1860,25 @@
     const VIEWS = [
       { id: 'cockpit', label: 'Cockpit' },
       { id: 'markets', label: 'Markets' },
-      { id: 'charts', label: 'Charts' },
-      { id: 'money', label: 'Money' },
       { id: 'ops', label: 'Ops' },
       { id: 'ledger', label: 'Ledger' },
+      { id: 'diagnostics', label: 'Diagnostics' },
     ];
 
     function renderNav() {
       const badgeOn = !!currentWedgeKey && wedgeDismissedKey !== currentWedgeKey;
       document.getElementById('nav-list').innerHTML = VIEWS.map(v => {
         const badge = (v.id === 'cockpit' && badgeOn) ? '<span class="nav-badge">!</span>' : '';
-        return `<div class="nav-item${v.id === state.activeView ? ' active' : ''}" data-view="${v.id}" onclick="goTo('${v.id}')">${v.label}${badge}</div>`;
+        return `<button type="button" class="nav-item${v.id === state.activeView ? ' active' : ''}" data-view="${v.id}" aria-current="${v.id === state.activeView ? 'page' : 'false'}" onclick="goTo('${v.id}')">${v.label}${badge}</button>`;
       }).join('');
     }
 
     window.goTo = function (id, opts) {
+      if (id !== 'markets' && manualQuoteScan.phase === 'running') {
+        manualQuoteScanGeneration += 1;
+        manualQuoteScan.phase = 'aborted';
+        manualQuoteScan.error = 'Markets view changed before the scan completed';
+      }
       state.activeView = id;
       document.querySelectorAll('.view').forEach(el => el.classList.remove('active'));
       document.getElementById('view-' + id).classList.add('active');
@@ -1708,20 +1891,19 @@
         state.ledgerFilter = opts.ledgerFilter;
       }
       renderCurrentView();
-      if (id === 'charts') {
+      if (id === 'markets') {
         chartsRefreshInterval = setInterval(async () => { await loadSnapshots(); renderCharts(); }, 60000);
       }
-      if (id === 'ops' || id === 'money') { if (isAdmin) loadVolumeData(); }
+      if (id === 'ops') { if (isAdmin) loadVolumeData(); }
     };
 
     function renderCurrentView() {
       switch (state.activeView) {
         case 'cockpit': renderCockpit(); break;
         case 'markets': renderMarkets(); break;
-        case 'charts': renderCharts(); break;
-        case 'money': renderMoney(); break;
         case 'ops': renderOps(); break;
         case 'ledger': renderLedger(); break;
+        case 'diagnostics': renderDiagnostics(); break;
       }
     }
 
@@ -1831,15 +2013,19 @@
     }
     function renderBanner() {
       const el = document.getElementById('wedge-banner');
+      const healthState = routeSourceState('health');
+      const healthStale = healthState === 'stale';
+      const healthUnavailable = healthState === 'failed' || healthState === 'unavailable';
       const conditions = latestHealthReport ? wedgeConditions(latestHealthReport) : (window._publicWedge || []);
       if (conditions.length === 0) { el.classList.remove('show'); el.innerHTML = ''; currentWedgeKey = null; wedgeDismissedKey = null; return; }
       const key = conditions.join(',');
       currentWedgeKey = key;
       if (wedgeDismissedKey === key) { el.classList.remove('show'); el.innerHTML = ''; return; }
       const message = latestHealthReport ? wedgeMessage(conditions, latestHealthReport) : 'Pending exits or stranded volume funds need review in Operations.';
+      const healthStamp = healthStale ? ` · ${sourceLastSuccessLabel(routeSources.health)}` : '';
       el.classList.add('show');
       el.innerHTML = `
-        <div class="wedge-banner-msg"><span class="wedge-dot"></span><span><strong>Cycle may be stuck.</strong> ${esc(message)}</span></div>
+        <div class="wedge-banner-msg"><span class="wedge-dot"></span><span><strong>${healthStale ? 'Health status stale' : healthUnavailable ? 'Health status unavailable.' : 'Cycle may be stuck.'}${healthStamp}</strong> ${esc(message)}</span></div>
         <div class="wedge-banner-actions">
           <button class="btn btn-sm btn-ghost" onclick="goTo('markets')">View market</button>
           ${isAdmin ? `<button class="btn btn-sm btn-danger" onclick="goTo('ops')">Open incident toolkit</button>` : ''}
@@ -1852,9 +2038,18 @@
     function fetchPublicHealth() {
       if (!anonymousActor) return Promise.resolve(null);
       if (publicHealthRequestPromise) return publicHealthRequestPromise;
-      publicHealthRequestPromise = (async () => {
+      const request = (async () => {
+        const source = routeSources.health;
         try {
+          if (typeof anonymousActor.get_public_health !== 'function') {
+            markSourceUnavailable(source, 'get_public_health is unavailable');
+            publicHealthFailed = true;
+            updateFreshnessIndicator();
+            renderCurrentView();
+            return null;
+          }
           const pub = await anonymousActor.get_public_health();
+          markSourceFresh(source, pub);
           const conditions = [];
           if (pub.has_pending_exit) conditions.push('pending_exit');
           if (pub.has_pending_bob_exit) conditions.push('pending_bob_exit');
@@ -1862,86 +2057,121 @@
           latestPublicHealth = pub;
           publicHealthFailed = false;
           window._publicWedge = conditions;
+          updateFreshnessIndicator();
           renderBanner();
           renderCurrentView();
           return pub;
-        } catch (e) { publicHealthFailed = true; console.error('public health poll failed:', e); renderCurrentView(); return null; }
-        finally { publicHealthRequestPromise = null; }
+        } catch (e) { markSourceFailed(source, e); publicHealthFailed = true; console.error('public health poll failed:', e); updateFreshnessIndicator(); renderCurrentView(); return null; }
       })();
-      return publicHealthRequestPromise;
+      publicHealthRequestPromise = request;
+      request.then(() => { publicHealthRequestPromise = null; }, () => { publicHealthRequestPromise = null; });
+      return request;
     }
 
     // ═══════ Data loaders ═══════
 
     async function loadConfig() {
       try {
+        if (!anonymousActor || typeof anonymousActor.get_config !== 'function') {
+          markSourceUnavailable(routeSources.config, 'configuration query is unavailable');
+          return null;
+        }
         const config = await anonymousActor.get_config();
         currentConfig = config;
+        markSourceFresh(routeSources.config, config);
         const dot = document.getElementById('status-dot');
         const label = document.getElementById('status-label');
         dot.className = 'status-dot ' + (config.paused ? 'paused' : 'live');
         label.textContent = config.paused ? 'Paused' : 'Running';
         hydrateConfigForm(config);
         updateIncidentBackfillCmd();
-      } catch (e) { console.error('loadConfig:', e); }
+        return config;
+      } catch (e) {
+        markSourceFailed(routeSources.config, e);
+        console.error('loadConfig:', e);
+        return null;
+      }
     }
 
     async function loadSummary() {
       try {
+        if (!anonymousActor || typeof anonymousActor.get_summary !== 'function') { markSourceUnavailable(routeSources.summary, 'summary query is unavailable'); return; }
         const s = await anonymousActor.get_summary();
-        window._lastSummary = {
+        latestSummary = {
           net_pnl_usd: bi(s.net_pnl_usd), total_fees_usd: bi(s.total_fees_usd || 0),
           unpaired_drain_usd: bi(s.unpaired_drain_usd || 0),
           leg1_count: bi(s.leg1_count), leg2_count: bi(s.leg2_count),
           total_usd_in: bi(s.total_usd_in), total_legs: bi(s.total_legs),
         };
-      } catch (e) { console.error('loadSummary:', e); }
+        window._lastSummary = latestSummary;
+        markSourceFresh(routeSources.summary, latestSummary);
+      } catch (e) { markSourceFailed(routeSources.summary, e); console.error('loadSummary:', e); }
     }
 
     async function loadBalances(config) {
+      const source = routeSources.legacyBalances;
+      if (!config) { markSourceUnavailable(source, 'legacy ledger configuration is unavailable'); return; }
       try {
         const botPrincipal = Principal.fromText(canisterId);
         const account = { owner: botPrincipal, subaccount: [] };
-        const [b1, b2, b3, b4, b5, b6] = await Promise.all([
+        const results = await Promise.allSettled([
           createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.ckusdc_ledger.toText()).then(a => a.icrc1_balance_of(account)),
           createBalanceActor('cngnf-vqaaa-aaaar-qag4q-cai').then(a => a.icrc1_balance_of(account)),
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(account)),
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(account)),
-          createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(account)).catch(() => 0n),
+          createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(account)),
         ]);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        const [b1, b2, b3, b4, b5, b6] = results.map(result => result.value);
         window._rawBals = { b3usd: b1, bCkusdc: b2, bCkusdt: b3, bIcusd: b4, bIcp: b5, bBob: b6 };
-      } catch (e) { console.error('loadBalances:', e); }
+        markSourceFresh(source, window._rawBals);
+      } catch (e) { markSourceFailed(source, e); console.error('loadBalances:', e); }
+      if (state.activeView === 'markets') renderMarkets();
+      if (state.activeView === 'cockpit') renderCockpit();
     }
 
     async function loadVolumeBalances(config) {
+      const source = routeSources.volumeBalances;
+      if (!config) { markSourceUnavailable(source, 'volume ledger configuration is unavailable'); return; }
       try {
         const botPrincipal = Principal.fromText(canisterId);
         const volSub = Array.from({ length: 31 }, () => 0).concat([1]);
         const volAccount = { owner: botPrincipal, subaccount: [volSub] };
         const botAccount = { owner: botPrincipal, subaccount: [] }; // 3USD ledger ignores subaccounts
-        const [bIcp, bIcusd, b3usd, bBob] = await Promise.all([
+        const results = await Promise.allSettled([
           createBalanceActor(config.icp_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
           createBalanceActor('t6bor-paaaa-aaaap-qrd5q-cai').then(a => a.icrc1_balance_of(volAccount)),
           createBalanceActor(config.three_usd_ledger.toText()).then(a => a.icrc1_balance_of(botAccount)),
           createBalanceActor(config.bob_ledger.toText()).then(a => a.icrc1_balance_of(volAccount)),
         ]);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        const [bIcp, bIcusd, b3usd, bBob] = results.map(result => result.value);
         window._rawVolBals = { bIcp: bi(bIcp), bIcusd: bi(bIcusd), b3usd: bi(b3usd), bBob: bi(bBob) };
-      } catch (e) { console.error('loadVolumeBalances:', e); }
+        markSourceFresh(source, window._rawVolBals);
+      } catch (e) { markSourceFailed(source, e); console.error('loadVolumeBalances:', e); }
+      if (state.activeView === 'markets') renderMarkets();
+      if (state.activeView === 'cockpit') renderCockpit();
     }
 
     async function loadPrices() {
-      if (!authenticatedActor) return;
+      if (!authenticatedActor) { markSourceUnavailable(routeSources.prices, 'authenticated price query is unavailable'); return; }
       try {
+        if (typeof authenticatedActor.get_prices !== 'function') { markSourceUnavailable(routeSources.prices, 'price query is unavailable'); return; }
         const p = await authenticatedActor.get_prices();
         window._latestPrices = { vp: bi(p.virtual_price) / 1e18, icpswap: bi(p.icpswap_icp_price_ckusdc) / 1e6 };
-      } catch (e) { console.error('loadPrices:', e); }
+        markSourceFresh(routeSources.prices, window._latestPrices);
+      } catch (e) { markSourceFailed(routeSources.prices, e); console.error('loadPrices:', e); }
     }
 
     async function loadOverviewFromSnapshot() {
       try {
+        if (!anonymousActor || typeof anonymousActor.get_snapshots !== 'function') { markSourceUnavailable(routeSources.snapshots, 'snapshot query is unavailable'); return; }
         const snaps = await anonymousActor.get_snapshots(BigInt(0), BigInt(1));
-        if (!snaps.length) return;
+        if (!snaps.length) { markSourceFresh(routeSources.snapshots, []); return; }
+        markSourceFresh(routeSources.snapshots, snaps);
         latestSnapshot = snaps[0];
         const vp = bi(latestSnapshot.virtual_price) / 1e18;
         const icpswapCkusdc = bi(latestSnapshot.icpswap_icp_price_ckusdc) / 1e6;
@@ -1949,7 +2179,7 @@
         if (!authenticatedActor) window._latestPrices = { vp, icpswap: icpswapCkusdc }; // snapshot is the only source when logged out
         const bobRefP = bi(latestSnapshot.bob_ref_price_icusd_per_bob || 0);
         window._latestBobUsd = bobRefP > 0 ? bobRefP / 1e8 : 0;
-      } catch (e) { console.error('loadOverviewFromSnapshot:', e); }
+      } catch (e) { markSourceFailed(routeSources.snapshots, e); console.error('loadOverviewFromSnapshot:', e); }
     }
 
     // The paged IC queries anchor at the NEWEST record and walk backward, so
@@ -1973,9 +2203,13 @@
     }
 
     async function loadSnapshots() {
-      snapshotCache = await fetchAllPagedChronological(
-        (o, l) => anonymousActor.get_snapshots(o, l), 2000);
-      snapshotsLoaded = true;
+      try {
+        if (!anonymousActor || typeof anonymousActor.get_snapshots !== 'function') { markSourceUnavailable(routeSources.snapshots, 'snapshot query is unavailable'); return; }
+        snapshotCache = await fetchAllPagedChronological(
+          (o, l) => anonymousActor.get_snapshots(o, l), 2000);
+        snapshotsLoaded = true;
+        markSourceFresh(routeSources.snapshots, snapshotCache);
+      } catch (error) { markSourceFailed(routeSources.snapshots, error); console.error('loadSnapshots:', error); }
     }
 
     // Fetches raw legs starting at `offset` and pairs them (pairLegs, defined
@@ -1992,7 +2226,7 @@
       for (let attempt = 0; attempt < 4; attempt++) {
         try {
           legs = await anonymousActor.get_trade_legs(BigInt(offset), BigInt(rawLimit));
-        } catch (e) { console.error('fetchLedgerGroups:', e); legs = []; break; }
+        } catch (e) { console.error('fetchLedgerGroups:', e); throw e; }
         allGroups = pairLegs(legs);
         isLastFetch = legs.length < rawLimit;
         if (allGroups.length >= pageSize || isLastFetch) break;
@@ -2010,21 +2244,29 @@
 
     async function loadActivity() {
       try {
-        return await anonymousActor.get_activity_log(BigInt(activityPage * ACTIVITY_PAGE_SIZE), BigInt(ACTIVITY_PAGE_SIZE));
-      } catch (e) { console.error('loadActivity:', e); return []; }
+        if (!anonymousActor || typeof anonymousActor.get_activity_log !== 'function') { markSourceUnavailable(routeSources.activity, 'activity log is unavailable'); return routeSources.activity.value; }
+        const entries = await anonymousActor.get_activity_log(BigInt(activityPage * ACTIVITY_PAGE_SIZE), BigInt(ACTIVITY_PAGE_SIZE));
+        markSourceFresh(routeSources.activity, entries);
+        return entries;
+      } catch (e) { markSourceFailed(routeSources.activity, e); console.error('loadActivity:', e); return routeSources.activity.value; }
     }
 
     async function loadVolumeData() {
       try {
         const actor = authenticatedActor || anonymousActor;
+        if (!actor || typeof actor.get_volume_stats !== 'function') { markSourceUnavailable(routeSources.volumeStats, 'volume stats are unavailable'); return null; }
         latestVolumeStats = await actor.get_volume_stats();
+        markSourceFresh(routeSources.volumeStats, latestVolumeStats);
         if (isAdmin) hydrateVolumeForms(latestVolumeStats);
-      } catch (e) { console.error('loadVolumeData:', e); }
+        if (state.activeView === 'ops') renderOps();
+        if (state.activeView === 'cockpit') renderCockpit();
+        return latestVolumeStats;
+      } catch (e) { markSourceFailed(routeSources.volumeStats, e); console.error('loadVolumeData:', e); if (state.activeView === 'ops') renderOps(); if (state.activeView === 'cockpit') renderCockpit(); return null; }
     }
 
     async function loadMyBalances(config) {
       try {
-        if (!authClient || !(await authClient.isAuthenticated())) return null;
+        if (!authClient || !(await authClient.isAuthenticated())) { markSourceUnavailable(routeSources.operatorBalances, 'operator balance requires authentication'); return null; }
         const acct = { owner: authClient.getIdentity().getPrincipal(), subaccount: [] };
         const [a1, a2, a3, a4, a5, a6] = await Promise.all([
           createBalanceActor(config.three_usd_ledger.toText()),
@@ -2034,11 +2276,16 @@
           createBalanceActor(config.icp_ledger.toText()),
           createBalanceActor(config.bob_ledger.toText()),
         ]);
-        const [b1, b2, b3, b4, b5, b6] = await Promise.all([a1, a2, a3, a4, a5, a6].map(a => a.icrc1_balance_of(acct)));
+        const results = await Promise.allSettled([a1, a2, a3, a4, a5, a6].map(a => a.icrc1_balance_of(acct)));
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed) throw failed.reason;
+        const [b1, b2, b3, b4, b5, b6] = results.map(result => result.value);
         window._operatorBals = { b3usd: bi(b1), bCkusdc: bi(b2), bCkusdt: bi(b3), bIcusd: bi(b4), bIcp: bi(b5), bBob: bi(b6) };
-        if (state.activeView === 'money') renderMoney();
+        markSourceFresh(routeSources.operatorBalances, window._operatorBals);
+        if (state.activeView === 'markets') renderMarkets();
+        if (state.activeView === 'cockpit') renderCockpit();
         return window._operatorBals;
-      } catch (e) { console.error('loadMyBalances:', e); return null; }
+      } catch (e) { markSourceFailed(routeSources.operatorBalances, e); console.error('loadMyBalances:', e); if (state.activeView === 'markets') renderMarkets(); if (state.activeView === 'cockpit') renderCockpit(); return null; }
     }
 
     // ═══════ Market state computation — the registry's live layer ═══════
@@ -2107,7 +2354,10 @@
     // Returns { state, reason, facts:{...} } for one volume pool cost-center row.
     function volumeLive(pool) {
       const stats = latestVolumeStats;
-      if (!stats) return { state: 'STALE', reason: null, facts: null };
+      const statsState = routeSourceState('volumeStats');
+      if (statsState === 'failed' || statsState === 'unavailable') return { state: 'UNKNOWN', reason: sourceStateText('volumeStats'), facts: null };
+      if (statsState === 'loading' || !stats) return { state: 'LOADING', reason: sourceStateText('volumeStats'), facts: null };
+      if (statsState === 'stale') return { state: 'STALE', reason: sourceStateText('volumeStats'), facts: null };
       const status = stats[pool.statsKey];
       const cfg = status.config, st = status.state;
       const healthPool = latestHealthReport ? (latestHealthReport.pools || []).find(p => variantKey(p.pool) === variantKey(pool.poolVariant)) : null;
@@ -2144,7 +2394,7 @@
       if (latestRouteLock && latestRouteLock.reconciliation_required) {
         items.push({ key: 'route-reconciliation', kind: 'incident',
           title: 'Route execution requires reconciliation', meta: esc(latestRouteLock.operation_id),
-          actionLabel: 'View route', go: () => goTo('markets') });
+          actionLabel: 'View diagnostics', go: () => goTo('diagnostics') });
       }
       if (publicHealthFailed || !latestPublicHealth) {
         items.push({ key: 'health-unavailable', kind: 'incident',
@@ -2388,6 +2638,84 @@
       const age = Math.max(0, (Date.now() * 1e6 - Number(timestampNs)) / 1e9);
       return age < 60 ? `${age.toFixed(0)}s` : `${(age / 60).toFixed(1)}m`;
     }
+    function routeTimestampMs(timestampNs) {
+      if (timestampNs == null) return null;
+      const value = Number(timestampNs);
+      return Number.isFinite(value) ? value / 1e6 : null;
+    }
+    function routeRuntimePayloadTimestampMs(result, nowMs = Date.now()) {
+      const payload = result && result.Ok ? result.Ok : result;
+      if (!payload || payload.last_tick_ns == null) return null;
+      const tickMs = routeTimestampMs(payload.last_tick_ns);
+      const active = Boolean(payload.live_authorized && payload.enabled && !payload.dry_run);
+      return tickMs === 0 && !active ? nowMs : tickMs;
+    }
+    function routeQuoteStaleAfterMs() {
+      // RouteArbConfigV1 is a separate query/read model. Do not read a
+      // similarly named field from BotConfig or invent a partial config from
+      // the cold cache: quote freshness must match the route executor's limit.
+      // The undefined branch is only for small legacy VM fixtures that load
+      // this helper without the dashboard's top-level declarations. In the
+      // real page routeArbConfig is declared and null means unavailable.
+      const config = typeof routeArbConfig === 'undefined' ? null : routeArbConfig;
+      // The older review shorthand called this field max_quote_age_ns;
+      // RouteArbConfigV1's actual Candid field is quote_max_age_ns.
+      const ns = config && config.quote_max_age_ns;
+      if (ns == null && typeof routeArbConfig === 'undefined' && typeof currentConfig !== 'undefined') {
+        const legacyFixtureConfig = currentConfig && currentConfig.quote_max_age_ns;
+        return legacyFixtureConfig == null ? null : Number(legacyFixtureConfig) / 1e6;
+      }
+      return ns == null ? null : Number(ns) / 1e6;
+    }
+    function routeCandidateQuoteState(candidate, nowMs = Date.now()) {
+      if (!candidate || routeQuoteStaleAfterMs() == null) return 'unknown';
+      const quotedAtMs = routeTimestampMs(candidate.quote_timestamp_ns);
+      if (quotedAtMs == null) return 'unknown';
+      return nowMs - quotedAtMs >= routeQuoteStaleAfterMs() ? 'stale' : 'fresh';
+    }
+    function routeSourceState(name, staleAfterMs = null) {
+      return sourceDisplayState(routeSources[name], staleAfterMs);
+    }
+    function routeSourceError(source) {
+      return source.error ? ` · ${source.error}` : '';
+    }
+    function routeSourceStatusHtml(name, staleAfterMs = null) {
+      const source = routeSources[name];
+      const status = routeSourceState(name, staleAfterMs);
+      if (status === 'fresh') return '';
+      if (status === 'stale') return `<span class="badge badge-stale">Stale · ${sourceLastSuccessLabel(source)}</span>`;
+      if (status === 'loading') return '<span class="badge badge-unconfigured">Loading…</span>';
+      return `<span class="badge badge-stuck">${status === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(source))}</span>`;
+    }
+    function routeSourceUnavailableHtml(name) {
+      const source = routeSources[name];
+      const status = routeSourceState(name);
+      if (status === 'loading') return '<div class="route-empty">Loading…</div>';
+      if (status === 'failed' || status === 'unavailable') return `<div class="route-empty negative">${status === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(source))}</div>`;
+      return null;
+    }
+    function routeAggregateState() {
+      const quoteStaleAfterMs = routeQuoteStaleAfterMs();
+      const names = ['status', 'observation', 'candidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'prices', 'snapshots'];
+      if (authenticatedActor) names.push('wallet');
+      const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates') ? quoteStaleAfterMs : null));
+      const candidates = routeSources.candidates.value;
+      const candidateQuotes = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean).map(routeCandidateQuoteState) : [];
+      if (candidateQuotes.includes('stale')) states.push('stale');
+      else if (candidateQuotes.includes('unknown')) states.push('unknown');
+      if (states.includes('failed') || states.includes('unavailable')) return 'unavailable';
+      if (states.includes('stale')) return 'stale';
+      if (states.includes('unknown')) return 'unknown';
+      if (states.includes('loading')) return 'loading';
+      return 'fresh';
+    }
+    function updateFreshnessIndicator() {
+      const fresh = document.getElementById('freshness');
+      if (!fresh) return;
+      const aggregate = routeAggregateState();
+      fresh.textContent = aggregate === 'fresh' ? 'Live' : aggregate[0].toUpperCase() + aggregate.slice(1);
+      fresh.classList.toggle('live-now', aggregate === 'fresh');
+    }
     function routeNativeAmount(amount, asset) {
       const key = routeAssetKey(asset);
       const decimals = ROUTE_ASSET_DECIMALS[key] == null ? 8 : ROUTE_ASSET_DECIMALS[key];
@@ -2399,6 +2727,11 @@
     }
     function routeCandidateHtml(candidate, kind) {
       if (!candidate) return `<div class="route-empty">No completed eligible ${kind} candidate yet. Run or continue a quote-only observation.</div>`;
+      const quoteState = routeCandidateQuoteState(candidate);
+      const quoteTimestampMs = routeTimestampMs(candidate.quote_timestamp_ns);
+      const quoteFreshness = quoteState === 'stale'
+        ? `Stale · ${quoteTimestampMs == null ? 'quote time unknown' : 'as of ' + new Date(quoteTimestampMs).toLocaleTimeString()} · exceeded configured quote age`
+        : quoteState === 'unknown' ? 'Quote freshness unknown' : `Fresh · ${routeAge(candidate.quote_timestamp_ns)} old`;
       const path = candidate.asset_path.map(routeAssetLabel).join(' → ');
       const venues = candidate.venue_edges.join(' → ');
       const reason = routeOpt(candidate.rejection_reason);
@@ -2408,13 +2741,13 @@
       return `<div class="route-candidate ${kind === 'ICP-returning' ? 'icp' : ''}">
         <div class="route-path">${esc(path)}</div>
         <div class="route-venues">${esc(venues)}</div>
-        <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}">${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
-        <div class="text-ter" style="font-size:11px">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} principal · native P&amp;L ${esc(profitNative)}</div>
+        <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}"><span class="text-ter" style="font-size:10px;text-transform:uppercase;letter-spacing:.04em">Estimated spread</span> ${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
+        <div class="text-ter" style="font-size:11px">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} principal · <span class="text-ter">Estimated profit (native)</span> ${esc(profitNative)}</div>
         <div class="route-gates">
           <div class="route-gate"><span class="k">Full fill</span><span class="v ${candidate.full_fill ? 'positive' : 'negative'}">${candidate.full_fill ? 'confirmed' : 'rejected'}</span></div>
           <div class="route-gate"><span class="k">Allowance</span><span class="v">${esc(candidate.allowance_status)}</span></div>
           <div class="route-gate"><span class="k">Inventory</span><span class="v">${esc(candidate.inventory_effect)}</span></div>
-          <div class="route-gate"><span class="k">Quote age</span><span class="v">${routeAge(candidate.quote_timestamp_ns)}</span></div>
+          <div class="route-gate"><span class="k">Quote age</span><span class="v ${quoteState === 'stale' ? 'ts-stale' : quoteState === 'unknown' ? 'negative' : ''}">${esc(quoteFreshness)}</span></div>
           <div class="route-gate"><span class="k">Collision</span><span class="v" title="${esc(collision)}">${esc(collision.slice(0, 18))}${collision.length > 18 ? '…' : ''}</span></div>
         </div>
         ${reason ? `<div class="negative" style="font-size:11px;margin-top:8px">Rejected: ${esc(reason)}</div>` : ''}
@@ -2422,46 +2755,293 @@
     }
     function routeWalletHtml() {
       const byAsset = new Map(latestRouteWallet.map(row => [routeAssetKey(row.asset), row]));
+      const walletState = routeSourceState('wallet');
+      const walletSource = routeSources.wallet;
       return ROUTE_ASSET_ORDER.map(key => {
         const row = byAsset.get(key);
         const label = ROUTE_ASSET_LABELS[key];
-        const balance = row && routeOpt(row.balance_native) != null ? routeNativeAmount(routeOpt(row.balance_native), row.asset) : '—';
+        const balance = row && routeOpt(row.balance_native) != null ? routeNativeAmount(routeOpt(row.balance_native), row.asset)
+          : walletState === 'failed' || walletState === 'unavailable' ? 'Unavailable' : '—';
         const err = row ? routeOpt(row.error) : null;
         const metadata = row ? (row.metadata_valid ? 'metadata pinned' : 'metadata mismatch') : (isAdmin ? 'loading…' : 'log in to query');
-        return `<div class="route-wallet"><div class="route-wallet-symbol">${esc(label)}</div><div class="route-wallet-value">${esc(balance)}</div><div class="route-wallet-meta ${err ? 'negative' : ''}">${esc(err || metadata)}</div></div>`;
+        const sourceMeta = walletState === 'stale' ? `Stale · ${sourceLastSuccessLabel(walletSource)} · ${err || metadata}`
+          : walletState === 'failed' || walletState === 'unavailable' ? `Unavailable${routeSourceError(walletSource)}`
+          : walletState === 'loading' && isAdmin ? 'Loading…'
+          : err || metadata;
+        return `<div class="route-wallet"><div class="route-wallet-symbol">${esc(label)}</div><div class="route-wallet-value">${esc(balance)}</div><div class="route-wallet-meta ${err || walletState === 'failed' || walletState === 'unavailable' ? 'negative' : walletState === 'stale' ? 'ts-stale' : ''}">${esc(sourceMeta)}</div></div>`;
       }).join('');
+    }
+    function diagnosticsSourceFailureLabel(status) {
+      return status === 'failed' ? 'Failed' : 'Unavailable';
+    }
+    function diagnosticsSourceBadge(name, staleAfterMs = null) {
+      const source = routeSources[name];
+      const status = routeSourceState(name, staleAfterMs);
+      if (status === 'fresh') return '<span class="badge badge-live">Fresh</span>';
+      if (status === 'stale') return `<span class="badge badge-stale">Stale · ${esc(sourceLastSuccessLabel(source))}${source.error ? ` · ${esc(source.error)}` : ''}</span>`;
+      if (status === 'loading') return '<span class="badge badge-unconfigured">Loading…</span>';
+      return `<span class="badge badge-stuck">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</span>`;
+    }
+    function diagnosticsSourceFailure(name, staleAfterMs = null) {
+      const source = routeSources[name];
+      const status = routeSourceState(name, staleAfterMs);
+      if (status === 'loading') return '<div class="route-empty">Loading…</div>';
+      if (status === 'failed' || status === 'unavailable') return `<div class="route-empty negative">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</div>`;
+      return null;
+    }
+    function diagnosticsEvidenceHtml(record, label) {
+      const evidence = record && Array.isArray(record.evidence) ? record.evidence : [];
+      if (!evidence.length) return `<div class="route-wallet-meta">${esc(label)}: No evidence yet</div>`;
+      return `<div class="route-wallet-meta" data-diagnostics-evidence-reference><strong>${esc(label)}</strong>: ${evidence.map(item => `${esc(item.evidence_kind || 'evidence')} · <span data-evidence-source-reference>${esc(item.source_reference || 'Unavailable')}</span> · ${item.observed_at_ns == null ? 'time unavailable' : esc(fmtTime(item.observed_at_ns))}`).join('<br>')}</div>`;
     }
     function routeOperationsHtml() {
       const lock = latestRouteLock;
-      const activeReservations = latestRouteReservations.filter(r => r.active);
-      const heldRows = latestHeldPositions.length ? latestHeldPositions.map(p => `<div class="route-list-row"><span>${esc(p.position_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span><span class="badge badge-blocked">held</span></div>`).join('') : '<div class="route-empty">No held route inventory.</div>';
-      const reservationRows = activeReservations.length ? activeReservations.map(r => `<div class="route-list-row"><span>${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))}</span></div>`).join('') : '<div class="route-empty">No active reservations.</div>';
+      const lockState = routeSourceState('lock');
       const current = latestRouteExecution;
-      const execHtml = current ? `<div class="route-list-row"><span>${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span class="badge ${variantKey(current.phase) === 'ReconciliationRequired' ? 'badge-stuck' : 'badge-dryrun'}">${esc(routePhaseLabel(current.phase))}</span></div>` : '<div class="route-empty">No active route execution.</div>';
-      return `<div class="grid g-cols-3" style="margin-top:var(--sp-4)">
-        <div class="card"><div class="card-header">Route lock</div><div id="route-execution-state">${lock ? `<span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${esc(variantKey(lock.owner))}</span><div class="route-wallet-meta">${esc(lock.operation_id)}</div>` : '<span class="badge badge-live">clear</span>'}${execHtml}</div></div>
-        <div class="card"><div class="card-header">Reservations</div><div id="route-reservations" class="route-list">${reservationRows}</div></div>
-        <div class="card"><div class="card-header">Held positions</div><div id="route-held-positions" class="route-list">${heldRows}</div></div>
+      const currentState = routeSourceState('currentExecution');
+      const reservationsState = routeSourceState('reservations');
+      const heldState = routeSourceState('heldPositions');
+      const observationState = routeSourceState('observation');
+      const terminalState = routeSourceState('terminalExecutions');
+      const runtimeState = routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
+      const configState = routeSourceState('config');
+      const healthState = routeSourceState('health');
+      const quoteStaleAfterMs = routeQuoteStaleAfterMs();
+      const terminalExecutions = typeof latestTerminalExecutions === 'undefined' ? [] : latestTerminalExecutions;
+      const observation = typeof latestRouteObservation === 'undefined' ? null : latestRouteObservation;
+      const scan = typeof manualQuoteScan === 'undefined' ? { batchCount: 0 } : manualQuoteScan;
+      const probe = typeof manualObservationProbe === 'undefined' ? { status: 'idle', cursor: 0n, limit: 100n, error: null, result: null } : manualObservationProbe;
+      const publicHealth = typeof latestPublicHealth === 'undefined' ? null : latestPublicHealth;
+
+      const lockFailure = diagnosticsSourceFailure('lock');
+      const lockBody = lockFailure || lockState === 'loading' ? (lockFailure || '<div class="route-empty">Loading…</div>')
+        : lock ? `<div class="route-list-row"><span><strong>Admin holder</strong> ${esc(variantKey(lock.owner))}</span><span><strong>Operation ID</strong> ${esc(lock.operation_id)}</span><span class="badge ${lock.reconciliation_required ? 'badge-stuck' : 'badge-blocked'}">${lock.reconciliation_required ? 'reconciliation required' : 'held'}</span></div><div class="route-wallet-meta">Acquired ${esc(fmtTime(lock.acquired_at_ns))}${lockState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.lock))}` : ''}</div>`
+        : lockState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.lock))} · Clear at last successful read.</div>`
+        : '<div class="route-empty">Clear</div>';
+      const currentFailure = diagnosticsSourceFailure('currentExecution');
+      const currentBody = currentFailure || currentState === 'loading' ? (currentFailure || '<div class="route-empty">Loading…</div>')
+        : current ? `<div class="route-list-row" data-diagnostics-current-execution><span><strong>Execution ID</strong> ${esc(current.execution_id)}</span><span>${esc(current.route_id)}</span><span>${esc(routePhaseLabel(current.phase))}</span></div><div class="route-wallet-meta">Leg ${Number(current.current_leg_index) + 1} · reconciliation queries ${esc(current.reconciliation_query_count)}${currentState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.currentExecution))}` : ''}</div>${current.incident && routeOpt(current.incident) ? `<div class="negative">Incident: ${esc(routeOpt(current.incident))}</div>` : ''}${diagnosticsEvidenceHtml(current, 'Current execution evidence')}`
+        : currentState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.currentExecution))} · No active execution at last successful read.</div>`
+        : '<div class="route-empty">No active route execution.</div>';
+
+      const reservationFailure = diagnosticsSourceFailure('reservations');
+      const reservationBody = reservationFailure || reservationsState === 'loading' ? (reservationFailure || '<div class="route-empty">Loading…</div>')
+        : latestRouteReservations.length ? `<div class="route-list">${latestRouteReservations.map(r => `<div class="route-list-row"><span><strong>Reservation ID</strong> ${esc(r.reservation_id)}</span><span>${esc(routeNativeAmount(r.amount_native, r.asset))} ${esc(routeAssetLabel(r.asset))}</span><span>${esc(variantKey(r.kind))} · ${r.active ? 'active' : 'reconciled'}</span></div>`).join('')}</div>${reservationsState === 'stale' ? `<div class="route-wallet-meta ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.reservations))}</div>` : ''}`
+        : reservationsState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.reservations))} · No reservations at last successful read.</div>`
+        : '<div class="route-empty">No reservations.</div>';
+      const heldFailure = diagnosticsSourceFailure('heldPositions');
+      const heldBody = heldFailure || heldState === 'loading' ? (heldFailure || '<div class="route-empty">Loading…</div>')
+        : latestHeldPositions.length ? `<div class="route-list">${latestHeldPositions.map(p => `<div class="route-list-row"><span><strong>Held position ID</strong> ${esc(p.position_id)}</span><span>${esc(p.originating_execution_id)}</span><span>${p.lots.map(l => `${routeNativeAmount(l.native_amount, l.asset)} ${routeAssetLabel(l.asset)}`).join(' + ')}</span></div><div class="route-wallet-meta">${esc(p.reason)}${heldState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.heldPositions))}` : ''}</div>`).join('')}</div>`
+        : heldState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.heldPositions))} · No held positions at last successful read.</div>`
+        : '<div class="route-empty">No held positions.</div>';
+
+      const terminalFailure = diagnosticsSourceFailure('terminalExecutions');
+      const terminalBody = terminalFailure || terminalState === 'loading' ? (terminalFailure || '<div class="route-empty">Loading…</div>')
+        : terminalExecutions.length ? `<div class="route-list">${terminalExecutions.map(record => `<div class="route-list-row" data-diagnostics-terminal-execution><span><strong>Execution ID</strong> ${esc(record.execution_id)}</span><span>${esc(record.route_id)}</span><span>${esc(routePhaseLabel(record.phase))}</span></div><div class="route-wallet-meta">Updated ${esc(fmtTime(record.updated_at_ns))} · reconciliation queries ${esc(record.reconciliation_query_count)}${record.incident && routeOpt(record.incident) ? ` · Incident: ${esc(routeOpt(record.incident))}` : ''}</div>${diagnosticsEvidenceHtml(record, 'Terminal evidence')}`).join('')}</div>${terminalState === 'stale' ? `<div class="route-wallet-meta ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.terminalExecutions))}</div>` : ''}`
+        : terminalState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.terminalExecutions))} · No terminal executions at last successful read.</div>`
+        : '<div class="route-empty">No terminal route executions.</div>';
+
+      const obs = observation;
+      const observationFailure = diagnosticsSourceFailure('observation', quoteStaleAfterMs);
+      const observationBody = observationFailure || observationState === 'loading' ? (observationFailure || '<div class="route-empty">Loading…</div>')
+        : obs ? `<div class="route-list-row"><span><strong>Observation ID</strong> ${esc(obs.observation_id)}</span><span>${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates</span><span>${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls</span></div><div class="route-wallet-meta"><strong>Raw cursor</strong>: ${esc(obs.next_cursor)} · <strong>Client batches</strong>: ${scan.batchCount} · ${obs.scan_complete ? 'complete' : 'in progress'}${observationState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.observation))}` : ''}</div>${routeOpt(obs.incident) ? `<div class="negative">Observation incident: ${esc(routeOpt(obs.incident))}</div>` : ''}`
+        : observationState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.observation))} · No observation at last successful read.</div>`
+        : '<div class="route-empty">No observation recorded.</div>';
+
+      const runtimeFailure = diagnosticsSourceFailure('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
+      const configFailure = diagnosticsSourceFailure('config');
+      const runtimeBody = runtimeFailure || runtimeState === 'loading' ? (runtimeFailure || '<div class="route-empty">Loading…</div>')
+        : latestRouteRuntime ? `<div class="route-list-row"><span>Compiled support: ${latestRouteRuntime.compiled_support ? 'yes' : 'no'}</span><span>Authorized: ${latestRouteRuntime.live_authorized ? 'yes' : 'no'}</span><span>Enabled: ${latestRouteRuntime.enabled ? 'yes' : 'no'}</span><span>Dry run: ${latestRouteRuntime.dry_run ? 'yes' : 'no'}</span></div><div class="route-wallet-meta">Last tick: ${latestRouteRuntime.last_tick_ns ? esc(fmtTime(latestRouteRuntime.last_tick_ns)) : 'Unavailable'}${runtimeState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.runtime))}` : ''}</div>${routeOpt(latestRouteRuntime.last_error) ? `<div class="negative">Runtime error: ${esc(routeOpt(latestRouteRuntime.last_error))}</div>` : ''}`
+        : '<div class="route-empty">Runtime status unavailable.</div>';
+      const configBody = configFailure || configState === 'loading' ? (configFailure || '<div class="route-empty">Loading…</div>')
+        : currentConfig ? `<div class="route-wallet-meta">Configuration loaded${configState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.config))}` : ''}</div>` : '<div class="route-empty">Configuration unavailable.</div>';
+      const apiFailures = Object.entries(routeSources).filter(([name, source]) => ['failed', 'unavailable'].includes(routeSourceState(name))).map(([name, source]) => { const status = routeSourceState(name); return `<div class="route-list-row"><span>${esc(name)}</span><span class="negative">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</span></div>`; }).join('');
+      const legacyFailure = diagnosticsSourceFailure('health');
+      const legacyBody = legacyFailure || healthState === 'loading' ? (legacyFailure || '<div class="route-empty">Loading…</div>')
+        : publicHealth ? `<div class="route-list-row"><span>pending_exit: ${publicHealth.has_pending_exit ? 'present' : 'clear'}</span><span>pending_bob_exit: ${publicHealth.has_pending_bob_exit ? 'present' : 'clear'}</span><span>stranded volume: ${publicHealth.has_stranded_volume_funds ? 'present' : 'clear'}</span></div><div class="route-wallet-meta">These A-S/T fields are preserved as historical compatibility state and do not authorize route execution.${healthState === 'stale' ? ` Stale · ${esc(sourceLastSuccessLabel(routeSources.health))}` : ''}</div>`
+        : healthState === 'stale' ? `<div class="route-empty ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.health))} · Legacy health flags unavailable at last successful read.</div>`
+        : '<div class="route-empty">Legacy health flags are clear.</div>';
+      return `<div class="diagnostics-groups">
+        <section class="card" data-diagnostics-group="runtime"><div class="card-header">Runtime <span class="diagnostics-source-status">Runtime ${diagnosticsSourceBadge('runtime', ROUTE_RUNTIME_STALE_AFTER_MS)} · Config ${diagnosticsSourceBadge('config')}</span></div><div data-diagnostics-source="runtime">${runtimeBody}</div><div class="diagnostics-config" data-diagnostics-source="config"><div class="route-wallet-meta"><strong>Configuration</strong> ${configBody}</div></div><div class="route-list" data-diagnostics-failures><div class="route-wallet-meta"><strong>API failures and unavailable reads</strong></div>${apiFailures || '<div class="route-wallet-meta">None recorded.</div>'}</div></section>
+        <section class="card" data-diagnostics-group="execution"><div class="card-header">Execution and settlement <span class="diagnostics-source-status">Lock ${diagnosticsSourceBadge('lock')} · Current ${diagnosticsSourceBadge('currentExecution')} · Terminal ${diagnosticsSourceBadge('terminalExecutions')}</span></div><div data-diagnostics-source="lock"><div class="route-wallet-meta"><strong>Mutation lock</strong> ${lockBody}</div></div><div id="route-execution-state" data-diagnostics-source="currentExecution"><div class="route-wallet-meta"><strong>Current execution</strong> ${currentBody}</div></div><div data-diagnostics-source="terminalExecutions"><div class="route-wallet-meta"><strong>Terminal execution evidence</strong></div>${terminalBody}</div></section>
+        <section class="card" data-diagnostics-group="reservations"><div class="card-header">Reservations and held inventory <span class="diagnostics-source-status">Reservations ${diagnosticsSourceBadge('reservations')} · Held ${diagnosticsSourceBadge('heldPositions')}</span></div><div id="route-reservations" data-diagnostics-source="reservations"><div class="route-wallet-meta"><strong>Reservations</strong></div>${reservationBody}</div><div id="route-held-positions" data-diagnostics-source="heldPositions"><div class="route-wallet-meta"><strong>Held positions</strong></div>${heldBody}</div></section>
+        <section class="card" data-diagnostics-group="observation"><div class="card-header">Observation internals <span class="diagnostics-source-status">${diagnosticsSourceBadge('observation', quoteStaleAfterMs)}</span></div><div data-diagnostics-source="observation">${observationBody}</div><div class="divider"></div><div data-diagnostics-manual-scan><div class="card-header">Manual observation controls</div><div class="card-subtitle">Inspect one bounded quote batch for investigation. This does not start or resume the Markets scan.</div><div class="fund-vol-grid"><label>Cursor<input id="diagnostics-observation-cursor" type="number" min="0" step="1" value="${esc(probe.cursor)}"></label><label>Batch size<input id="diagnostics-observation-limit" type="number" min="1" max="100" step="1" value="${esc(probe.limit)}"></label><button type="button" class="btn btn-sm" onclick="inspectObservationBatch()"${probe.status === 'loading' ? ' disabled' : ''}>Inspect batch</button></div>${probe.status === 'loading' ? '<div class="route-wallet-meta">Loading bounded batch…</div>' : probe.status === 'failed' ? `<div class="negative">Failed${esc(probe.error ? ` · ${probe.error}` : '')}</div>` : probe.status === 'fresh' && probe.result ? `<div class="route-wallet-meta">Batch read completed at cursor ${esc(probe.cursor)} with limit ${esc(probe.limit)}. It did not alter the primary scan.</div>` : '<div class="route-wallet-meta">No diagnostic batch read yet.</div>'}</div></section>
+        <section class="card" data-diagnostics-group="legacy"><div class="card-header">Legacy state <span class="diagnostics-source-status">Health ${diagnosticsSourceBadge('health')}</span></div><div data-diagnostics-source="health">${legacyBody}</div><div class="route-disclosure" style="margin-top:var(--sp-3)">Legacy A-S/T activity is historical only. Historical ledger rows remain available under Ledger; adjacent legacy rows do not establish a route identity.</div></section>
       </div>`;
     }
+    function manualQuoteScanState(obs) {
+      if (manualQuoteScan.phase === 'running') return { key: 'running', label: 'Running' };
+      if (manualQuoteScan.phase === 'failed') return { key: 'failed', label: 'Failed' };
+      if (manualQuoteScan.phase === 'aborted') return { key: 'aborted', label: 'Stopped' };
+      if (manualQuoteScan.phase === 'complete' || (obs && obs.scan_complete)) return { key: 'complete', label: 'Complete' };
+      return { key: 'ready', label: 'Ready' };
+    }
+    window.inspectObservationBatch = async function () {
+      if (!requireAuth()) return false;
+      const cursorEl = document.getElementById('diagnostics-observation-cursor');
+      const limitEl = document.getElementById('diagnostics-observation-limit');
+      let cursor = 0n, limit = 100n;
+      try {
+        cursor = BigInt(cursorEl && cursorEl.value ? cursorEl.value : '0');
+        limit = BigInt(limitEl && limitEl.value ? limitEl.value : '100');
+      } catch (_) {
+        manualObservationProbe = { ...manualObservationProbe, status: 'failed', error: 'Cursor and batch size must be integers' };
+        renderCurrentView();
+        return false;
+      }
+      if (cursor < 0n || limit < 1n || limit > 100n) {
+        manualObservationProbe = { ...manualObservationProbe, status: 'failed', cursor, limit, error: 'Diagnostics batch size must be between 1 and 100' };
+        renderCurrentView();
+        return false;
+      }
+      manualObservationProbe = { status: 'loading', cursor, limit, error: null, result: null };
+      renderCurrentView();
+      try {
+        const result = unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(cursor, limit));
+        manualObservationProbe = { status: 'fresh', cursor, limit, error: null, result };
+        renderCurrentView();
+        return true;
+      } catch (error) {
+        manualObservationProbe = { status: 'failed', cursor, limit, error: error && error.message ? error.message : String(error), result: null };
+        renderCurrentView();
+        return false;
+      }
+    };
+    function observationProgressHtml(obs = latestRouteObservation, observationState = routeSourceState('observation')) {
+      const scan = manualQuoteScanState(obs);
+      const running = scan.key === 'running';
+      const failed = scan.key === 'failed';
+      const counters = obs
+        ? `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates · ${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls`
+        : 'No observation started';
+      const observationTime = obs && obs.started_at_ns != null
+        ? `Observation started ${new Date(routeTimestampMs(obs.started_at_ns)).toLocaleTimeString()}`
+        : 'Observation time unavailable';
+      const staleReason = observationState === 'stale'
+        ? `Quote observation stale · ${sourceLastSuccessLabel(routeSources.observation)}`
+        : 'Quote age is evaluated from each candidate timestamp and the configured max age';
+      const button = isAdmin
+        ? `<button type="button" class="btn btn-primary" aria-label="Start observation and run manual quote scan" onclick="runManualQuoteScan()"${running ? ' disabled' : ''}>${running ? 'Scanning…' : failed ? 'Resume manual scan' : 'Run manual quote scan'}</button>`
+        : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>';
+      const incident = obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : '';
+      const failure = manualQuoteScan.error ? `<div class="negative" style="margin-top:8px">${esc(manualQuoteScan.error)}</div>` : '';
+      return `<div class="route-observation-progress" data-observation-state="${scan.key}">
+        <div class="route-list-row"><span class="badge ${scan.key === 'complete' ? 'badge-live' : scan.key === 'failed' || scan.key === 'aborted' ? 'badge-stuck' : scan.key === 'running' ? 'badge-dryrun' : 'badge-unconfigured'}">${scan.label}</span><span>${esc(counters)}</span>${button}</div>
+        <div class="route-wallet-meta">${esc(observationTime)} · ${esc(staleReason)}</div>
+        ${incident}${failure}
+      </div>`;
+    }
+    function renderDiagnostics() {
+      const el = document.getElementById('view-diagnostics');
+      if (!el) return;
+      el.innerHTML = `
+        <div class="card-subtitle">Raw operational evidence stays here: locks, reservations, held positions, execution identifiers, observation cursors, settlement evidence, and legacy disclosures.</div>
+        ${routeOperationsHtml()}
+      `;
+    }
     function routeTradingLabel() {
-      if (!latestRouteRuntime) return 'Status unavailable';
-      if (!latestRouteRuntime.compiled_support) return 'Not implemented';
-      return latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run ? 'Automatic arbitrage on' : 'Trading stopped';
+      const automation = routeAutomationState();
+      if (automation.state === 'Blocked') return `Blocked · ${automation.reason}`;
+      if (automation.state === 'Unknown') return 'Unknown';
+      return automation.label;
+    }
+    function routeAutomationState() {
+      const pending = typeof state === 'object' && state.levers ? state.levers.routeAutomation : null;
+      if (pending) {
+        return {
+          state: 'Applying',
+          label: 'Applying',
+          targetOn: pending === 'starting',
+          gatesOn: Boolean(latestRouteRuntime && latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run),
+          reason: pending === 'starting' ? 'Starting automatic arbitrage' : 'Stopping new trades',
+        };
+      }
+      const runtimeState = typeof routeSourceState === 'function'
+        ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS)
+        : latestRouteRuntime ? 'fresh' : 'loading';
+      const runtime = latestRouteRuntime;
+      const gatesOn = Boolean(runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run);
+      if (!runtime || runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable') {
+        return { state: 'Unknown', label: 'Unknown', targetOn: false, gatesOn, reason: runtimeState === 'loading' ? 'Loading runtime status' : 'Runtime status unavailable' };
+      }
+      if (runtimeState === 'stale' && gatesOn) {
+        return { state: 'Blocked', label: 'Blocked', targetOn: true, gatesOn, reason: `stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}` };
+      }
+      if (runtimeState === 'stale' && !gatesOn) {
+        return { state: 'Unknown', label: 'Unknown', targetOn: false, gatesOn, reason: `stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}` };
+      }
+      if (!runtime.compiled_support) {
+        return { state: 'Blocked', label: 'Blocked', targetOn: gatesOn, gatesOn, reason: 'Runtime support unavailable' };
+      }
+      return gatesOn
+        ? { state: 'On', label: 'On', targetOn: true, gatesOn, reason: 'All runtime gates are enabled' }
+        : { state: 'Off', label: 'Off', targetOn: false, gatesOn, reason: 'New trades are stopped' };
     }
     function routeRuntimeHtml() {
       const runtime = latestRouteRuntime;
-      const on = runtime && runtime.live_authorized && runtime.enabled && !runtime.dry_run;
+      const automation = routeAutomationState();
+      const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : runtime ? 'fresh' : 'failed';
+      const runtimeFresh = runtimeState === 'fresh';
+      // Stale active runtime is rendered as: Blocked · stale runtime status.
+      const runtimeDisplay = automation.state === 'Blocked' ? routeTradingLabel() : automation.label;
+      const canToggle = isAdmin && (automation.state === 'On' || automation.state === 'Off');
+      const pressed = automation.state === 'On' || (automation.state === 'Applying' && automation.targetOn) || (automation.state === 'Blocked' && automation.gatesOn);
       const profit = runtime ? routeOpt(runtime.last_realized_profit) : null;
       const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
       const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
       const decimals = unit === 'ICP' ? 8 : 6;
-      return `<div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Automatic arbitrage</div>
-        <div class="route-list-row"><span>${esc(routeTradingLabel())}</span>
-        ${isAdmin && runtime && runtime.compiled_support ? `<button class="btn ${on ? 'btn-danger' : 'btn-primary'}" onclick="setRouteTrading(${!on})">${on ? 'Stop new trades' : 'Start arbitrage'}</button>` : ''}</div>
+      const toggle = isAdmin ? `<button type="button" class="lever-toggle${pressed ? ' on' : ''}${automation.state === 'Applying' ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="Automatic arbitrage ${automation.label.toLowerCase()}" title="${automation.state === 'Off' ? 'Start arbitrage' : automation.state === 'On' ? 'Stop new trades' : automation.reason}" ${canToggle ? `onclick="setRouteTrading(${!pressed})"` : 'disabled'}><span>${esc(automation.label)}</span></button>` : '';
+      const reason = automation.reason ? `<div class="route-wallet-meta">${esc(automation.reason)}${runtimeState === 'stale' ? ` · ${esc(sourceLastSuccessLabel(routeSources.runtime))}` : ''}</div>` : '';
+      return `<div class="card" style="margin-top:var(--sp-4)" data-route-automation-state="${automation.state}"><div class="card-header">Automatic arbitrage</div>
+        <div class="route-list-row"><span>${esc(runtimeDisplay)}</span>${toggle}</div>
+        ${reason}
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
         <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
+    }
+    async function refreshRouteRuntimeAuthoritative() {
+      if (routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
+      const generation = ++routeRuntimeQueryGeneration;
+      const drain = routeDataRequestPromise;
+      const refresh = (async () => {
+        if (drain) await drain;
+        const source = routeSources.runtime;
+        if (!anonymousActor || typeof anonymousActor.get_route_runtime_status_v1 !== 'function') {
+          markSourceUnavailable(source, 'runtime status is unavailable');
+          return latestRouteRuntime;
+        }
+        try {
+          const value = await anonymousActor.get_route_runtime_status_v1();
+          if (generation !== routeRuntimeQueryGeneration) return latestRouteRuntime;
+          if (value && Object.prototype.hasOwnProperty.call(value, 'Err')) {
+            markSourceFailed(source, value.Err);
+            return latestRouteRuntime;
+          }
+          const attemptMs = Date.now();
+          const observedAtMs = routeRuntimePayloadTimestampMs(value, attemptMs);
+          if (observedAtMs == null) {
+            markSourceFailed(source, 'runtime status freshness timestamp unavailable', attemptMs);
+            return latestRouteRuntime;
+          }
+          markSourceFresh(source, value, observedAtMs);
+          source.lastAttemptMs = attemptMs;
+          latestRouteRuntime = value && value.Ok ? value.Ok : null;
+          return latestRouteRuntime;
+        } catch (e) {
+          markSourceFailed(source, e);
+          return latestRouteRuntime;
+        }
+      })();
+      let trackedRefresh;
+      trackedRefresh = refresh.finally(() => {
+        if (routeRuntimeAuthoritativeRefreshPromise === trackedRefresh) routeRuntimeAuthoritativeRefreshPromise = null;
+      });
+      routeRuntimeAuthoritativeRefreshPromise = trackedRefresh;
+      return trackedRefresh;
+    }
+    function renderRouteAutomationViews() {
+      if (typeof renderAll === 'function') renderAll();
+      else if (typeof renderOps === 'function') renderOps();
     }
     window.setRouteTrading = function(enabled) {
       if (!requireAuth()) return;
@@ -2469,83 +3049,424 @@
         body: enabled ? 'The bot will trade using its configured assets, pools, size limits and minimum profit thresholds. Each leg must settle before the next begins.' : 'New swaps will stop. Any previously submitted swap will continue to be reconciled.',
         confirmLabel: enabled ? 'Start arbitrage' : 'Stop new trades', danger: enabled,
         onConfirm: async () => {
+          if (typeof state === 'object' && state.levers) state.levers.routeAutomation = enabled ? 'starting' : 'stopping';
+          if (typeof renderOps === 'function') renderOps();
           try {
             if (enabled) {
               const config = await authenticatedActor.get_route_arb_config_v1();
+              routeArbConfig = config;
+              if (typeof routeSources !== 'undefined' && routeSources.routeArbConfig) markSourceFresh(routeSources.routeArbConfig, config);
               unwrapResult(await authenticatedActor.set_route_arb_config_v1({ ...config, enabled: true, dry_run: false }));
             }
-            latestRouteRuntime = unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
-            await loadRouteData(); renderAll(); toast(routeTradingLabel(), 'success');
-          } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await loadRouteData(); renderAll(); }
+            unwrapResult(await authenticatedActor.set_route_runtime_authorized_v1(enabled));
+            await refreshRouteRuntimeAuthoritative();
+            // The mutation response is intentionally ignored. Clear Applying
+            // only after the runtime query has completed so the next paint is
+            // derived from authoritative state rather than optimistic state.
+            if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
+            renderRouteAutomationViews();
+            const refreshed = routeAutomationState();
+            if ((enabled && refreshed.state !== 'On') || (!enabled && refreshed.state !== 'Off')) throw new Error(`runtime refresh reported ${refreshed.label}`);
+            toast(`${refreshed.label} — confirmed by runtime refresh`, 'success');
+          } catch (e) { toast('Trading setting failed: ' + e.message, 'error'); await refreshRouteRuntimeAuthoritative(); renderRouteAutomationViews(); }
+          finally {
+            if (typeof state === 'object' && state.levers) delete state.levers.routeAutomation;
+            renderRouteAutomationViews();
+          }
         }
       });
     };
     function routeArbitrageHtml() {
       const status = latestRouteStatus;
       const obs = latestRouteObservation;
+      const quoteStaleAfterMs = routeQuoteStaleAfterMs();
+      const statusState = routeSourceState('status');
+      const observationState = routeSourceState('observation', quoteStaleAfterMs);
+      const candidatesState = routeSourceState('candidates', quoteStaleAfterMs);
       const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
       const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
-      const scanText = !obs ? 'No observation yet' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`;
+      const scanText = observationState === 'loading' ? 'Loading observation…'
+        : observationState === 'failed' || observationState === 'unavailable' ? 'Observation unavailable'
+        : observationState === 'stale' ? `Stale · ${!obs ? 'no cached observation' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`}`
+        : !obs ? 'No observation yet' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`;
+      const candidateSourceStamp = candidatesState === 'stale' ? `<div class="route-wallet-meta ts-stale">Stale · ${sourceLastSuccessLabel(routeSources.candidates)}</div>` : '';
+      const candidateUnavailable = candidatesState === 'loading' ? '<div class="route-empty">Loading candidates…</div>'
+        : candidatesState === 'failed' || candidatesState === 'unavailable' ? `<div class="route-empty negative">Candidates unavailable${esc(routeSourceError(routeSources.candidates))}</div>`
+        : candidatesState === 'stale' && !stable ? `<div class="route-empty ts-stale">Stale · ${sourceLastSuccessLabel(routeSources.candidates)} · no cached stable-returning candidate.</div>` : null;
+      const stableHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(stable, 'stable-returning');
+      const icpHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(icp, 'ICP-returning');
+      const statusText = statusState === 'loading' ? 'Loading route status…'
+        : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
+        : status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
+        : 'Route status unavailable';
+      const statusStamp = statusState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.status)}` : '';
+      const observationStamp = observationState === 'stale' ? ` · ${sourceLastSuccessLabel(routeSources.observation)}` : '';
       return `<div id="route-arb-panel">
-        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP.</div></div>
-          <div class="btn-group">${isAdmin ? '<button class="btn btn-primary" onclick="startRouteObservation(this)">Start observation</button><button class="btn" onclick="continueRouteObservation(this)">Quote next 100</button>' : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
-        <div class="route-disclosure">icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Start arbitrage control and working settlement support at every venue.</div>
+        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP. Start observation runs bounded quote batches automatically.</div></div>
+          <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
+        <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
-          <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${routeCandidateHtml(stable, 'stable-returning')}</div></div>
-          <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${routeCandidateHtml(icp, 'ICP-returning')}</div></div>
+          <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
+          <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
         </div>
-        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}` : 'Loading route status…'}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
-        ${routeRuntimeHtml()}
-        ${routeOperationsHtml()}
-        <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}${observationStamp}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${esc(statusText)}${statusStamp}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
+        <div class="route-disclosure" style="margin-top:var(--sp-4)">Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('diagnostics')">View legacy diagnostics →</button></div>
       </div>`;
     }
 
+    async function loadTerminalExecutionsForToday() {
+      if (!anonymousActor || typeof anonymousActor.get_terminal_route_executions_v1 !== 'function') {
+        throw new Error('terminal executions is unavailable');
+      }
+      const startNs = BigInt(new Date().setHours(0, 0, 0, 0)) * 1000000n;
+      const rows = [];
+      let offset = 0n;
+      let coveredStartOfDay = false;
+      terminalExecutionsIncomplete = false;
+      while (offset < TERMINAL_EXECUTIONS_MAX) {
+        const result = await anonymousActor.get_terminal_route_executions_v1(offset, TERMINAL_EXECUTIONS_PAGE_SIZE);
+        if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) {
+          throw new Error(result && result.Err ? result.Err : 'terminal executions query failed');
+        }
+        const page = result.Ok || [];
+        rows.push(...page);
+        if (page.length < Number(TERMINAL_EXECUTIONS_PAGE_SIZE)) {
+          coveredStartOfDay = true;
+          break;
+        }
+        const oldestNs = page.reduce((oldest, record) => {
+          const timestamp = BigInt(record.updated_at_ns || 0);
+          return oldest == null || timestamp < oldest ? timestamp : oldest;
+        }, null);
+        if (oldestNs != null && oldestNs < startNs) {
+          coveredStartOfDay = true;
+          break;
+        }
+        offset += BigInt(page.length);
+      }
+      terminalExecutionsIncomplete = !coveredStartOfDay;
+      terminalExecutionsLoadedCount = rows.length;
+      return rows.sort((a, b) => {
+        const left = BigInt(a.updated_at_ns || 0);
+        const right = BigInt(b.updated_at_ns || 0);
+        return left === right ? 0 : left > right ? -1 : 1;
+      });
+    }
+
+    async function loadCurrentExecutionDetail(execution, requestGeneration = null, forceRefresh = false) {
+      const source = routeSources.currentExecutionDetail;
+      const id = execution && execution.execution_id ? String(execution.execution_id) : null;
+      if (!id) {
+        ++currentExecutionDetailGeneration;
+        currentExecutionDetailLoad = null;
+        source.executionId = null;
+        markSourceUnavailable(source, 'no active execution');
+        return null;
+      }
+      const existing = currentExecutionDetailLoad;
+      if (existing && existing.id === id && existing.requestGeneration === requestGeneration) {
+        return existing.promise;
+      }
+      if (!forceRefresh && source.executionId === id && source.status === 'fresh' && source.value) {
+        source.executionId = id;
+        return source.value;
+      }
+      const generation = ++currentExecutionDetailGeneration;
+      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
+        const error = 'route execution detail is unavailable';
+        currentExecutionDetailLoad = null;
+        markSourceUnavailable(source, error);
+        return null;
+      }
+      const loadRecord = { id, requestGeneration, generation, promise: null };
+      Object.assign(source, { executionId: id, status: 'loading', value: null, error: null, lastAttemptMs: Date.now() });
+      const load = (async () => {
+        try {
+          const result = await anonymousActor.get_route_execution_detail_v1(id);
+          if (currentExecutionDetailLoad !== loadRecord || generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
+          markSourceFresh(source, result.Ok);
+          if (state.activeView === 'cockpit') renderCockpit();
+          return result.Ok;
+        } catch (error) {
+          if (currentExecutionDetailLoad !== loadRecord || generation !== currentExecutionDetailGeneration || (requestGeneration != null && requestGeneration !== routeRuntimeQueryGeneration)) return null;
+          const message = error && error.message ? error.message : String(error);
+          markSourceFailed(source, error);
+          if (state.activeView === 'cockpit') renderCockpit();
+          return null;
+        } finally {
+          if (currentExecutionDetailLoad === loadRecord) currentExecutionDetailLoad = null;
+        }
+      })();
+      loadRecord.promise = load;
+      currentExecutionDetailLoad = loadRecord;
+      return load;
+    }
+
     async function loadRouteData() {
+      if (typeof routeRuntimeAuthoritativeRefreshPromise !== 'undefined' && routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
+      const requestGeneration = typeof routeRuntimeQueryGeneration === 'number' ? ++routeRuntimeQueryGeneration : null;
       routeDataRequestPromise = (async () => {
-        const safe = async (fn, fallback, label) => { try { return await fn(); } catch (e) { console.error(label, e); return fallback; } };
-        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime] = await Promise.all([
-          safe(() => anonymousActor.get_route_arb_status_v1(), null, 'route status'),
-          safe(() => anonymousActor.get_route_observation_v1(), [], 'route observation'),
-          safe(() => anonymousActor.get_best_route_candidates_v1(), null, 'route candidates'),
-          safe(() => anonymousActor.get_route_mutation_lock_v1(), [], 'route lock'),
-          safe(() => anonymousActor.get_route_reservations_v1(0n, 100n), { Ok: [] }, 'route reservations'),
-          safe(() => anonymousActor.get_held_positions_v1(0n, 100n), { Ok: [] }, 'held positions'),
-          safe(() => anonymousActor.get_current_route_execution_v1(), [], 'route execution'),
-          safe(() => anonymousActor.get_terminal_route_executions_v1(0n, 20n), { Ok: [] }, 'terminal executions'),
-          safe(() => anonymousActor.get_route_runtime_status_v1(), null, 'runtime status'),
+        const querySource = async (name, fn, label, variantResult = false, successTimestampMs = null) => {
+          const source = routeSources[name];
+          if (typeof fn !== 'function') {
+            markSourceUnavailable(source, `${label} is unavailable`);
+            return source.value;
+          }
+          try {
+            const value = await fn();
+            if (variantResult && value && Object.prototype.hasOwnProperty.call(value, 'Err')) {
+              markSourceFailed(source, value.Err);
+              console.error(label, value.Err);
+              return source.value;
+            }
+            const attemptMs = Date.now();
+            const observedAtMs = typeof successTimestampMs === 'function' ? successTimestampMs(value) : null;
+            if (typeof successTimestampMs === 'function' && observedAtMs == null) {
+              markSourceFailed(source, `${label} freshness timestamp unavailable`, attemptMs);
+              return source.value;
+            }
+            markSourceFresh(source, value, observedAtMs == null ? attemptMs : observedAtMs);
+            source.lastAttemptMs = attemptMs;
+            return value;
+          } catch (e) {
+            markSourceFailed(source, e);
+            console.error(label, e);
+            return source.value;
+          }
+        };
+        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime, routeConfig] = await Promise.all([
+          querySource('status', typeof anonymousActor.get_route_arb_status_v1 === 'function' ? () => anonymousActor.get_route_arb_status_v1() : null, 'route status'),
+          querySource('observation', typeof anonymousActor.get_route_observation_v1 === 'function' ? () => anonymousActor.get_route_observation_v1() : null, 'route observation'),
+          querySource('candidates', typeof anonymousActor.get_best_route_candidates_v1 === 'function' ? () => anonymousActor.get_best_route_candidates_v1() : null, 'route candidates'),
+          querySource('lock', typeof anonymousActor.get_route_mutation_lock_v1 === 'function' ? () => anonymousActor.get_route_mutation_lock_v1() : null, 'route lock'),
+          querySource('reservations', typeof anonymousActor.get_route_reservations_v1 === 'function' ? () => anonymousActor.get_route_reservations_v1(0n, 100n) : null, 'route reservations', true),
+          querySource('heldPositions', typeof anonymousActor.get_held_positions_v1 === 'function' ? () => anonymousActor.get_held_positions_v1(0n, 100n) : null, 'held positions', true),
+          querySource('currentExecution', typeof anonymousActor.get_current_route_execution_v1 === 'function' ? () => anonymousActor.get_current_route_execution_v1() : null, 'route execution'),
+          querySource('terminalExecutions', loadTerminalExecutionsForToday, 'terminal executions'),
+          querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true, routeRuntimePayloadTimestampMs),
+          querySource('routeArbConfig', typeof anonymousActor.get_route_arb_config_v1 === 'function' ? () => anonymousActor.get_route_arb_config_v1() : null, 'route arbitrage configuration'),
         ]);
         latestRouteStatus = status;
-        latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
+        if (requestGeneration == null || requestGeneration === routeRuntimeQueryGeneration) {
+          latestRouteRuntime = runtime && runtime.Ok ? runtime.Ok : null;
+        }
         latestRouteObservation = routeOpt(obs);
         latestRouteCandidates = candidates;
         latestRouteLock = routeOpt(lock);
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];
         latestRouteExecution = routeOpt(current);
-        latestTerminalExecutions = terminal && terminal.Ok ? terminal.Ok : [];
-        if (authenticatedActor) latestRouteWallet = await safe(() => authenticatedActor.get_route_wallet_balances_v1(), latestRouteWallet, 'route wallet');
+        void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration, true);
+        latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
+        routeArbConfig = routeConfig || null;
+        if (authenticatedActor) {
+          await querySource('wallet', typeof authenticatedActor.get_route_wallet_balances_v1 === 'function' ? () => authenticatedActor.get_route_wallet_balances_v1() : null, 'route wallet');
+          latestRouteWallet = routeSources.wallet.value || [];
+        } else {
+          markSourceUnavailable(routeSources.wallet, 'route wallet requires authentication');
+          latestRouteWallet = [];
+        }
       })().finally(() => { routeDataRequestPromise = null; });
       return routeDataRequestPromise;
     }
-    window.startRouteObservation = async function(btn) {
-      if (!requireAuth()) return;
-      btnLoading(btn, 'Starting…');
-      try { unwrapResult(await authenticatedActor.start_route_observation_v1()); await loadRouteData(); renderCurrentView(); toast('Quote-only observation started', 'success'); }
-      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
+    function manualQuoteScanStillActive(generation, observationId) {
+      return generation === manualQuoteScanGeneration
+        && state.activeView === 'markets'
+        && manualQuoteScan.phase === 'running'
+        && manualQuoteScan.observationId === observationId;
+    }
+    function stopManualQuoteScan(generation, reason) {
+      if (generation !== manualQuoteScanGeneration) return false;
+      manualQuoteScanGeneration += 1;
+      manualQuoteScan.phase = 'aborted';
+      manualQuoteScan.error = reason;
+      if (state.activeView === 'markets') renderCurrentView();
+      return false;
+    }
+    window.runManualQuoteScan = async function() {
+      if (!requireAuth()) return false;
+      if (manualQuoteScan.phase === 'running') return false;
+      if (state.activeView !== 'markets') return stopManualQuoteScan(manualQuoteScanGeneration, 'Markets view is not active; scan was not started');
+
+      const resume = manualQuoteScan.phase === 'failed'
+        && manualQuoteScan.observationId != null
+        && manualQuoteScan.cursor != null;
+      const generation = ++manualQuoteScanGeneration;
+      const scan = resume
+        ? { ...manualQuoteScan, phase: 'running', error: null }
+        : { phase: 'running', observationId: null, cursor: null, batchCount: 0, error: null, startedAtNs: null };
+      manualQuoteScan = scan;
+      // Paint Running before the first await so a slow start cannot leave the
+      // operator looking at a stale Ready state.
+      renderCurrentView();
+      let observationId = scan.observationId;
+      let cursor = scan.cursor;
+      try {
+        if (!resume) {
+          const started = unwrapResult(await authenticatedActor.start_route_observation_v1());
+          if (generation !== manualQuoteScanGeneration || state.activeView !== 'markets') return stopManualQuoteScan(generation, 'Markets view changed before the scan started');
+          observationId = started.observation_id;
+          cursor = started.next_cursor == null ? 0n : BigInt(started.next_cursor);
+          manualQuoteScan.observationId = observationId;
+          manualQuoteScan.cursor = cursor;
+          manualQuoteScan.startedAtNs = started.started_at_ns || null;
+          // The start response has only the initial counters. Keep its identity
+          // visible until the authoritative query below replaces it.
+          latestRouteObservation = { ...started, scan_complete: false, candidates_evaluated: 0n, total_work_items: started.route_size_count || 0n, quote_calls_made: 0n, required_quote_calls: started.required_quote_calls || 0n, incident: [] };
+        }
+
+        await loadRouteData();
+        if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+        if (!latestRouteObservation || latestRouteObservation.observation_id !== observationId) return stopManualQuoteScan(generation, 'A newer or unavailable observation replaced this scan');
+        while (true) {
+          if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+          const result = unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(cursor, 100));
+          const observation = result && result.observation;
+          if (!observation || observation.observation_id !== observationId) return stopManualQuoteScan(generation, 'Observation identity changed; scan stopped before completion');
+          cursor = observation.next_cursor == null ? cursor : BigInt(observation.next_cursor);
+          manualQuoteScan.cursor = cursor;
+          manualQuoteScan.batchCount += 1;
+          latestRouteObservation = observation;
+          if (typeof routeSources !== 'undefined' && routeSources.observation) markSourceFresh(routeSources.observation, observation);
+          // Every bounded batch is visible immediately; the authoritative
+          // reload below may refine the counters but must not hide progress.
+          renderCurrentView();
+          await loadRouteData();
+          if (!manualQuoteScanStillActive(generation, observationId)) return stopManualQuoteScan(generation, 'Markets view or observation changed; scan stopped');
+          if (!latestRouteObservation || latestRouteObservation.observation_id !== observationId) return stopManualQuoteScan(generation, 'A newer or unavailable observation replaced this scan');
+          if (observation.scan_complete) {
+            manualQuoteScan.phase = 'complete';
+            manualQuoteScan.error = null;
+            renderCurrentView();
+            toast('Manual quote scan complete', 'success');
+            return true;
+          }
+        }
+      } catch (e) {
+        if (generation !== manualQuoteScanGeneration || state.activeView !== 'markets') {
+          return stopManualQuoteScan(generation, 'Markets view changed; scan stopped without claiming completion');
+        }
+        manualQuoteScan.phase = 'failed';
+        manualQuoteScan.error = e && e.message ? e.message : String(e);
+        renderCurrentView();
+        toast('Manual quote scan failed. Resume manual scan to retry from the saved cursor.', 'error');
+        return false;
+      }
     };
-    window.continueRouteObservation = async function(btn) {
-      if (!requireAuth()) return;
-      if (!latestRouteObservation || latestRouteObservation.scan_complete) { toast('Start a new observation first', 'error'); return; }
-      btnLoading(btn, 'Quoting…');
-      try { unwrapResult(await authenticatedActor.quote_route_observation_batch_v1(latestRouteObservation.next_cursor, 100)); await loadRouteData(); renderCurrentView(); toast('Observation batch complete', 'success'); }
-      catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
-    };
+    //    window.startRouteObservation is intentionally replaced by runManualQuoteScan.
+
+    function cockpitSourceLabel(sourceName, value, emptyLabel, sourceState = routeSourceState(sourceName)) {
+      const state = sourceState;
+      if (state === 'loading') return { state, label: 'Loading…' };
+      if (state === 'failed' || state === 'unavailable') return { state, label: `Unavailable · Unknown · ${state === 'failed' ? 'failed' : 'unavailable'}${routeSourceError(routeSources[sourceName])}` };
+      if (state === 'stale') return { state, label: `Stale · ${sourceLastSuccessLabel(routeSources[sourceName])}` };
+      return { state, label: value ? value : emptyLabel };
+    }
+    function routeExecutionLegCount(execution) {
+      if (!execution) return null;
+      const activeSource = routeSources.currentExecutionDetail;
+      const activeDetail = activeSource && activeSource.executionId === String(execution.execution_id)
+        && (activeSource.status === 'fresh' || activeSource.status === 'stale') ? activeSource.value : null;
+      if (activeDetail && activeDetail.detail_available && Array.isArray(activeDetail.legs) && activeDetail.legs.length) return activeDetail.legs.length;
+      if (activeDetail && Array.isArray(activeDetail.asset_path) && activeDetail.asset_path.length > 1) return activeDetail.asset_path.length - 1;
+      const detail = typeof routeExecutionDetails !== 'undefined' ? routeExecutionDetails.get(execution.execution_id) : null;
+      if (detail && (detail.status === 'fresh' || detail.status === 'stale') && detail.value && detail.value.detail_available && Array.isArray(detail.value.legs) && detail.value.legs.length) {
+        return detail.value.legs.length;
+      }
+      const candidates = routeSources.candidates && routeSources.candidates.value;
+      const candidateList = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean) : [];
+      const candidate = candidateList.find(item => item.route_id === execution.route_id);
+      if (!candidate) return null;
+      if (Array.isArray(candidate.legs) && candidate.legs.length) return candidate.legs.length;
+      return Array.isArray(candidate.asset_path) && candidate.asset_path.length > 1 ? candidate.asset_path.length - 1 : null;
+    }
+    function cockpitExecutionLegLabel(execution) {
+      if (!execution) return 'Leg unavailable';
+      const index = Number(execution.current_leg_index);
+      if (!Number.isFinite(index)) return 'Leg unavailable';
+      const total = routeExecutionLegCount(execution);
+      return total == null ? `Leg ${index + 1} · total unavailable` : `Leg ${index + 1} of ${total}`;
+    }
+    function cockpitExecutionPhaseLabel(execution) {
+      if (!execution) return null;
+      switch (variantKey(execution.phase)) {
+        case 'Planned':
+        case 'LegPrepared': return 'Preparing';
+        case 'LegSubmitted': return 'Executing';
+        case 'AwaitingSettlement': return 'Confirming';
+        case 'ReconciliationRequired': return 'Reconciling';
+        case 'LegSettled':
+        case 'RemainingRouteRequoted': return 'Evaluating';
+        case 'HeldInventory': return 'Blocked';
+        case 'Aborted': return 'Stopped';
+        case 'Completed': return 'Scanning';
+        default: return 'Unknown';
+      }
+    }
+    function cockpitExecutionPhaseCopy(execution) {
+      const phase = cockpitExecutionPhaseLabel(execution);
+      if (!execution || !phase || ['Scanning', 'Stopped', 'Blocked', 'Unknown'].includes(phase)) return phase;
+      const leg = cockpitExecutionLegLabel(execution).replace(/^Leg /, 'leg ');
+      const rawPhase = variantKey(execution.phase);
+      if (rawPhase === 'LegSubmitted') return `Submitting ${leg}`;
+      if (phase === 'Evaluating') return `Evaluating remaining route after ${leg}`;
+      return `${phase} ${leg}`;
+    }
+
+    function cockpitTodayResults(terminalState) {
+      if (terminalState !== 'fresh') {
+        return { state: terminalState, stableResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', icpResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', completed: 'Unknown', failed: 'Unknown', coverage: terminalState === 'stale' ? 'Stale terminal data' : terminalState === 'loading' ? 'Loading terminal data' : 'Terminal data unavailable' };
+      }
+      const startNs = BigInt(new Date().setHours(0, 0, 0, 0)) * 1000000n;
+      const today = latestTerminalExecutions.filter(record => BigInt(record.updated_at_ns || 0) >= startNs);
+      const completed = today.filter(record => variantKey(record.phase) === 'Completed').length;
+      const failed = today.filter(record => variantKey(record.phase) !== 'Completed').length;
+      const stableValues = today.filter(record => ['StablePar', 'StableSettledCrossAsset'].includes(variantKey(record.candidate_class))).map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      const icpValues = today.filter(record => variantKey(record.candidate_class) === 'IcpReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      const stableRealized = stableValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      const icpRealized = icpValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      return {
+        state: terminalState,
+        stableResult: stableValues.length ? fmt$(stableRealized) : '—',
+        icpResult: icpValues.length ? `${fmtTok(icpRealized, 8)} ICP` : '—',
+        completed: String(completed),
+        failed: String(failed),
+        coverage: terminalExecutionsIncomplete ? `Incomplete · bounded at ${terminalExecutionsLoadedCount} terminal records` : 'Complete through start of day',
+      };
+    }
+
+    function cockpitStatus() {
+      const runtimeState = routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
+      const executionState = routeSourceState('currentExecution');
+      const executionDetailState = routeSourceState('currentExecutionDetail');
+      const terminalState = routeSourceState('terminalExecutions');
+      const phaseCopy = latestRouteExecution ? cockpitExecutionPhaseCopy(latestRouteExecution) : null;
+      const detailSource = cockpitSourceLabel('currentExecutionDetail', phaseCopy || '', 'No active execution detail', executionDetailState);
+      const executionSource = cockpitSourceLabel('currentExecution', latestRouteExecution ? `${latestRouteExecution.execution_id} · ${phaseCopy}` : '', 'No active execution', executionState);
+      if (latestRouteExecution && executionState === 'fresh') executionSource.label += ` · ${detailSource.label}`;
+      const terminalSource = cockpitSourceLabel('terminalExecutions', latestTerminalExecutions.length ? `${latestTerminalExecutions[0].execution_id} · ${routePhaseLabel(latestTerminalExecutions[0].phase)}` : '', 'No terminal route execution', terminalState);
+      const unknown = (heartbeat = 'Heartbeat unknown') => ({ label: 'Unknown', heartbeat, phase: 'Unknown', phaseCopy: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) });
+      if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) return unknown();
+      if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', phaseCopy: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (!latestRouteRuntime.compiled_support) return unknown('Unknown · runtime support unavailable');
+      if (executionState === 'loading' || executionState === 'failed' || executionState === 'unavailable') return unknown();
+      const phase = latestRouteExecution ? cockpitExecutionPhaseLabel(latestRouteExecution) : routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete) ? 'Evaluating' : executionState === 'stale' ? 'Unknown' : 'Scanning';
+      const displayPhase = latestRouteExecution ? phaseCopy : phase;
+      if (executionState === 'stale' && !latestRouteExecution) return unknown(`Stale · ${sourceLastSuccessLabel(routeSources.currentExecution)}`);
+      const gatesOff = !latestRouteRuntime.live_authorized || !latestRouteRuntime.enabled || latestRouteRuntime.dry_run;
+      const heartbeat = latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped';
+      if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phase)) return { label: phase, heartbeat, phase, phaseCopy: displayPhase, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (gatesOff) return { label: 'Stopped', heartbeat, phase: 'Stopped', phaseCopy: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      return { label: phase, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase, phaseCopy: displayPhase, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+    }
 
     function renderCockpit() {
       const el = document.getElementById('view-cockpit');
+      const cockpit = cockpitStatus();
+      // Today's realized result is derived only from terminalExecutions.realized_profit.
       const c = currentConfig;
       // cf ("config facts") = real config once loaded, else the reduced
       // cold-cache subset (plain paused/rumi_amm_paused/bob_execution_enabled
@@ -2566,75 +3487,45 @@
       // configured) until `c` is real, self-corrects once get_config() resolves.
       const bobConfigured = c ? (c.icpswap_icusd_bob_pool.toText() !== '2vxsx-fae' && c.icpswap_bob_icp_pool.toText() !== '2vxsx-fae') : true;
 
-      const s = window._lastSummary;
-      const arbBal = window._rawBals, volBal = window._rawVolBals, opBal = window._operatorBals;
-      const equity = pocketUsd(arbBal) + pocketUsd(volBal) + pocketUsd(opBal);
-      const stale = !c || latestSnapshot?.__cold;
+      const summaryState = routeSourceState('summary');
+      const s = sourceHasValue('summary') ? window._lastSummary : null;
+      const arbBal = sourceHasValue('legacyBalances') ? window._rawBals : null;
+      const volBal = sourceHasValue('volumeBalances') ? window._rawVolBals : null;
+      const opBal = sourceHasValue('operatorBalances') ? window._operatorBals : null;
+      const equityKnown = !!(arbBal || volBal || (isAdmin && opBal));
+      const equity = equityKnown ? pocketUsd(arbBal) + pocketUsd(volBal) + pocketUsd(opBal) : null;
+      const stale = !c || latestSnapshot?.__cold || summaryState === 'stale';
 
       const attn = attentionItems();
 
       el.innerHTML = `
-        <div class="status-strip">
-          <div class="status-chip info" onclick="goTo('markets')">
-            <span class="status-chip-label">Route arbitrage</span>
-            <span class="status-chip-value">${esc(routeTradingLabel())}</span>
-          </div>
-          <div class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
-            <span class="status-chip-label">Volume engine</span>
-            <span class="status-chip-value">${!latestVolumeStats ? '—' : latestVolumeStats.volume_paused ? 'Paused' : 'Running'}</span>
-          </div>
-          <div class="status-chip warn" onclick="goTo('ledger')">
-            <span class="status-chip-label">Legacy arb</span>
-            <span class="status-chip-value">Retired</span>
-          </div>
-          <div class="status-chip ${stranded ? 'warn' : ''}" onclick="goTo('ops')">
-            <span class="status-chip-label">Stranded funds</span>
-            <span class="status-chip-value">${strandedText}</span>
-          </div>
-          <div class="status-chip${stuckSecs != null ? ' bad' : ''}" onclick="goTo('${stuckSecs != null ? 'ops' : 'ledger'}')">
-            <span class="status-chip-label">${stuckSecs != null ? 'Cycle' : 'Next cycle'}</span>
-            <span class="status-chip-value">${stuckSecs != null ? 'Stuck · ' + Math.floor(stuckSecs / 60) + 'm' : (nextCycleCountdown() || '—')}</span>
-          </div>
+        <div class="status-strip" data-cockpit-state data-cockpit-states="Stopped Scanning Evaluating Preparing Executing Confirming Reconciling Blocked Unknown">
+          <button type="button" class="status-chip info" onclick="goTo('markets')">
+            <span class="status-chip-label">Bot state</span>
+            <span class="status-chip-value">${esc(cockpit.label)}</span>
+          </button>
+          <div class="status-chip"><span class="status-chip-label">Heartbeat</span><span class="status-chip-value" data-cockpit-heartbeat>${esc(cockpit.heartbeat)}</span></div>
         </div>
 
-        <div class="grid cockpit-top" style="margin-bottom:var(--sp-4)">
-          <div class="card hero-card">
-            <div>
-              <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
-              <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
-              <div class="hero-delta text-ter">${s ? (bi(s.leg1_count) + bi(s.leg2_count)) + ' legs · ' + fmt$(s.total_usd_in) + ' volume' : ''}</div>
-              ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
-            </div>
-            <div class="hero-pockets">
-              <div class="hero-pocket"><div class="hero-pocket-label">Arb main</div><div class="hero-pocket-value">$${pocketUsd(arbBal).toFixed(2)}</div></div>
-              <div class="hero-pocket"><div class="hero-pocket-label">Volume sub</div><div class="hero-pocket-value">$${pocketUsd(volBal).toFixed(2)}</div></div>
-              <div class="hero-pocket"><div class="hero-pocket-label">Operator</div><div class="hero-pocket-value">${isAdmin ? '$' + pocketUsd(opBal).toFixed(2) : '—'}</div></div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header">Equity, all pockets</div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Total equity</span><span class="num" style="font-size:15px;font-weight:600">$${equity.toFixed(2)}</span></div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
-            <div class="divider"></div>
-            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Markets; quote snapshots are separate from realized results.</div>
-          </div>
-          <div class="card">
-            <div class="card-header">Bot balances — arb main</div>
-            <div class="bal-list">
-              ${ROUTE_ASSET_ORDER.map(key => {
-                const row = latestRouteWallet.find(b => routeAssetKey(b.asset) === key);
-                const amount = row ? routeOpt(row.balance_native) : null;
-                const sym = ROUTE_ASSET_LABELS[key];
-                return `<div class="bal-row">${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val">${amount == null ? '—' : routeNativeAmount(amount, row.asset)}</span></div>`;
-              }).join('')}
-            </div>
-          </div>
+        <div class="card" data-cockpit-phase style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Current phase</div>
+          <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phaseCopy || cockpit.phase)}</span></div>
+          <div class="stat-row" data-cockpit-execution-state><span>Execution</span><span>${esc(cockpit.executionSource.label)}</span></div>
+          <div class="stat-row"><span>Leg</span><span>${esc(latestRouteExecution ? cockpitExecutionLegLabel(latestRouteExecution) : 'Unavailable')}</span></div>
         </div>
 
-        ${cockpitPriceBadgesHtml(c, cf, stale, bobConfigured)}
+        <div class="card" data-cockpit-today-results data-cockpit-realized-results style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Today’s realized result</div>
+          <div class="grid g-cols-4"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
+          <div class="footnote" data-cockpit-today-coverage>${esc(cockpit.today.coverage)}</div>
+        </div>
 
-        <div class="card">
+        <div class="card" data-cockpit-latest-execution style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Latest terminal execution</div>
+          <div data-cockpit-terminal-state>${esc(cockpit.terminalSource.label)}${cockpit.terminalSource.state === 'fresh' && latestTerminalExecutions.length ? `<div class="route-list-row"><span><strong>Execution</strong> ${esc(latestTerminalExecutions[0].execution_id)}</span><span data-cockpit-terminal-phase><strong>Phase</strong> ${esc(routePhaseLabel(latestTerminalExecutions[0].phase))}</span><span>${fmtTime(latestTerminalExecutions[0].updated_at_ns)}</span></div>` : ''}</div>
+        </div>
+
+        <div class="card" data-cockpit-incidents>
           <div class="card-header">Attention — needs you</div>
           ${attn.length === 0 ? `
             <div class="attn-empty">
@@ -2656,6 +3547,48 @@
                 </div>`).join('')}
             </div>`}
         </div>
+
+        <div class="grid cockpit-top" style="margin-bottom:var(--sp-4)">
+          <div class="card hero-card">
+            <div>
+              <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time ${sourceStampHtml('summary')}${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
+              <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
+              <div class="hero-delta text-ter">${s ? (bi(s.leg1_count) + bi(s.leg2_count)) + ' legs · ' + fmt$(s.total_usd_in) + ' volume' : ''}</div>
+              ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
+            </div>
+            <div class="hero-pockets">
+              <div class="hero-pocket"><div class="hero-pocket-label">Arb main ${sourceStampHtml('legacyBalances')}</div><div class="hero-pocket-value">${arbBal ? '$' + pocketUsd(arbBal).toFixed(2) : sourceStateLabel('legacyBalances')}</div></div>
+              <div class="hero-pocket"><div class="hero-pocket-label">Volume sub ${sourceStampHtml('volumeBalances')}</div><div class="hero-pocket-value">${volBal ? '$' + pocketUsd(volBal).toFixed(2) : sourceStateLabel('volumeBalances')}</div></div>
+              <div class="hero-pocket"><div class="hero-pocket-label">Operator ${sourceStampHtml('operatorBalances')}</div><div class="hero-pocket-value">${isAdmin ? (opBal ? '$' + pocketUsd(opBal).toFixed(2) : sourceStateLabel('operatorBalances')) : '—'}</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">Equity, all pockets ${sourceStampHtml('legacyBalances')} · ${sourceStampHtml('volumeBalances')}</div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Total equity</span><span class="num" style="font-size:15px;font-weight:600">${equity == null ? 'Unknown' : '$' + equity.toFixed(2)}</span></div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
+            <div class="divider"></div>
+            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Ops; quote snapshots are separate from realized results.</div>
+          </div>
+          <div class="card">
+            <div class="card-header">Bot balances — arb main ${sourceStampHtml('wallet')}</div>
+            <div class="bal-list">
+              ${ROUTE_ASSET_ORDER.map(key => {
+                const row = latestRouteWallet.find(b => routeAssetKey(b.asset) === key);
+                const amount = row ? routeOpt(row.balance_native) : null;
+                const sym = ROUTE_ASSET_LABELS[key];
+                const walletState = routeSourceState('wallet');
+                const displayAmount = amount == null
+                  ? (walletState === 'failed' || walletState === 'unavailable' ? sourceStateLabel('wallet') : '—')
+                  : routeNativeAmount(amount, row.asset);
+                return `<div class="bal-row">${tokenLogo(sym)}<span class="bal-sym">${sym}</span><span class="bal-val">${esc(displayAmount)}</span></div>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+
+        ${cockpitPriceBadgesHtml(c, cf, stale, bobConfigured)}
+
       `;
     }
 
@@ -2669,6 +3602,7 @@
         case 'BLOCKED': return `<span class="badge badge-blocked">Blocked${live.reason ? ` <span class="badge-reason">· ${esc(live.reason)}</span>` : ''}</span>`;
         case 'STUCK': return `<span class="badge badge-stuck">Stuck${live.reason ? ` <span class="badge-reason">· ${esc(live.reason)}</span>` : ''}</span>`;
         case 'STALE': return `<span class="badge badge-unconfigured">Stale</span>`;
+        case 'UNKNOWN': return `<span class="badge badge-stuck">Unknown${live.reason ? ` <span class="badge-reason">· ${esc(live.reason)}</span>` : ''}</span>`;
         default: return `<span class="badge badge-live">Live</span>`;
       }
     }
@@ -2828,7 +3762,7 @@
 
     window.toggleRow = async function (id) {
       if (state.expandedRows.has(id)) state.expandedRows.delete(id); else state.expandedRows.add(id);
-      renderMarkets();
+      if (state.activeView === 'ops') renderOps(); else renderMarkets();
       if (!state.expandedRows.has(id)) return;
       if (!snapshotsLoaded) { await loadSnapshots(); if (!state.expandedRows.has(id)) return; }
       drawMiniSpreadChart(id);
@@ -2881,16 +3815,18 @@
 
     function renderMarkets() {
       const el = document.getElementById('view-markets');
-      const volumePaused = latestVolumeStats && latestVolumeStats.volume_paused;
       el.innerHTML = `
         ${routeArbitrageHtml()}
-        <div class="market-family" style="margin-top:var(--sp-6)">
-          <div class="family-head"><div class="family-title">Volume engine <span class="family-count">(${VOLUME_POOLS.length})</span>${volumePaused ? ' <span class="badge badge-paused">Kill-switch: Volume bot paused</span>' : ''}</div></div>
-          <div class="card-subtitle">Volume pools are retained as a separate cost-center system. Their controls and accounting are not part of route-arbitrage ranking.</div>
-          <div class="market-group">${VOLUME_POOLS.map(volumeRowHtml).join('')}</div>
+        <div class="card" id="markets-wallet-readiness" style="margin-top:var(--sp-4)"></div>
+        <div class="card" id="markets-charts" style="margin-top:var(--sp-4)">
+          <div class="card-header">Charts <span class="diagnostics-source-status">Snapshots ${sourceStampHtml('snapshots')} · Prices ${sourceStampHtml('prices')}</span></div>
+          <div class="card-subtitle">Historical spreads, prices, realized P&amp;L, balances, and virtual price.</div>
+          <div id="view-markets-charts"></div>
         </div>
         <div class="footnote"><span class="mark">*</span> Legacy lettered strategy records remain available in the historical ledger, but no lettered strategy action is rendered here.</div>
       `;
+      renderMarketsWallet();
+      renderCharts();
     }
 
     // ═══════ Force confirm (amendment 4/9: live numbers, never generic yes/no) ═══════
@@ -2922,23 +3858,25 @@
 
     window.doRunVolumeCycle = async function (poolId, btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       btnLoading(btn, 'Running…');
       try {
         const report = await authenticatedActor.trigger_volume_cycle();
         toast(report || 'Cycle complete', 'success');
         loadVolumeData(); fetchHealth();
       } catch (e) { toast('Cycle failed: ' + e.message, 'error'); }
-      finally { btnDone(btn); renderMarkets(); }
+      finally { btnDone(btn); renderOps(); }
     };
     window.doVolumeRebalance = async function (poolId, btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       btnLoading(btn, 'Rebalancing…');
       try {
         await authenticatedActor.trigger_volume_rebalance();
         toast('Rebalance triggered', 'success');
         loadVolumeData(); fetchHealth();
       } catch (e) { toast('Rebalance failed: ' + e.message, 'error'); }
-      finally { btnDone(btn); renderMarkets(); }
+      finally { btnDone(btn); renderOps(); }
     };
 
     // ═══════ Charts ═══════
@@ -3115,7 +4053,8 @@
     const RANGES = [ [3600, '1H'], [21600, '6H'], [86400, '24H'], [604800, '7D'], [0, 'All'] ];
 
     async function renderCharts() {
-      const el = document.getElementById('view-charts');
+      const el = document.getElementById('view-markets-charts');
+      if (!el) return;
       destroyCharts();
       if (!snapshotsLoaded) await loadSnapshots();
       const rumiPaused = currentConfig && currentConfig.rumi_amm_paused;
@@ -3176,7 +4115,8 @@
     // Charting it would require a backend change and could not backfill.
     function volumeCostCardHtml() {
       const stats = latestVolumeStats;
-      if (!stats) return `<div class="card" style="margin-bottom:var(--sp-4)"><div class="card-header">Volume cost</div><div class="text-ter">Loading…</div></div>`;
+      const statsState = routeSourceState('volumeStats');
+      if (!stats || ['failed', 'unavailable'].includes(statsState)) return `<div class="card" style="margin-bottom:var(--sp-4)"><div class="card-header">Volume cost ${sourceStampHtml('volumeStats')}</div><div class="text-negative">${sourceStateLabel('volumeStats')}</div></div>`;
       let tCost = 0, tVol = 0, tTrades = 0, tToday = 0, tCap = 0;
       const rows = VOLUME_POOLS.map(p => {
         const st = stats[p.statsKey].state, cfg = stats[p.statsKey].config;
@@ -3217,10 +4157,15 @@
         </div>`;
     }
 
-    function renderMoney() {
-      const el = document.getElementById('view-money');
-      const arb = window._rawBals, vol = window._rawVolBals, op = window._operatorBals;
+    function renderMarketsWallet() {
+      const el = document.getElementById('markets-wallet-readiness');
+      if (!el) return;
+      const arb = sourceHasValue('legacyBalances') ? window._rawBals : null;
+      const vol = sourceHasValue('volumeBalances') ? window._rawVolBals : null;
+      const op = sourceHasValue('operatorBalances') ? window._operatorBals : null;
       el.innerHTML = `
+        <div class="card-header">Wallet readiness <span class="diagnostics-source-status">Arb ${sourceStampHtml('legacyBalances')} · Volume ${sourceStampHtml('volumeBalances')} · Operator ${sourceStampHtml('operatorBalances')}</span></div>
+        <div class="card-subtitle">Balances and metadata required for route observation. Missing or failed reads remain visible as unavailable.</div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Balances by pocket</div>
           <div class="table-wrap">
@@ -3231,13 +4176,13 @@
                   const a = arb ? bi(arb[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec : null;
                   const v = (t.noVol || !vol) ? null : bi(vol[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
                   const o = (!isAdmin || !op) ? null : bi(op[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
-                  const total = (a || 0) + (v || 0) + (o || 0);
-                  return `<tr>
+                  const total = [a, v, o].some(value => value != null) ? (a || 0) + (v || 0) + (o || 0) : null;
+                  return `<tr data-balance-source="${sourceStateLabel('legacyBalances')}">
                     <td>${tokenLogo(t.sym)}${t.sym}${t.noVol ? ' <span class="mark">*</span>' : ''}</td>
-                    <td>${a != null ? fmt(a, t.dec > 6 ? 4 : 2) : '<span class="dash">—</span>'}</td>
-                    <td>${v != null ? fmt(v, t.dec > 6 ? 4 : 2) : '<span class="dash">—</span>'}</td>
-                    <td>${o != null ? fmt(o, t.dec > 6 ? 4 : 2) : (isAdmin ? '<span class="dash">—</span>' : '<span class="dash">login</span>')}</td>
-                    <td>${fmt(total, t.dec > 6 ? 4 : 2)}</td>
+                    <td>${a != null ? fmt(a, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('legacyBalances') ? 'Unavailable' : sourceStateLabel('legacyBalances')}</span>`}</td>
+                    <td>${v != null ? fmt(v, t.dec > 6 ? 4 : 2) : `<span class="dash">${sourceHasValue('volumeBalances') ? 'Unavailable' : sourceStateLabel('volumeBalances')}</span>`}</td>
+                    <td>${o != null ? fmt(o, t.dec > 6 ? 4 : 2) : (!isAdmin ? '<span class="dash">login</span>' : `<span class="dash">${sourceStateLabel('operatorBalances')}</span>`)}</td>
+                    <td>${total == null ? `<span class="dash">${sourceStateLabel('legacyBalances')}</span>` : fmt(total, t.dec > 6 ? 4 : 2)}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -3245,8 +4190,6 @@
           </div>
           <div class="footnote"><span class="mark">*</span> 3USD has no subaccounts — balance lives in arb-main only.</div>
         </div>
-
-        ${volumeCostCardHtml()}
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
@@ -3272,6 +4215,13 @@
           </div>
         </div>
 
+      `;
+    }
+
+    function renderVolumeFunding() {
+      const el = document.getElementById('ops-volume-funding');
+      if (!el) return;
+      el.innerHTML = `
         <div class="grid g-cols-2">
           <div class="card">
             <div class="card-header">Fund / withdraw — volume subaccount</div>
@@ -3307,6 +4257,13 @@
         </div>
       `;
       volSwapTokenChanged();
+    }
+
+    // Compatibility name retained for older tests and call sites; Money is now
+    // split between Markets wallet readiness and Ops volume operations.
+    function renderMoney() {
+      // volSwapTokenChanged() remains reachable through Ops' renderVolumeFunding().
+      return renderMarketsWallet();
     }
 
     // ═══════ Swap panel logic (real routes) ═══════
@@ -3634,14 +4591,23 @@
     window.leverArb = () => flipLever('Arb engine', () => authenticatedActor.resume(), () => authenticatedActor.pause(), !currentConfig.paused);
     window.leverRumiAmm = () => flipLever('Rumi AMM', () => authenticatedActor.set_rumi_amm_paused(true).then(checkRes), () => authenticatedActor.set_rumi_amm_paused(false).then(checkRes), currentConfig.rumi_amm_paused);
     window.leverStrategyS = () => flipLever('Strategy S', () => authenticatedActor.set_bob_execution_enabled(true).then(checkRes), () => authenticatedActor.set_bob_execution_enabled(false).then(checkRes), currentConfig.bob_execution_enabled);
-    window.leverVolume = () => flipLever('Volume engine', () => authenticatedActor.resume_volume(), () => authenticatedActor.pause_volume(), !!(latestVolumeStats && latestVolumeStats.volume_paused));
+    window.leverVolume = () => flipLever('vol', () => authenticatedActor.resume_volume(), () => authenticatedActor.pause_volume(), !!(latestVolumeStats && !latestVolumeStats.volume_paused));
     function checkRes(r) { if (r && 'Err' in r) throw new Error(r.Err); return r; }
+    function requireFreshVolumeStats() {
+      if (routeSourceState('volumeStats') === 'fresh' && latestVolumeStats) return true;
+      toast(`Volume status ${sourceStateText('volumeStats')}; refresh before changing it`, 'error');
+      return false;
+    }
+    const volumeFlip = window.leverVolume;
+    window.leverVolume = () => { if (!requireFreshVolumeStats()) return; return volumeFlip(); };
 
     window.leverVolumePool = async function (poolId) {
       if (state.levers['pool-' + poolId] === 'applying') return;
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const pool = VOLUME_POOLS.find(p => p.id === poolId);
-      const status = latestVolumeStats[pool.statsKey];
+      const status = latestVolumeStats && pool ? latestVolumeStats[pool.statsKey] : null;
+      if (!pool || !status) { toast('Volume status unavailable; refresh before changing it', 'error'); return; }
       const cfg = status.config;
       state.levers['pool-' + poolId] = 'applying';
       renderOps();
@@ -3655,11 +4621,21 @@
       finally { delete state.levers['pool-' + poolId]; renderOps(); }
     };
 
-    function leverHtml(key, name, sub, on, onClick) {
+    function leverHtml(key, name, sub, on, onClick, sourceName = 'volumeStats') {
       const applying = state.levers[key] === 'applying';
+      const source = routeSources[sourceName];
+      const sourceState = routeSourceState(sourceName);
+      const authoritative = sourceState === 'fresh';
+      const actionable = authoritative && !applying;
+      const label = applying ? 'Applying' : authoritative ? (on ? 'On' : 'Off')
+        : sourceState === 'stale' ? `Stale · ${sourceLastSuccessLabel(source)}`
+          : sourceState === 'loading' ? 'Loading…'
+            : sourceState === 'failed' ? `Failed${source.error ? ` · ${source.error}` : ''}`
+              : 'Unavailable';
+      const pressed = authoritative && !!on;
       return `<div class="lever">
-        <div class="lever-head"><span class="lever-name">${esc(name)}</span><div class="lever-toggle${on ? ' on' : ''}${applying ? ' applying' : ''}" onclick="${onClick}"></div></div>
-        <div class="lever-sub">${applying ? '<span class="mini-spin"></span>applying…' : esc(sub)}</div>
+        <div class="lever-head"><span class="lever-name">${esc(name)}</span><button type="button" class="lever-toggle${pressed ? ' on' : ''}${applying ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="${esc(name)} ${esc(label)}" ${actionable ? '' : 'disabled'} onclick="${actionable ? onClick : ''}"><span>${esc(label)}</span></button></div>
+        <div class="lever-sub">${applying ? '<span class="mini-spin"></span>applying…' : authoritative ? esc(sub) : esc(sourceStateText(sourceName))}</div>
       </div>`;
     }
 
@@ -3820,6 +4796,7 @@
     }
     window.saveVolumePoolConfig = async function (poolId) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const pool = VOLUME_POOLS.find(p => p.id === poolId);
       const prefix = pool.prefix;
       const cfg = latestVolumeStats[pool.statsKey].config;
@@ -3839,6 +4816,7 @@
     };
     window.saveVolumeGlobal = async function (btn) {
       if (!requireAuth()) return;
+      if (!requireFreshVolumeStats()) return;
       const interval = BigInt(parseInt(document.getElementById('vol-global-interval').value || '0'));
       const drift = BigInt(parseInt(document.getElementById('vol-global-drift').value || '0'));
       btnLoading(btn);
@@ -3966,31 +4944,53 @@
       const el = document.getElementById('view-ops');
       const c = currentConfig;
       if (!isAdmin) {
-        el.innerHTML = `<div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to see the volume controls and admin tools.</div></div>`;
+        el.innerHTML = `<div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">
+          ${routeRuntimeHtml()}
+          <div class="card"><div class="card-header">Ops</div><div class="text-sec" style="font-size:13px">Log in with an admin principal to change automation settings. Runtime status is read-only.</div></div>
+        </div>`;
         return;
       }
       if (!c) { el.innerHTML = `<div class="card">Loading config…</div>`; return; }
 
       const stats = latestVolumeStats;
       const routeStatus = latestRouteStatus;
-      const routeConfigState = routeStatus
-        ? `${bi(routeStatus.route_count)} routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}`
-        : 'Loading route policy…';
+      const routeArbConfigState = routeSourceState('routeArbConfig');
+      const routeConfigState = routeArbConfigState === 'loading' ? 'Loading route policy…'
+        : routeArbConfigState === 'failed' ? `Failed${routeSourceError(routeSources.routeArbConfig)}`
+          : routeArbConfigState === 'unavailable' ? `Unavailable${routeSourceError(routeSources.routeArbConfig)}`
+            : routeStatus ? `${bi(routeStatus.route_count)} routes · ${routeStatus.config_valid ? 'configuration valid' : 'configuration incident'}${routeArbConfigState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.routeArbConfig)}` : ''}`
+              : 'Route policy unavailable';
+      const routeAutomation = routeAutomationState();
+      const executionCopy = routeAutomation.state === 'On'
+        ? 'execution authorized · settlement checks required'
+        : routeAutomation.state === 'Off'
+          ? 'quote-only · disabled'
+          : routeAutomation.state === 'Blocked'
+            ? `Blocked · ${routeAutomation.reason || 'automation blocked'}`
+            : `${routeAutomation.label} · execution status unknown`;
 
       el.innerHTML = `
+        <div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">${routeRuntimeHtml()}</div>
         <div class="card" style="margin-bottom:var(--sp-4)">
-          <div class="card-header">Route arbitrage policy</div>
+          <div class="card-header">Route arbitrage policy <span class="diagnostics-source-status">${sourceStampHtml('routeArbConfig')}</span></div>
           <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
           <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning</span></div>
-          <div class="stat-row"><span>Execution</span><span class="badge badge-dryrun">quote-only · disabled</span></div>
+          <div class="stat-row"><span>Execution</span><span class="badge ${routeAutomation.state === 'On' ? 'badge-live' : routeAutomation.state === 'Unknown' ? 'badge-stuck' : 'badge-dryrun'}">${esc(executionCopy)}</span></div>
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>
+        <div class="card" style="margin-bottom:var(--sp-4)" data-ops-volume-actions>
+          <div class="card-header">Volume engine ${sourceStampHtml('volumeStats')}</div>
+          <div class="card-subtitle">Operational volume actions and cost-center accounting live here. They are separate from route-arbitrage ranking.</div>
+          <div class="market-group">${VOLUME_POOLS.map(volumeRowHtml).join('')}</div>
+          ${volumeCostCardHtml()}
+        </div>
+        <div id="ops-volume-funding" data-ops-volume-funding></div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Levers <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched weekly</span></div>
           <div class="lever-grid">
-            ${leverHtml('vol', 'Volume engine', 'Master run/pause', !(stats && stats.volume_paused), 'leverVolume()')}
-            ${stats ? VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', stats[p.statsKey].config.enabled, `leverVolumePool('${p.id}')`)).join('') : ''}
+            ${leverHtml('vol', 'Volume engine', 'Master run/pause', !!(stats && !stats.volume_paused), 'leverVolume()')}
+            ${VOLUME_POOLS.map(p => leverHtml('pool-' + p.id, 'Volume · ' + p.pair, 'Per-pool enable', !!(stats && stats[p.statsKey] && stats[p.statsKey].config.enabled), `leverVolumePool('${p.id}')`)).join('')}
           </div>
           <div class="divider"></div>
           <label>Volume pool config</label>
@@ -4029,9 +5029,284 @@
       `;
       hydrateConfigForm(c);
       if (stats) hydrateVolumeForms(stats);
+      renderVolumeFunding();
     }
 
     // ═══════ Ledger ═══════
+
+    function routeLedgerStatusKey(status) { return variantKey(status); }
+    function routeLedgerStatusLabel(status) {
+      return String(routeLedgerStatusKey(status) || 'Unknown').replace(/([a-z])([A-Z])/g, '$1 $2');
+    }
+    function routeLedgerVenueLabel(venue) {
+      return String(variantKey(venue) || 'Unknown').replace(/([a-z])([A-Z])/g, '$1 $2');
+    }
+    function routeLedgerTextOption(value, fallback = 'Unavailable') {
+      const item = Array.isArray(value) ? routeOpt(value) : value;
+      return item == null ? fallback : item;
+    }
+    function routeLedgerAssetDecimals(asset) {
+      return ({ Icp: 8, IcUsd: 8, CkUsdc: 6, CkUsdt: 6, CkBtc: 8, CkEth: 18 })[routeAssetKey(asset)] ?? null;
+    }
+    function routeLedgerFormatAmount(value, decimals) {
+      const rawValue = typeof value === 'bigint' ? value.toString() : String(value);
+      const negative = rawValue.startsWith('-');
+      const raw = negative ? rawValue.slice(1) : rawValue;
+      if (!/^\d+$/.test(raw)) return 'Unavailable';
+      if (decimals === 0) return `${negative ? '-' : ''}${raw}`;
+      const padded = raw.padStart(decimals + 1, '0');
+      const whole = padded.slice(0, -decimals) || '0';
+      const fraction = padded.slice(-decimals).replace(/0+$/, '');
+      return `${negative ? '-' : ''}${whole}.${fraction || '0'}`;
+    }
+    function routeLedgerPrincipalLabel(principal) {
+      if (principal == null) return 'Unavailable';
+      try { return typeof principal.toText === 'function' ? principal.toText() : String(principal); }
+      catch (_) { return 'Unavailable'; }
+    }
+    function routeLedgerAmount(value, asset, fallback = 'Unavailable') {
+      const amount = routeLedgerTextOption(value, null);
+      const decimals = routeLedgerAssetDecimals(asset);
+      return amount == null || decimals == null ? fallback : `${routeLedgerFormatAmount(amount, decimals)} ${routeAssetLabel(asset)}`;
+    }
+    function routeLedgerOptionalTimestamp(value) {
+      const timestamp = routeLedgerTextOption(value, null);
+      return timestamp == null ? 'Unavailable' : fmtTime(timestamp);
+    }
+    function routeLedgerEvidenceCopyHtml(sourceReference) {
+      if (sourceReference == null || String(sourceReference) === '') return '';
+      const source = String(sourceReference);
+      return ` <button type="button" class="btn btn-sm btn-ghost ledger-copy-evidence" data-ledger-copy-evidence="${esc(source)}" aria-label="Copy evidence source reference">Copy</button><span class="ledger-copy-feedback" data-ledger-copy-feedback aria-live="polite"></span>`;
+    }
+    function routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired = false, hasAnyEvidence = false) {
+      const rows = Array.isArray(evidence) ? evidence : [];
+      if (!rows.length) return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v text-ter">${noEvidenceRequired ? 'No evidence required' : hasAnyEvidence ? 'Evidence recorded under another group' : 'No evidence yet'}</span></div>`;
+      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')}${routeLedgerEvidenceCopyHtml(item.source_reference)} · raw atoms (asset association unavailable): ${esc(item.amount_native == null ? 'Unavailable' : item.amount_native)} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
+    }
+    function routeLedgerEvidenceBucket(item, matcher) {
+      const explicit = item && (item.evidence_group || item.evidence_type || item.kind);
+      const value = explicit && typeof explicit === 'object' ? Object.keys(explicit)[0] : explicit;
+      const source = String(value || (item && item.evidence_kind) || '').toLowerCase();
+      if (/submission|submit|request|prepared/.test(source)) return 'submission';
+      if (/receipt|tx|transfer/.test(source)) return 'receipt';
+      if (/settlement|settle|reconcil|balance/.test(source)) return 'settlement';
+      if (matcher && matcher.test(source)) return 'receipt';
+      return 'other';
+    }
+    function routeLedgerEvidenceGroupHtml(leg, label, matcher) {
+      const allEvidence = Array.isArray(leg.evidence) ? leg.evidence : [];
+      const group = /submission/i.test(label) ? 'submission' : /receipt/i.test(label) ? 'receipt' : 'settlement';
+      const evidence = allEvidence.filter(item => {
+        const bucket = routeLedgerEvidenceBucket(item, matcher);
+        return bucket === group || (group === 'settlement' && bucket === 'other');
+      });
+      const noEvidenceRequired = /settlement|receipt/i.test(label) && ['RejectedBeforeDebit', 'Aborted'].includes(routeLedgerStatusKey(leg.status));
+      return routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired, allEvidence.length > 0);
+    }
+    function routeLedgerLegValue(value, asset, statusKey, kind) {
+      if (kind === 'actual' && value == null || (Array.isArray(value) && !value.length)) {
+        return statusKey === 'AwaitingSettlement' ? 'Awaiting settlement' : 'Unavailable';
+      }
+      if (kind === 'refund' && (value == null || (Array.isArray(value) && !value.length))) return 'No refund recorded';
+      return routeLedgerAmount(value, asset);
+    }
+    function routeLedgerIncidentHtml(leg) {
+      const incident = routeLedgerTextOption(leg.incident, null);
+      if (incident != null) return `<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v negative">${esc(incident)}</span></div>`;
+      const key = routeLedgerStatusKey(leg.status);
+      if (key === 'RejectedBeforeDebit') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Rejected before debit</span></div>';
+      if (key === 'ReconciliationRequired') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Reconciliation required</span></div>';
+      if (key === 'HeldInventory') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Partial / held inventory</span></div>';
+      if (key === 'Aborted') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Aborted</span></div>';
+      return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v text-ter">No incident recorded</span></div>';
+    }
+    function routeLedgerPnlHtml(record) {
+      const realized = routeLedgerTextOption(record.realized_profit, null);
+      if (realized == null) return '<span class="text-muted">Unavailable</span>';
+      const klass = variantKey(record.candidate_class);
+      if (klass === 'IcpReturning') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 8)} ICP</span>`;
+      if (klass === 'StablePar' || klass === 'StableSettledCrossAsset') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 6)} USD</span>`;
+      return '<span class="text-muted">Unavailable · profit unit unknown</span>';
+    }
+    function routeLegDetailHtml(detail) {
+      if (!detail || detail.detail_available === false) return '<div class="ledger-detail-state">Detailed legs were not recorded for this historical execution. Evidence unavailable for historical record.</div>';
+      const legs = Array.isArray(detail.legs) ? detail.legs.slice().sort((a, b) => Number(a.leg_index) - Number(b.leg_index)) : [];
+      if (!legs.length) return '<div class="ledger-detail-state">Detailed legs are Unavailable for this execution.</div>';
+      const count = legs.length;
+      return `<div class="ledger-detail"><ol class="ledger-detail-list">${legs.map((leg, index) => {
+        const statusKey = routeLedgerStatusKey(leg.status);
+        const from = routeAssetLabel(leg.from), to = routeAssetLabel(leg.to);
+        const actualInput = routeLedgerLegValue(leg.actual_input_debit_native, leg.from, statusKey, 'actual');
+        const actualOutput = routeLedgerLegValue(leg.actual_output_credit_native, leg.to, statusKey, 'actual');
+        const refund = routeLedgerLegValue(leg.refund_credit_native, leg.from, statusKey, 'refund');
+        return `<li class="ledger-leg" data-leg-index="${esc(leg.leg_index)}">
+          <div class="ledger-leg-head"><span class="ledger-leg-title">Leg ${index + 1} of ${count} · ${esc(routeLedgerStatusLabel(leg.status))}</span><span class="text-ter">${esc(from)} → ${esc(to)}</span></div>
+          <div class="ledger-leg-grid">
+            <div><div class="ledger-detail-group-label">Route</div><div class="ledger-detail-kv"><span class="k">Venue</span><span class="v">${esc(routeLedgerVenueLabel(leg.venue))}</span></div><div class="ledger-detail-kv"><span class="k">Pool</span><span class="v">${esc(leg.pool_id || 'Unavailable')} · ${esc(routeLedgerPrincipalLabel(leg.pool_principal))}</span></div><div class="ledger-detail-kv"><span class="k">Path / edge</span><span class="v">${esc(leg.edge_id || 'Unavailable')} · ${esc(from)} → ${esc(to)}</span></div></div>
+            <div><div class="ledger-detail-group-label">Quote and request</div><div class="ledger-detail-kv"><span class="k">Requested input</span><span class="v">${routeLedgerAmount(leg.requested_input_native, leg.from, 'Unavailable · not separately recorded')}</span></div><div class="ledger-detail-kv"><span class="k">Quoted input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted output</span><span class="v">${routeLedgerAmount(leg.quoted_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Minimum accepted</span><span class="v">${routeLedgerAmount(leg.minimum_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Ledger fees</span><span class="v">${routeLedgerAmount(leg.input_fee_native, leg.from)} + ${routeLedgerAmount(leg.output_fee_native, leg.to)}</span></div></div>
+            <div><div class="ledger-detail-group-label">Actual settlement</div><div class="ledger-detail-kv"><span class="k">Actual input debit</span><span class="v">${actualInput}</span></div><div class="ledger-detail-kv"><span class="k">Effective input</span><span class="v">${routeLedgerLegValue(leg.actual_effective_input_native, leg.from, statusKey, 'actual')}</span></div><div class="ledger-detail-kv"><span class="k">Actual output</span><span class="v">${actualOutput}</span></div><div class="ledger-detail-kv"><span class="k">Refund</span><span class="v">${refund}</span></div></div>
+          </div>
+          <div class="ledger-detail-group"><div class="ledger-detail-group-label">Submission, receipt, and settlement evidence</div>${routeLedgerEvidenceGroupHtml(leg, 'Submission evidence', /submit|request|prepared/i)}${routeLedgerEvidenceGroupHtml(leg, 'Receipt evidence', /receipt|tx|transfer/i)}${routeLedgerEvidenceGroupHtml(leg, 'Settlement evidence', /settle|reconcil|balance/i)}<div class="ledger-detail-kv"><span class="k">Prepared</span><span class="v">${routeLedgerOptionalTimestamp(leg.prepared_at_ns)}</span></div><div class="ledger-detail-kv"><span class="k">Submitted</span><span class="v">${routeLedgerOptionalTimestamp(leg.submitted_at_ns)}</span></div><div class="ledger-detail-kv"><span class="k">Settled</span><span class="v">${routeLedgerOptionalTimestamp(leg.settled_at_ns)}</span></div><div class="ledger-detail-kv"><span class="k">Reconciled</span><span class="v">${routeLedgerOptionalTimestamp(leg.reconciled_at_ns)}</span></div>${routeLedgerIncidentHtml(leg)}</div>
+        </li>`;
+      }).join('')}</ol></div>`;
+    }
+    function routeLedgerDetailStateHtml(status, error, executionId) {
+      if (status === 'loading') return '<div class="ledger-detail-state">Loading leg details…</div>';
+      if (status === 'failed') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''} <button type="button" class="btn btn-sm btn-ghost" data-ledger-retry-execution-id="${esc(executionId)}">Retry</button></div>`;
+      if (status === 'unavailable') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''}</div>`;
+      return '<div class="ledger-detail-state">Unavailable</div>';
+    }
+    function routeExecutionDetailIsTerminal(detail) {
+      const phase = variantKey(detail && detail.record && detail.record.phase);
+      return ['Completed', 'Aborted', 'HeldInventory'].includes(phase);
+    }
+    async function loadTerminalExecutionDetail(executionId, retry = false) {
+      const id = String(executionId);
+      const cached = routeExecutionDetails.get(id);
+      if (!retry && cached && cached.status === 'fresh' && cached.final === true) return cached.value;
+      if (routeExecutionDetailLoads.has(id)) return routeExecutionDetailLoads.get(id);
+      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
+        routeExecutionDetails.set(id, { status: 'unavailable', error: 'route execution detail is unavailable' });
+        return null;
+      }
+      routeExecutionDetails.set(id, { status: 'loading' });
+      const load = (async () => {
+        try {
+          const result = await anonymousActor.get_route_execution_detail_v1(id);
+          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
+          if (!routeExecutionDetailIsTerminal(result.Ok)) throw new Error('terminal route detail is not final');
+          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok, final: true });
+          return result.Ok;
+        } catch (error) {
+          const message = error && error.message ? error.message : String(error);
+          routeExecutionDetails.set(id, { status: 'failed', error: message });
+          return null;
+        } finally {
+          if (routeExecutionDetailLoads.get(id) === load) routeExecutionDetailLoads.delete(id);
+        }
+      })();
+      routeExecutionDetailLoads.set(id, load);
+      return load;
+    }
+    function routeLedgerCurrentDisclosureButton(executionId) {
+      const body = document.getElementById('route-ledger-body');
+      if (body && typeof body.querySelectorAll === 'function') {
+        for (const button of body.querySelectorAll('[data-ledger-execution-id]')) {
+          if (button.getAttribute('data-ledger-execution-id') === executionId) return button;
+        }
+      }
+      return null;
+    }
+    async function copyLedgerEvidenceReference(button, sourceReference) {
+      const feedback = button && button.parentNode && typeof button.parentNode.querySelector === 'function'
+        ? button.parentNode.querySelector('[data-ledger-copy-feedback]') : null;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(String(sourceReference));
+        } else {
+          if (!document.createElement || !document.body || typeof document.execCommand !== 'function') throw new Error('clipboard unavailable');
+          const textarea = document.createElement('textarea');
+          textarea.value = String(sourceReference);
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const copied = document.execCommand('copy');
+          document.body.removeChild(textarea);
+          if (!copied) throw new Error('clipboard copy failed');
+        }
+        if (feedback) feedback.textContent = 'Copied';
+        return true;
+      } catch (_) {
+        if (feedback) feedback.textContent = 'Copy failed';
+        return false;
+      }
+    }
+    function focusRouteLedgerDisclosure(executionId) {
+      const current = routeLedgerCurrentDisclosureButton(executionId);
+      if (current && typeof current.focus === 'function') current.focus();
+    }
+    function routeLedgerEntryHtml(record) {
+      const executionId = String(record.execution_id || 'unknown');
+      const detailId = `ledger-detail-${executionId}`;
+      const expanded = Boolean(state.expandedRows && state.expandedRows.has(executionId));
+      const cached = routeExecutionDetails.get(executionId);
+      const detailHtml = expanded
+        ? (cached && cached.status === 'fresh' && cached.final === true ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
+        : '';
+      const pnl = routeLedgerPnlHtml(record);
+      const startAsset = Array.isArray(record.start_asset)
+        ? (record.start_asset.length ? record.start_asset[0] : null)
+        : record.start_asset;
+      const requestedInput = startAsset ? routeLedgerAmount(record.planned_input_native, startAsset) : `${esc(record.planned_input_native == null ? 'Unavailable' : record.planned_input_native)} raw atoms (asset unavailable)`;
+      const buttonLabel = expanded ? 'Hide legs' : 'Show legs';
+      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" data-ledger-execution-id="${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${requestedInput}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
+    }
+    async function toggleLedgerExecution(executionId, retry = false) {
+      const id = String(executionId);
+      const button = document.getElementById(`ledger-disclosure-${id}`);
+      const detailRow = document.getElementById(`ledger-detail-${id}`);
+      if (!button || !detailRow) return false;
+      if (retry) {
+        routeExecutionDetails.delete(id);
+        routeExecutionDetailLoads.delete(id);
+      }
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      if (expanded && !retry) {
+        button.setAttribute('aria-expanded', 'false');
+        button.textContent = 'Show legs';
+        detailRow.hidden = true;
+        if (state.expandedRows) state.expandedRows.delete(id);
+        button.focus();
+        return true;
+      }
+      button.setAttribute('aria-expanded', 'true');
+      button.textContent = 'Hide legs';
+      detailRow.hidden = false;
+      if (state.expandedRows) state.expandedRows.add(id);
+      const cached = routeExecutionDetails.get(id);
+      if (cached && !retry) {
+        if (cached.status === 'fresh' && cached.final === true) detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
+        else if (cached.status === 'loading') {
+          detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+          button.focus();
+          return routeExecutionDetailLoads.get(id) || false;
+        }
+        else detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml(cached.status, cached.error, id);
+        button.focus();
+        return cached.status === 'fresh' && cached.final === true;
+      }
+      detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+      const load = loadTerminalExecutionDetail(id, true);
+      load.then(result => {
+        const currentDetail = document.getElementById(`ledger-detail-${id}`);
+        if (!currentDetail) return;
+        currentDetail.querySelector('td').innerHTML = result ? routeLegDetailHtml(result) : routeLedgerDetailStateHtml('failed', routeExecutionDetails.get(id)?.error, id);
+      }).finally(() => focusRouteLedgerDisclosure(id));
+      return load;
+    }
+    function bindRouteLedgerDisclosureHandlers() {
+      const body = document.getElementById('route-ledger-body');
+      if (!body || typeof body.addEventListener !== 'function' || body.__routeLedgerBound) return;
+      body.__routeLedgerBound = true;
+      body.addEventListener('click', event => {
+        let target = event.target;
+        while (target && target !== body && !(target.getAttribute && (target.getAttribute('data-ledger-execution-id') || target.getAttribute('data-ledger-retry-execution-id') || target.getAttribute('data-ledger-copy-evidence') != null))) target = target.parentNode;
+        if (!target || target === body) return;
+        const copyReference = target.getAttribute('data-ledger-copy-evidence');
+        if (copyReference != null) {
+          event.preventDefault();
+          copyLedgerEvidenceReference(target, copyReference);
+          return;
+        }
+        const retryId = target.getAttribute('data-ledger-retry-execution-id');
+        const executionId = retryId || target.getAttribute('data-ledger-execution-id');
+        if (!executionId) return;
+        event.preventDefault();
+        toggleLedgerExecution(executionId, Boolean(retryId));
+      });
+    }
 
     function ledgerEntryHtml(e) {
       const legs = e.legs.length;
@@ -4075,15 +5350,31 @@
         </div>`;
     }
 
+    // Terminal disclosures keep only a final, immutable detail response.
+    // Active execution snapshots live in routeSources.currentExecutionDetail
+    // and are refreshed by each authoritative route generation.
+    const routeExecutionDetails = new Map();
+    const routeExecutionDetailLoads = new Map();
+    let currentExecutionDetailLoad = null;
     let ledgerCache = { entries: [], summaryCount: 0 };
     async function loadLedgerPage() {
       const tbody = document.getElementById('ledger-body');
       if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading…</td></tr>';
       const offset = ledgerPageOffsets[tradesPage] !== undefined ? ledgerPageOffsets[tradesPage] : 0;
-      const { shown, consumedLegs, hasMore } = await fetchLedgerGroups(offset, ledgerPageSize);
-      ledgerCache.entries = shown.slice().reverse(); // newest-first within this page
-      ledgerHasMore = hasMore;
-      if (hasMore) ledgerPageOffsets[tradesPage + 1] = offset + consumedLegs;
+      if (!anonymousActor || typeof anonymousActor.get_trade_legs !== 'function') {
+        markSourceUnavailable(routeSources.legacyLedger, 'legacy ledger is unavailable');
+        renderLedgerTable();
+        return;
+      }
+      try {
+        const { shown, consumedLegs, hasMore } = await fetchLedgerGroups(offset, ledgerPageSize);
+        ledgerCache.entries = shown.slice().reverse(); // newest-first within this page
+        ledgerHasMore = hasMore;
+        if (hasMore) ledgerPageOffsets[tradesPage + 1] = offset + consumedLegs;
+        markSourceFresh(routeSources.legacyLedger, ledgerCache.entries);
+      } catch (e) {
+        markSourceFailed(routeSources.legacyLedger, e);
+      }
       renderLedgerTable();
     }
 
@@ -4092,9 +5383,15 @@
       if (!tbody) return;
       const filter = state.ledgerFilter;
       const rows = filter ? ledgerCache.entries.filter(e => e.stratId === filter) : ledgerCache.entries;
-      tbody.innerHTML = rows.length
+      const sourceState = routeSourceState('legacyLedger');
+      const staleNotice = sourceState === 'stale'
+        ? `<tr><td colspan="6" class="ledger-detail-state ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.legacyLedger))}</td></tr>`
+        : '';
+      tbody.innerHTML = ['failed', 'unavailable'].includes(sourceState)
+        ? `<tr><td colspan="6" class="ledger-detail-state negative">${sourceState === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources.legacyLedger))}</td></tr>`
+        : staleNotice + (rows.length
         ? rows.map(ledgerEntryHtml).join('')
-        : `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades on this page</td></tr>`;
+        : `<tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">No trades on this page</td></tr>`);
       const countEl = document.getElementById('ledger-count');
       if (countEl) countEl.textContent = window._lastSummary ? `${rows.length} shown of ${bi(window._lastSummary.total_legs)} legs all-time` : '';
       const prevBtn = document.getElementById('ledger-prev'), nextBtn = document.getElementById('ledger-next'), pageEl = document.getElementById('ledger-page');
@@ -4102,6 +5399,95 @@
       if (nextBtn) nextBtn.disabled = !ledgerHasMore;
       if (pageEl) pageEl.textContent = `Page ${tradesPage + 1}`;
     }
+    function routeLedgerSourceHtml() {
+      const display = routeSources.routeLedgerExecutions.status;
+      const rows = Array.isArray(routeSources.routeLedgerExecutions.value) ? routeSources.routeLedgerExecutions.value : [];
+      if (display === 'loading' && !rows.length) return '<tr><td colspan="6" class="ledger-detail-state">Loading route executions…</td></tr>';
+      if ((display === 'failed' || display === 'unavailable') && !rows.length) return `<tr><td colspan="6" class="ledger-detail-state negative">${display === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources.routeLedgerExecutions))}</td></tr>`;
+      if (!rows.length) return '<tr><td colspan="6" class="ledger-detail-state">No terminal route executions.</td></tr>';
+      return rows.map(routeLedgerEntryHtml).join('');
+    }
+    function routeLedgerSourceStatusHtml() {
+      const source = routeSources.routeLedgerExecutions;
+      const display = source.status;
+      const parts = [];
+      if (display === 'stale') parts.push(`Stale · ${esc(sourceLastSuccessLabel(source))}`);
+      if (display === 'failed' || display === 'unavailable') parts.push(`Unavailable${esc(routeSourceError(source))}`);
+      if (routeLedgerIncomplete) parts.push(`Incomplete · bounded at ${routeLedgerLoadedCount} route records`);
+      return parts.length ? `<div class="ledger-note route-ledger-status ${display === 'stale' || routeLedgerIncomplete ? 'ts-stale' : 'negative'}" id="route-ledger-status">${parts.join(' · ')}</div>` : '<div class="ledger-note route-ledger-status" id="route-ledger-status"></div>';
+    }
+    async function loadRouteLedgerPage(page = routeLedgerRequestedPage) {
+      const source = routeSources.routeLedgerExecutions;
+      const boundedPage = Math.max(0, Number(page) || 0);
+      if (routeLedgerRequestPromise && routeLedgerRequestPage === boundedPage) return routeLedgerRequestPromise;
+      routeLedgerRequestedPage = boundedPage;
+      const generation = ++routeLedgerRequestGeneration;
+      const request = (async () => {
+      if (!anonymousActor || typeof anonymousActor.get_terminal_route_executions_v1 !== 'function') {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
+        markSourceUnavailable(source, 'route ledger is unavailable');
+        renderRouteLedgerTable();
+        return false;
+      }
+      const offset = BigInt(boundedPage) * ROUTE_LEDGER_PAGE_SIZE;
+      if (offset >= ROUTE_LEDGER_MAX) {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
+        routeLedgerIncomplete = true;
+        routeLedgerHasMore = false;
+        routeLedgerLoadedCount = Number(ROUTE_LEDGER_MAX);
+        renderRouteLedgerTable();
+        return false;
+      }
+      try {
+        const result = await anonymousActor.get_terminal_route_executions_v1(offset, ROUTE_LEDGER_PAGE_SIZE);
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
+        if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route ledger query failed');
+        const rows = Array.isArray(result.Ok) ? result.Ok.slice().sort((a, b) => {
+          const left = BigInt(a.updated_at_ns || 0), right = BigInt(b.updated_at_ns || 0);
+          return left === right ? 0 : left > right ? -1 : 1;
+        }) : [];
+        routeLedgerPage = boundedPage;
+        routeLedgerLoadedCount = Number(offset) + rows.length;
+        routeLedgerHasMore = rows.length >= Number(ROUTE_LEDGER_PAGE_SIZE) && offset + ROUTE_LEDGER_PAGE_SIZE < ROUTE_LEDGER_MAX;
+        routeLedgerIncomplete = rows.length >= Number(ROUTE_LEDGER_PAGE_SIZE) && offset + ROUTE_LEDGER_PAGE_SIZE >= ROUTE_LEDGER_MAX;
+        markSourceFresh(source, rows);
+        renderRouteLedgerTable();
+        return true;
+      } catch (error) {
+        if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
+        markSourceFailed(source, error);
+        renderRouteLedgerTable();
+        return false;
+      }
+      })();
+      routeLedgerRequestPromise = request;
+      routeLedgerRequestPage = boundedPage;
+      try {
+        return await request;
+      } finally {
+        if (generation === routeLedgerRequestGeneration && routeLedgerRequestPromise === request) {
+          routeLedgerRequestPromise = null;
+          routeLedgerRequestPage = null;
+        }
+      }
+    }
+    function renderRouteLedgerTable() {
+      const body = document.getElementById('route-ledger-body');
+      if (body) {
+        body.innerHTML = routeLedgerSourceHtml();
+        bindRouteLedgerDisclosureHandlers();
+      }
+      const status = document.getElementById('route-ledger-status');
+      if (status) status.outerHTML = routeLedgerSourceStatusHtml();
+      const page = document.getElementById('route-ledger-page');
+      const prev = document.getElementById('route-ledger-prev');
+      const next = document.getElementById('route-ledger-next');
+      if (page) page.textContent = `Page ${routeLedgerRequestedPage + 1}`;
+      if (prev) prev.disabled = routeLedgerRequestedPage === 0;
+      if (next) next.disabled = !routeLedgerHasMore;
+    }
+    window.routeLedgerPrev = () => { if (routeLedgerRequestedPage > 0) loadRouteLedgerPage(routeLedgerRequestedPage - 1); };
+    window.routeLedgerNext = () => { if (routeLedgerHasMore) loadRouteLedgerPage(routeLedgerRequestedPage + 1); };
     window.ledgerPrev = () => { if (tradesPage > 0) { tradesPage--; loadLedgerPage(); } };
     window.ledgerNext = () => { if (ledgerHasMore) { tradesPage++; loadLedgerPage(); } };
     function ledgerPagesizeHtml() {
@@ -4145,23 +5531,31 @@
       const filter = state.activityFilter;
       const entries = await loadActivity();
       if (seq !== activityLoadSeq) return; // superseded — drop this response entirely
-      entries.forEach(e => { if (e.category) seenActivityCategories.add(e.category); });
+      const activityState = routeSourceState('activity');
+      const activityEntries = Array.isArray(entries) ? entries : [];
+      activityEntries.forEach(e => { if (e.category) seenActivityCategories.add(e.category); });
       renderActivityFilterOptions(filter);
-      const filtered = filter ? entries.filter(e => e.category === filter) : entries;
+      const failedActivity = ['failed', 'unavailable'].includes(activityState);
+      const filtered = filter ? activityEntries.filter(e => e.category === filter) : activityEntries;
       const list = document.getElementById('activity-list');
       if (!list) return;
+      const staleNotice = activityState === 'stale'
+        ? `<div class="ledger-note ts-stale">Stale · ${esc(sourceLastSuccessLabel(routeSources.activity))}</div>`
+        : '';
       const catColors = { trade: 'var(--accent)', swap: 'var(--info)', volume: 'var(--v-bob)', volume_swap: 'var(--v-bob)', dry_run: 'var(--text-tertiary)', recover: 'var(--warning)', admin: 'var(--v-partydex)', withdraw: 'var(--warning)', pool_deposit: 'var(--profit)', pool_redeem: 'var(--v-bob)', pool_exchange: 'var(--info)', approval: 'var(--text-secondary)', arb_skip: 'var(--text-tertiary)', arb_start: 'var(--info)', drain: 'var(--warning)' };
-      list.innerHTML = filtered.length
+      list.innerHTML = staleNotice + (failedActivity
+        ? `<div class="text-negative">${activityState === 'failed' ? 'Failed' : 'Unavailable'}${esc(routeSourceError(routeSources.activity))}</div>`
+        : filtered.length
         ? [...filtered].reverse().map(e => `<div class="activity-entry"><span class="activity-ts">${fmtTime(e.timestamp)}</span><span class="activity-cat" style="color:${catColors[e.category] || 'var(--text-tertiary)'}">${esc(e.category)}</span>${esc(e.message)}</div>`).join('')
         : (filter
             // Filtering is client-side over one 50-record page, so an empty
             // result usually means "none on THIS page", not "none ever" — say
             // which, rather than implying the category has never been written.
-            ? `<div class="text-ter">No <span class="text-sec">${esc(filter)}</span> entries on page ${activityPage + 1}${entries.length ? ` (of ${entries.length} shown)` : ''} — try Next, or All categories.</div>`
-            : `<div class="text-ter">No activity recorded</div>`);
+            ? `<div class="text-ter">No <span class="text-sec">${esc(filter)}</span> entries on page ${activityPage + 1}${activityEntries.length ? ` (of ${activityEntries.length} shown)` : ''} — try Next, or All categories.</div>`
+            : `<div class="text-ter">No activity recorded</div>`));
       const prevBtn = document.getElementById('activity-prev'), nextBtn = document.getElementById('activity-next'), pageEl = document.getElementById('activity-page');
       if (prevBtn) prevBtn.disabled = activityPage === 0;
-      if (nextBtn) nextBtn.disabled = entries.length < ACTIVITY_PAGE_SIZE;
+      if (nextBtn) nextBtn.disabled = activityEntries.length < ACTIVITY_PAGE_SIZE;
       if (pageEl) pageEl.textContent = `Page ${activityPage + 1}`;
     }
     window.activityPrev = () => { if (activityPage > 0) { activityPage--; loadActivityIntoDom(); } };
@@ -4178,9 +5572,27 @@
       const filter = state.ledgerFilter;
       const allIds = STRATEGIES.map(s => s.id);
       el.innerHTML = `
-        <div class="card-subtitle">Unified, filterable trade ledger. Legs of one arb render as a single grouped entry with combined P&amp;L. Strategy attribution is derived from real venue + token fields — unattributable legs show the venue pair, never a fabricated letter.</div>
+        <div class="card-subtitle">Route executions are the primary ledger. Expand a terminal execution to inspect its ordered legs; realized P&amp;L is shown once on the parent transaction.</div>
+        <div class="card">
+          <div class="card-header">Route execution history</div>
+          ${routeLedgerSourceStatusHtml()}
+          <div class="table-wrap">
+            <table class="ledger-table" aria-label="Route execution ledger">
+              <thead><tr><th scope="col">Time</th><th scope="col">Execution</th><th scope="col">Route</th><th scope="col">Status</th><th scope="col">Requested input</th><th scope="col">Realized P&amp;L</th></tr></thead>
+              <tbody id="route-ledger-body">${routeLedgerSourceHtml()}</tbody>
+            </table>
+          </div>
+          <div class="pagination">
+            <button class="btn btn-sm btn-ghost" id="route-ledger-prev" type="button" onclick="routeLedgerPrev()">◂ Prev</button>
+            <span id="route-ledger-page">Page ${routeLedgerRequestedPage + 1}</span>
+            <button class="btn btn-sm btn-ghost" id="route-ledger-next" type="button" onclick="routeLedgerNext()">Next ▸</button>
+          </div>
+        </div>
+        <div class="card" style="margin-top:var(--sp-4)">
+          <div class="card-header ledger-legacy-heading">Legacy trade history</div>
+          <div class="ledger-note" style="margin-top:0;margin-bottom:var(--sp-3)">Legacy TradeLeg records are historical only. Their adjacency-based grouping cannot establish arbitrary route identity or per-leg settlement evidence.</div>
         <div class="ledger-filters">
-          <span class="text-ter" style="font-size:12px">Filter:</span>
+          <span class="text-ter" style="font-size:12px">Legacy filter:</span>
           <button class="btn btn-sm ${!filter ? 'btn-primary' : 'btn-ghost'}" onclick="setLedgerFilter(null)">All</button>
           ${allIds.map(id => `<button class="btn btn-sm ${filter === id ? 'btn-primary' : 'btn-ghost'}" onclick="setLedgerFilter('${id}')">${id}</button>`).join('')}
           <button class="chip chip-sm ${state.ledgerLegendOpen ? 'active' : ''}" style="margin-left:auto" onclick="toggleLedgerLegend()">Legend</button>
@@ -4188,8 +5600,8 @@
         ${state.ledgerLegendOpen ? legendHtml() : ''}
         <div class="card">
           <div class="table-wrap">
-            <table class="ledger-table">
-              <thead><tr><th>Time</th><th>Strategy</th><th>Venues</th><th>Legs</th><th>Amount</th><th>P&amp;L</th></tr></thead>
+            <table class="ledger-table" aria-label="Legacy trade ledger">
+              <thead><tr><th scope="col">Time</th><th scope="col">Strategy</th><th scope="col">Venues</th><th scope="col">Legs</th><th scope="col">Amount</th><th scope="col">P&amp;L</th></tr></thead>
               <tbody id="ledger-body"><tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading…</td></tr></tbody>
             </table>
           </div>
@@ -4201,7 +5613,7 @@
             <span id="ledger-count" style="margin-left:auto"></span>
           </div>
         </div>
-
+        </div>
         <div class="card" style="margin-top:var(--sp-4)">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <span>Activity log</span>
@@ -4217,6 +5629,8 @@
           </div>
         </div>
       `;
+      bindRouteLedgerDisclosureHandlers();
+      loadRouteLedgerPage(routeLedgerRequestedPage);
       loadLedgerPage();
       // Populate synchronously so the select is never briefly empty, and so the
       // active filter is visibly restored the instant the view re-renders.
@@ -4233,12 +5647,10 @@
       requestAnimationFrame(() => requestAnimationFrame(() => { fill.style.width = '75%'; }));
     }
     function finishProgress() {
-      const fresh = document.getElementById('freshness');
       const fill = document.getElementById('progress-fill');
       fill.style.transition = 'width .3s ease';
       fill.style.width = '100%';
-      fresh.textContent = 'Live';
-      fresh.classList.add('live-now');
+      updateFreshnessIndicator();
       setTimeout(() => { fill.style.width = '0%'; }, 400);
     }
 
@@ -4250,6 +5662,10 @@
       if (currentConfig) {
         loadBalances(currentConfig);
         loadVolumeBalances(currentConfig);
+      } else {
+        if (routeSources.legacyBalances.value == null) markSourceUnavailable(routeSources.legacyBalances, 'general ledger configuration is unavailable');
+        if (routeSources.volumeBalances.value == null) markSourceUnavailable(routeSources.volumeBalances, 'general ledger configuration is unavailable');
+        if (routeSources.operatorBalances.value == null) markSourceUnavailable(routeSources.operatorBalances, 'general ledger configuration is unavailable');
       }
       await loadOverviewFromSnapshot();
       await loadVolumeData();
@@ -4257,11 +5673,17 @@
       refreshLegAttribution();
       if (authenticatedActor) await loadPrices();
       if (authenticatedActor && currentConfig) await loadMyBalances(currentConfig);
+      else if (authenticatedActor) markSourceUnavailable(routeSources.operatorBalances, 'operator balance configuration is unavailable');
+      if (!authenticatedActor) {
+        markSourceUnavailable(routeSources.operatorBalances, 'operator balance requires authentication');
+        markSourceUnavailable(routeSources.prices, 'authenticated price query requires authentication');
+      }
       loadAllTickCount++;
       if (authenticatedActor && loadAllTickCount % 2 === 0) fetchHealth();
       if (!authenticatedActor) fetchPublicHealth();
       saveCache();
       state.liveLoaded = true;
+      updateFreshnessIndicator();
       // Rendering is never allowed to break the poll loop: a template bug
       // here must not stop setInterval(loadAll) from firing next cycle —
       // that's exactly the "silent dead minute" this rebuild exists to kill.
