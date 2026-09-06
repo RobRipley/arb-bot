@@ -88,7 +88,7 @@ fn dashboard_does_not_render_retired_lettered_strategy_actions() {
     }
     assert!(route_panel.contains("Start observation"));
     assert!(route_panel.contains("Quote-only mode cannot move funds"));
-    assert!(route_panel.contains("Legacy A-S/T activity is historical only"));
+    assert!(!route_panel.contains("Legacy A-S/T activity is historical only"), "legacy disclosure belongs in Diagnostics");
 }
 
 #[test]
@@ -181,6 +181,44 @@ fn dashboard_assigns_content_to_unique_owners() {
 
     assert!(!markets.contains("setRouteTrading("), "automatic arbitrage control must not render in Markets");
     assert!(!markets.contains("trigger_volume_cycle"), "volume operation must not render in Markets");
+}
+
+#[test]
+fn diagnostics_owns_low_level_route_evidence_without_copying_cockpit_content() {
+    let diagnostics = rendered_region("function renderDiagnostics()", "// ═══════ Ledger");
+    let operations = rendered_region("function routeOperationsHtml()", "function manualQuoteScanState");
+    let evidence = rendered_region("function diagnosticsEvidenceHtml", "function routeOperationsHtml");
+    let diagnostics = format!("{diagnostics}\n{evidence}\n{operations}");
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+
+    for marker in [
+        "Runtime",
+        "Execution and settlement",
+        "Reservations and held inventory",
+        "Observation internals",
+        "Legacy state",
+        "data-diagnostics-source=\"runtime\"",
+        "data-diagnostics-source=\"currentExecution\"",
+        "data-diagnostics-source=\"reservations\"",
+        "data-diagnostics-source=\"heldPositions\"",
+        "data-diagnostics-source=\"observation\"",
+        "data-diagnostics-source=\"health\"",
+        "data-diagnostics-source=\"config\"",
+        "Raw cursor",
+        "quote calls",
+        "source_reference",
+        "Reservation ID",
+        "Held position ID",
+        "Legacy A-S/T activity is historical only",
+    ] {
+        assert!(diagnostics.contains(marker), "Diagnostics missing low-level marker: {marker}");
+    }
+    for marker in ["routeOperationsHtml()", "Raw cursor", "Reservation ID", "Held position ID"] {
+        assert!(!cockpit.contains(marker), "Cockpit must not own low-level diagnostic detail: {marker}");
+    }
+    assert!(diagnostics.contains("routeSourceState('runtime'"));
+    assert!(diagnostics.contains("routeSourceState('config'"));
+    assert!(diagnostics.contains("routeSourceState('health'"));
 }
 
 #[test]

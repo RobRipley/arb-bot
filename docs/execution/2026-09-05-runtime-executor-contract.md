@@ -1,8 +1,8 @@
 # Runtime route executor: implemented source contract and proof boundary
 
-Status: source implementation present on `codex/route-runtime-executor`; source tests and acceptance checks are the applicable proof. This supersedes the earlier Stage 2–4 description that treated the executor as inert stubs: the user explicitly expanded this source task to implement the executor. The source now contains activation capability, while defaults remain off and this document does not authorize deployment, live configuration, approvals, transfers, swaps, funding, or trading.
+Status: source implementation present on `codex/arb-ui-toggle`; source tests and acceptance checks are the applicable proof. This supersedes the earlier Stage 2–4 description that treated the executor as inert stubs: the user explicitly expanded this source task to implement the executor. The source now contains activation capability, while defaults remain off and this document does not authorize deployment, live configuration, approvals, transfers, swaps, funding, or trading.
 
-Date: 2026-09-05 (America/Los_Angeles)
+Date: 2026-09-06 (America/Los_Angeles)
 
 ## What the branch implements
 
@@ -35,6 +35,25 @@ The implementation is covered by focused Rust tests for:
 - route registry, graph, accounting, policy, storage, lock, Candid, legacy-freeze, and dashboard behavior.
 
 The repository acceptance command is `scripts/check-route-arb-acceptance.sh`. It runs the focused suites, the `route_runtime` library tests, Candid and Stage-1 structural guards, dashboard checks, a release Wasm build, executable-code-size inspection, and `git diff --check`. The full-bot `RUSTFLAGS=-Awarnings cargo test -p arb_bot` passed with zero failures, the equivalent library runtime target `cargo test -p arb_bot --lib route_runtime` passed 11/11, and the acceptance command completed successfully. These commands prove this checkout only; they do not prove deployment or live venue receipt availability.
+
+## Operations UI and Diagnostics evidence
+
+On 2026-09-06, the dashboard source added a Diagnostics workspace with five bounded groups: Runtime, Execution and settlement, Reservations and held inventory, Observation internals, and Legacy state. The view keeps mutation locks, current and terminal execution IDs, reconciliation evidence references, reservation and held-position IDs, observation cursors and counters, configuration errors, API failures, and legacy A-S/T disclosures out of the primary operational views. Each source renders its own loading, fresh, stale, failed, or unavailable state; a failed first query cannot become a healthy empty state. The Markets view links to Diagnostics for legacy history rather than duplicating that disclosure.
+
+The additive `get_route_execution_detail_v1` query is classified as Stage-1 read-only in `scripts/check-stage1-disposition.sh`. Historical execution records that predate durable detail continue to render `detail_available = false`; the UI says that detailed legs and historical evidence are unavailable and never infers actual settlement from legacy adjacency.
+
+Fresh local acceptance output from the exact checkout:
+
+- `bash scripts/check-route-arb-acceptance.sh`: `PASS: generated candid matches arb_bot.did`; deployed Candid and InitArgs subtype checks passed; Stage-1 inventory passed for all 106 public methods; the dashboard module parsed; source-state, observation, ledger, health, and runtime Node suites passed; the Diagnostics ownership guard passed; release build and size checks passed; final output was `PASS: six-asset route-arbitrage source acceptance is green. No deployment was performed.`
+- `cargo test -p arb_bot --test dashboard_route_ui`: 19 passed, 0 failed.
+- `node scripts/test-dashboard-data-state.cjs`: source-state and route-loader checks passed.
+- `node scripts/test-dashboard-observation.cjs`: dashboard observation behavior tests passed.
+- `node scripts/test-dashboard-ledger.cjs`: dashboard ledger behavior tests passed.
+- `node scripts/test-dashboard-health.cjs`: health source and incident checks passed.
+- `node scripts/test-dashboard-runtime.cjs`: runtime state and configuration-failure checks passed.
+- `bash -n scripts/check-route-arb-acceptance.sh`, `bash -n scripts/check-stage1-disposition.sh`, dashboard `node --check --input-type=module`, and `git diff --check` passed.
+
+The release artifact was `4,039,163` bytes with a `2,960,585`-byte Wasm code section, leaving `9,622,327` bytes below the current `12,582,912`-byte executable-code limit. Its SHA-256 is `8ae326d1057d6f464f0c293c635388545cb84f9196645d6674f5d104a7543a1b`. This is source and artifact evidence for this checkout only. It does not prove that the dashboard was deployed, that the new query exists in a deployed canister, that a runtime is authorized or enabled, or that any venue settled a live trade.
 
 ## Required invariant and remaining proof
 

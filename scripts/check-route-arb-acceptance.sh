@@ -43,6 +43,29 @@ node scripts/test-dashboard-runtime.cjs
 node scripts/test-dashboard-observation.cjs
 node scripts/test-dashboard-ledger.cjs
 
+echo "== Diagnostics ownership guard =="
+diagnostics_markers=(
+  'data-diagnostics-group="runtime"'
+  'data-diagnostics-group="execution"'
+  'data-diagnostics-group="reservations"'
+  'data-diagnostics-group="observation"'
+  'data-diagnostics-group="legacy"'
+  'data-diagnostics-source="runtime"'
+  'data-diagnostics-source="currentExecution"'
+  'data-diagnostics-source="reservations"'
+  'data-diagnostics-source="heldPositions"'
+  'data-diagnostics-source="observation"'
+  'data-diagnostics-source="health"'
+  'data-diagnostics-source="config"'
+)
+for marker in "${diagnostics_markers[@]}"; do
+  if ! rg -Fq "$marker" src/arb_bot/src/dashboard.html; then
+    echo "FAIL: Diagnostics ownership marker missing: $marker" >&2
+    exit 1
+  fi
+done
+echo "PASS: Diagnostics owns the bounded route internals and source-state markers."
+
 echo "== release Wasm build =="
 cargo clean -p arb_bot
 RUSTFLAGS=-Awarnings cargo build --target wasm32-unknown-unknown --release -p arb_bot

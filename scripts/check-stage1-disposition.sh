@@ -116,6 +116,7 @@ get_route_reservations_v1
 get_held_positions_v1
 get_current_route_execution_v1
 get_terminal_route_executions_v1
+get_route_execution_detail_v1
 get_trade_history
 get_trade_legs
 get_activity_log
