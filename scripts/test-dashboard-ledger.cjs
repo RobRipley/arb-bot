@@ -142,7 +142,7 @@ const actor = {
 };
 const { context, elements } = makeContext(actor);
 
-for (const count of [2, 3, 4, 6]) {
+for (const count of [2, 3, 4, 5, 6]) {
   context.entry = record(`exec-${count}`);
   context.executionDetail = detail(`exec-${count}`, count);
   const entry = vm.runInContext('routeLedgerEntryHtml(entry)', context);
@@ -165,6 +165,14 @@ for (const count of [2, 3, 4, 6]) {
   assert.match(rendered, /Submission evidence/);
   assert.match(rendered, /Settlement evidence/);
 }
+
+context.executionDetail = detail('five-leg', 5);
+const fiveLegHtml = vm.runInContext('routeLegDetailHtml(executionDetail)', context);
+assert.deepEqual(
+  Array.from(fiveLegHtml.matchAll(/Leg (\d+) of 5/g), match => Number(match[1])),
+  [1, 2, 3, 4, 5],
+  'five-leg details must retain canonical leg order',
+);
 
 context.entry = { ...record('stable-pnl'), candidate_class: { StablePar: null }, realized_profit: option(1_234_567n) };
 const stablePnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
@@ -195,6 +203,15 @@ assert.match(unavailable, /Evidence unavailable for historical record/);
 const rejected = vm.runInContext("routeLegDetailHtml({ detail_available: true, legs: [leg(0, 1, { status: { RejectedBeforeDebit: null }, evidence: [] })] })", context);
 assert.match(rejected, /No evidence required/);
 
+context.executionDetail = detail('evidence-all', 1, {
+  legs: [leg(0, 1, { evidence: [{ evidence_kind: 'icpswap_source_bound_terminal_transfers_v1', source_reference: "source'<&", amount_native: 7n, observed_at_ns: 1n }] })],
+});
+const uncategorizedEvidence = vm.runInContext('routeLegDetailHtml(executionDetail)', context);
+assert.match(uncategorizedEvidence, /icpswap_source_bound_terminal_transfers_v1/);
+assert.match(uncategorizedEvidence, /source&#39;&lt;&amp;/);
+assert.match(uncategorizedEvidence, /data-ledger-copy-evidence=/);
+assert.doesNotMatch(uncategorizedEvidence, /No evidence yet/);
+
 const failed = vm.runInContext("routeLedgerDetailStateHtml('failed', 'temporary outage')", context);
 assert.match(failed, /Unavailable/);
 assert.match(failed, /Retry/);
@@ -209,7 +226,7 @@ assert.match(summary, /aria-expanded="false"/);
 assert.match(summary, /aria-controls="ledger-detail-keyboard-exec"/);
 
 const dashboardSource = readFileSync('src/arb_bot/src/dashboard.html', 'utf8');
-for (const marker of ['routeLedgerRequestGeneration', 'routeLedgerRequestedPage', 'routeLedgerCurrentDisclosureButton', 'querySelectorAll']) {
+for (const marker of ['routeLedgerRequestGeneration', 'routeLedgerRequestedPage', 'routeLedgerCurrentDisclosureButton', 'querySelectorAll', 'copyLedgerEvidenceReference', 'data-ledger-copy-evidence', 'Copy failed']) {
   assert.match(dashboardSource, new RegExp(marker), `historical ledger race guard is missing ${marker}`);
 }
 
@@ -222,6 +239,24 @@ for (const marker of ['routeLedgerRequestGeneration', 'routeLedgerRequestedPage'
   assert.equal(elements.get('ledger-disclosure-exec-3').getAttribute('aria-expanded'), 'true');
   await vm.runInContext("toggleLedgerExecution('exec-3')", context);
   assert.equal(noEagerCalls.length, 1, 'cached detail must not refetch');
+
+  const copyFeedback = { textContent: '' };
+  const copyContainer = { querySelector(selector) { return selector === '[data-ledger-copy-feedback]' ? copyFeedback : null; } };
+  context.copyButton = { parentNode: copyContainer };
+  context.navigator = { clipboard: { writeText: async value => { context.copiedEvidence = value; } } };
+  await vm.runInContext("copyLedgerEvidenceReference(copyButton, \"source'<&\")", context);
+  assert.equal(context.copiedEvidence, "source'<&");
+  assert.equal(copyFeedback.textContent, 'Copied');
+  context.navigator = { clipboard: { writeText: async () => { throw new Error('clipboard blocked'); } } };
+  await vm.runInContext("copyLedgerEvidenceReference(copyButton, 'source-failure')", context);
+  assert.equal(copyFeedback.textContent, 'Copy failed');
+  const fallbackTextarea = { style: {}, setAttribute() {}, select() {} };
+  context.document.createElement = () => fallbackTextarea;
+  context.document.body = { appendChild() {}, removeChild() {} };
+  context.document.execCommand = command => command === 'copy';
+  context.navigator = {};
+  await vm.runInContext("copyLedgerEvidenceReference(copyButton, 'source-fallback')", context);
+  assert.equal(copyFeedback.textContent, 'Copied', 'clipboard fallback should report success');
 
   let attempts = 0;
   const retryActor = {

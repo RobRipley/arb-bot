@@ -4703,15 +4703,35 @@
       const decimals = routeLedgerAssetDecimals(asset);
       return amount == null || decimals == null ? fallback : `${routeLedgerFormatAmount(amount, decimals)} ${routeAssetLabel(asset)}`;
     }
-    function routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired = false) {
+    function routeLedgerEvidenceCopyHtml(sourceReference) {
+      if (sourceReference == null || String(sourceReference) === '') return '';
+      const source = String(sourceReference);
+      return ` <button type="button" class="btn btn-sm btn-ghost ledger-copy-evidence" data-ledger-copy-evidence="${esc(source)}" aria-label="Copy evidence source reference">Copy</button><span class="ledger-copy-feedback" data-ledger-copy-feedback aria-live="polite"></span>`;
+    }
+    function routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired = false, hasAnyEvidence = false) {
       const rows = Array.isArray(evidence) ? evidence : [];
-      if (!rows.length) return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v text-ter">${noEvidenceRequired ? 'No evidence required' : 'No evidence yet'}</span></div>`;
-      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')} · raw atoms (asset association unavailable): ${esc(item.amount_native == null ? 'Unavailable' : item.amount_native)} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
+      if (!rows.length) return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v text-ter">${noEvidenceRequired ? 'No evidence required' : hasAnyEvidence ? 'Evidence recorded under another group' : 'No evidence yet'}</span></div>`;
+      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')}${routeLedgerEvidenceCopyHtml(item.source_reference)} · raw atoms (asset association unavailable): ${esc(item.amount_native == null ? 'Unavailable' : item.amount_native)} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
+    }
+    function routeLedgerEvidenceBucket(item, matcher) {
+      const explicit = item && (item.evidence_group || item.evidence_type || item.kind);
+      const value = explicit && typeof explicit === 'object' ? Object.keys(explicit)[0] : explicit;
+      const source = String(value || (item && item.evidence_kind) || '').toLowerCase();
+      if (/submission|submit|request|prepared/.test(source)) return 'submission';
+      if (/receipt|tx|transfer/.test(source)) return 'receipt';
+      if (/settlement|settle|reconcil|balance/.test(source)) return 'settlement';
+      if (matcher && matcher.test(source)) return 'receipt';
+      return 'other';
     }
     function routeLedgerEvidenceGroupHtml(leg, label, matcher) {
-      const evidence = (Array.isArray(leg.evidence) ? leg.evidence : []).filter(item => matcher.test(String(item.evidence_kind || '')));
+      const allEvidence = Array.isArray(leg.evidence) ? leg.evidence : [];
+      const group = /submission/i.test(label) ? 'submission' : /receipt/i.test(label) ? 'receipt' : 'settlement';
+      const evidence = allEvidence.filter(item => {
+        const bucket = routeLedgerEvidenceBucket(item, matcher);
+        return bucket === group || (group === 'settlement' && bucket === 'other');
+      });
       const noEvidenceRequired = /settlement|receipt/i.test(label) && ['RejectedBeforeDebit', 'Aborted'].includes(routeLedgerStatusKey(leg.status));
-      return routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired);
+      return routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired, allEvidence.length > 0);
     }
     function routeLedgerLegValue(value, asset, statusKey, kind) {
       if (kind === 'actual' && value == null || (Array.isArray(value) && !value.length)) {
@@ -4774,6 +4794,32 @@
         }
       }
       return null;
+    }
+    async function copyLedgerEvidenceReference(button, sourceReference) {
+      const feedback = button && button.parentNode && typeof button.parentNode.querySelector === 'function'
+        ? button.parentNode.querySelector('[data-ledger-copy-feedback]') : null;
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(String(sourceReference));
+        } else {
+          if (!document.createElement || !document.body || typeof document.execCommand !== 'function') throw new Error('clipboard unavailable');
+          const textarea = document.createElement('textarea');
+          textarea.value = String(sourceReference);
+          textarea.setAttribute('readonly', '');
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          const copied = document.execCommand('copy');
+          document.body.removeChild(textarea);
+          if (!copied) throw new Error('clipboard copy failed');
+        }
+        if (feedback) feedback.textContent = 'Copied';
+        return true;
+      } catch (_) {
+        if (feedback) feedback.textContent = 'Copy failed';
+        return false;
+      }
     }
     function focusRouteLedgerDisclosure(executionId) {
       const current = routeLedgerCurrentDisclosureButton(executionId);
@@ -4858,8 +4904,14 @@
       body.__routeLedgerBound = true;
       body.addEventListener('click', event => {
         let target = event.target;
-        while (target && target !== body && !(target.getAttribute && (target.getAttribute('data-ledger-execution-id') || target.getAttribute('data-ledger-retry-execution-id')))) target = target.parentNode;
+        while (target && target !== body && !(target.getAttribute && (target.getAttribute('data-ledger-execution-id') || target.getAttribute('data-ledger-retry-execution-id') || target.getAttribute('data-ledger-copy-evidence') != null))) target = target.parentNode;
         if (!target || target === body) return;
+        const copyReference = target.getAttribute('data-ledger-copy-evidence');
+        if (copyReference != null) {
+          event.preventDefault();
+          copyLedgerEvidenceReference(target, copyReference);
+          return;
+        }
         const retryId = target.getAttribute('data-ledger-retry-execution-id');
         const executionId = retryId || target.getAttribute('data-ledger-execution-id');
         if (!executionId) return;
