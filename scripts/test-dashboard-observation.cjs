@@ -112,6 +112,7 @@ function scanContext(actor, initialView = 'markets') {
   await vm.runInContext('window.runManualQuoteScan()', complete);
   assert.equal(batchCalls, 2);
   assert.equal(vm.runInContext('manualQuoteScan.phase', complete), 'complete');
+  assert(vm.runInContext('renders.length', complete) >= 3, 'manual scan must repaint immediately as Running and after each bounded batch');
 
   let rejectBatch;
   let releaseBatch;

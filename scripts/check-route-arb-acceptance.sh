@@ -42,6 +42,7 @@ node scripts/test-dashboard-health.cjs
 node scripts/test-dashboard-runtime.cjs
 node scripts/test-dashboard-observation.cjs
 node scripts/test-dashboard-ledger.cjs
+node scripts/test-dashboard-final-fixes.cjs
 
 echo "== Diagnostics ownership guard =="
 diagnostics_markers=(
@@ -59,6 +60,7 @@ diagnostics_markers=(
   'data-diagnostics-source="observation"'
   'data-diagnostics-source="health"'
   'data-diagnostics-source="config"'
+  'data-diagnostics-manual-scan'
 )
 for marker in "${diagnostics_markers[@]}"; do
   if ! rg -Fq "$marker" src/arb_bot/src/dashboard.html; then
