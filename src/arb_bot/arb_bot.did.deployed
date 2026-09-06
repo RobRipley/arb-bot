@@ -648,12 +648,14 @@ type Result_3 = variant { Ok : vec HeldPositionV1; Err : text };
 type Result_4 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
 type Result_5 = variant { Ok : vec OwnershipReservationV1; Err : text };
 type Result_6 = variant { Ok : RuntimeStatus; Err : text };
+type Result_11 = variant { Ok : RouteArbConfigV1; Err : text };
 type Result_7 = variant { Ok : vec ExecutionRecordV1; Err : text };
 type Result_8 = variant { Ok : ObservationBatchResultV1; Err : text };
 type Result_9 = variant { Ok : record { nat64; nat64 }; Err : text };
 type Result_10 = variant { Ok : ObservationStartV1; Err : text };
 type RouteArbConfigV1 = record {
   max_icp_principal_e8s : nat64;
+  allow_wrapped_stable_to_icusd : opt bool;
   asset_controls : vec AssetControlV1;
   quote_max_age_ns : nat64;
   max_stable_principal_usd_6dec : nat64;
@@ -716,6 +718,7 @@ type RuntimeStatus = record {
   enabled : bool;
   dry_run : bool;
   last_tick_ns : nat64;
+  scheduler_in_flight_since_ns : opt nat64;
   last_profit_class : opt CandidateClass;
   live_authorized : bool;
 };
@@ -1001,6 +1004,7 @@ service : (InitArgs) -> {
   // an invalid intermediate state (e.g. floor temporarily above ceiling).
   set_icp_inventory_band : (nat64, nat64) -> (Result_1);
   set_route_arb_config_v1 : (RouteArbConfigV1) -> (Result_1);
+  set_wrapped_stable_to_icusd_allowed_v1 : (bool) -> (Result_11);
   set_route_runtime_authorized_v1 : (bool) -> (Result_6);
   // Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
   // (every strategy that trades against `rumi_amm`) without touching the
