@@ -3353,11 +3353,11 @@
       const phase = latestRouteExecution ? variantKey(latestRouteExecution.phase) : null;
       const phaseLabel = phase === 'AwaitingSettlement' ? 'Confirming' : phase === 'ReconciliationRequired' ? 'Reconciling' : phase === 'HeldInventory' ? 'Blocked' : phase === 'Aborted' ? 'Stopped' : phase && phase !== 'Completed' ? 'Executing' : 'Scanning';
       const gatesOff = !latestRouteRuntime.live_authorized || !latestRouteRuntime.enabled || latestRouteRuntime.dry_run;
+      if (executionState === 'failed' || executionState === 'unavailable') {
+        return { label: 'Unknown', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      }
       if (gatesOff && ['Confirming', 'Reconciling', 'Blocked'].includes(phaseLabel)) {
         return { label: phaseLabel, heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
-      }
-      if (executionState === 'failed' || executionState === 'unavailable') {
-        return { label: gatesOff ? 'Stopped' : 'Unknown', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
       }
       if (gatesOff) {
         return { label: 'Stopped', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
