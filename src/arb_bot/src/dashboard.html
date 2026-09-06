@@ -837,6 +837,7 @@
         volume_paused: I.Bool,
       });
       const RouteAsset = I.Variant({ Icp: I.Null, IcUsd: I.Null, CkUsdc: I.Null, CkUsdt: I.Null, CkBtc: I.Null, CkEth: I.Null });
+      const VenueKind = I.Variant({ IcpSwap: I.Null, Rumi3Pool: I.Null });
       const AssetControlV1 = I.Record({ asset: RouteAsset, enabled: I.Bool });
       const PoolControlV1 = I.Record({ pool_id: I.Text, enabled: I.Bool });
       const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
@@ -935,6 +936,27 @@
         quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
         adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
         reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
+        realized_profit: I.Opt(I.Int64),
+      });
+      const RouteExecutionLegStatusV1 = I.Variant({
+        Quoted: I.Null, Refunded: I.Null, Prepared: I.Null, Submitted: I.Null,
+        ReconciliationRequired: I.Null, Aborted: I.Null, HeldInventory: I.Null,
+        Settled: I.Null, RejectedBeforeDebit: I.Null, AwaitingSettlement: I.Null,
+      });
+      const RouteExecutionLegV1 = I.Record({
+        to: RouteAsset, refund_credit_native: I.Opt(I.Nat64), leg_index: I.Nat8,
+        status: RouteExecutionLegStatusV1, minimum_output_native: I.Nat64,
+        submitted_at_ns: I.Opt(I.Nat64), venue: VenueKind, from: RouteAsset,
+        prepared_at_ns: I.Opt(I.Nat64), input_fee_native: I.Nat64,
+        actual_output_credit_native: I.Opt(I.Nat64), actual_input_debit_native: I.Opt(I.Nat64),
+        quoted_output_native: I.Opt(I.Nat64), evidence: I.Vec(ReconciliationEvidenceV1),
+        incident: I.Opt(I.Text), pool_principal: I.Principal, settled_at_ns: I.Opt(I.Nat64),
+        quoted_input_native: I.Nat64, pool_id: I.Text, reconciled_at_ns: I.Opt(I.Nat64),
+        actual_effective_input_native: I.Opt(I.Nat64), edge_id: I.Text, output_fee_native: I.Nat64,
+      });
+      const RouteExecutionDetailV1 = I.Record({
+        asset_path: I.Vec(RouteAsset), legs: I.Vec(RouteExecutionLegV1),
+        detail_available: I.Bool, record: ExecutionRecordV1,
       });
       const VolumePoolConfig = I.Record({
         enabled: I.Bool,
@@ -997,6 +1019,7 @@
         get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
         get_current_route_execution_v1: I.Func([], [I.Opt(ExecutionRecordV1)], ['query']),
         get_terminal_route_executions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ExecutionRecordV1), Err: I.Text })], ['query']),
+        get_route_execution_detail_v1: I.Func([I.Text], [I.Variant({ Ok: RouteExecutionDetailV1, Err: I.Text })], ['query']),
         prepare_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         advance_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         reconcile_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),

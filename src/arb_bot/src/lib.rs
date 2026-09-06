@@ -477,6 +477,23 @@ fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route
 }
 
 #[query]
+fn get_route_execution_detail_v1(
+    execution_id: String,
+) -> Result<route_arb::RouteExecutionDetailV1, String> {
+    if let Some(detail) = state::get_route_execution_detail(&execution_id)? {
+        return Ok(detail);
+    }
+    let record = state::find_route_execution_record(&execution_id)?
+        .ok_or_else(|| format!("unknown route execution: {execution_id}"))?;
+    Ok(route_arb::RouteExecutionDetailV1 {
+        record,
+        asset_path: vec![],
+        legs: vec![],
+        detail_available: false,
+    })
+}
+
+#[query]
 fn get_route_runtime_status_v1() -> Result<route_runtime::RuntimeStatus, String> {
     route_runtime::status()
 }
