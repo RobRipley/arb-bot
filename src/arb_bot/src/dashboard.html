@@ -523,6 +523,13 @@
   .ledger-legs { font-size: 10.5px; color: var(--text-muted); }
   .table-wrap { overflow-x: auto; }
   .ledger-note { font-size: 11.5px; color: var(--text-muted); margin-top: var(--sp-3); }
+  .route-execution-flow td { padding: 0 var(--sp-2) var(--sp-3); background: var(--surface-input); }
+  .route-execution-flow-inner { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 2px solid var(--accent-dim); }
+  .route-flow-stage { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-data); font-variant-numeric: tabular-nums; color: var(--text-primary); white-space: nowrap; }
+  .route-flow-stage .token-logo { width: 16px; height: 16px; }
+  .route-flow-asset { color: var(--text-tertiary); font-size: 11px; }
+  .route-flow-arrow { color: var(--text-muted); font-size: 15px; }
+  .route-flow-loading { font-size: 11.5px; color: var(--text-tertiary); }
   .ledger-disclosure-row td { padding: 0; background: var(--surface-input); }
   .ledger-detail { padding: var(--sp-4); border-top: 1px solid var(--border); }
   .ledger-detail-list { list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
@@ -1155,6 +1162,46 @@
       });
     };
 
+    // The Cockpit reads the active venues directly.  These interfaces are
+    // deliberately separate from the arb canister's historical snapshots so
+    // retired venues can never reappear as current market data.
+    const icpswapPriceIdlFactory = ({ IDL: I }) => {
+      const IcpSwapError = I.Variant({
+        CommonError: I.Null,
+        InsufficientFunds: I.Null,
+        InternalError: I.Text,
+        UnsupportedToken: I.Text,
+      });
+      const IcpSwapResult = I.Variant({ ok: I.Nat, err: IcpSwapError });
+      const Token = I.Record({ address: I.Text, standard: I.Text });
+      const Metadata = I.Record({ token0: Token, token1: Token });
+      const MetadataResult = I.Variant({ ok: Metadata, err: IcpSwapError });
+      const QuoteArgs = I.Record({ amountIn: I.Text, zeroForOne: I.Bool, amountOutMinimum: I.Text });
+      return I.Service({
+        metadata: I.Func([], [MetadataResult], ['query']),
+        quote: I.Func([QuoteArgs], [IcpSwapResult], ['query']),
+      });
+    };
+
+    const rumi3PoolPriceIdlFactory = ({ IDL: I }) => {
+      const ThreePoolError = I.Variant({
+        InsufficientOutput: I.Record({ expected_min: I.Nat, actual: I.Nat }),
+        InsufficientLiquidity: I.Null,
+        InvalidCoinIndex: I.Null,
+        ZeroAmount: I.Null,
+        PoolEmpty: I.Null,
+        SlippageExceeded: I.Null,
+        TransferFailed: I.Record({ token: I.Text, reason: I.Text }),
+        Unauthorized: I.Null,
+        MathOverflow: I.Null,
+        InvariantNotConverged: I.Null,
+        PoolPaused: I.Null,
+      });
+      return I.Service({
+        calc_swap: I.Func([I.Nat8, I.Nat8, I.Nat], [I.Variant({ Ok: I.Nat, Err: ThreePoolError })], ['query']),
+      });
+    };
+
     // ═══════ Constants ═══════
 
     const IC_HOST = 'https://icp0.io';
@@ -1178,6 +1225,39 @@
       { key: 'ckusdc', index: 2, decimals: 6, label: 'ckUSDC' },
     ];
     const POOL_COIN_MAP = Object.fromEntries(POOL_COINS.map(c => [c.key, c]));
+
+    // This is the same active venue set as route_arb.rs.  A card is derived
+    // from a real route pool, never from the retired cycle snapshot feed.
+    const ACTIVE_ROUTE_PRICE_POOLS = [
+      { id: 'icpswap-icp-ckusdc', principal: 'mohjv-bqaaa-aaaag-qjyia-cai', input: 'icp', output: 'ckusdc', group: 'ICP markers' },
+      { id: 'icpswap-icp-icusd', principal: 'nqxwe-hiaaa-aaaar-qb5yq-cai', input: 'icp', output: 'icusd', group: 'ICP markers' },
+      { id: 'icpswap-icp-ckusdt', principal: 'hkstf-6iaaa-aaaag-qkcoq-cai', input: 'icp', output: 'ckusdt', group: 'ICP markers' },
+      { id: 'icpswap-icusd-ckusdt', principal: 'jogrm-gqaaa-aaaar-qcg2a-cai', input: 'icusd', output: 'ckusdt', group: 'Stable routes' },
+      { id: 'icpswap-icusd-ckusdc', principal: 'eb25l-dyaaa-aaaar-qb4lq-cai', input: 'icusd', output: 'ckusdc', group: 'Stable routes' },
+      { id: 'icpswap-ckusdt-ckusdc', principal: 'heq6n-fyaaa-aaaag-qkcpq-cai', input: 'ckusdt', output: 'ckusdc', group: 'Stable routes' },
+      { id: 'icpswap-ckbtc-icp', principal: 'xmiu5-jqaaa-aaaag-qbz7q-cai', input: 'ckbtc', output: 'icp', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-icp-cketh', principal: 'angxa-baaaa-aaaag-qcvnq-cai', input: 'cketh', output: 'icp', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-ckbtc-cketh', principal: 'akhru-myaaa-aaaag-qcvna-cai', input: 'ckbtc', output: 'cketh', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-cketh-ckusdc', principal: 'mvcvq-3iaaa-aaaag-qjykq-cai', input: 'cketh', output: 'ckusdc', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-ckbtc-ckusdc', principal: 'mhecj-xyaaa-aaaag-qjyjq-cai', input: 'ckbtc', output: 'ckusdc', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-ckbtc-icusd', principal: 'jhf2q-qyaaa-aaaar-qcg3q-cai', input: 'ckbtc', output: 'icusd', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-ckusdt-ckbtc', principal: 'ipfno-pqaaa-aaaag-qkevq-cai', input: 'ckbtc', output: 'ckusdt', group: 'ckBTC / ckETH' },
+      { id: 'icpswap-cketh-icusd', principal: 'jjhxy-liaaa-aaaar-qcg2q-cai', input: 'cketh', output: 'icusd', group: 'ckBTC / ckETH' },
+    ];
+    const ACTIVE_3POOL_PRICE_PAIRS = [
+      { input: 'icusd', output: 'ckusdt' },
+      { input: 'icusd', output: 'ckusdc' },
+      { input: 'ckusdt', output: 'ckusdc' },
+    ];
+    const ACTIVE_ROUTE_PRICE_REFRESH_MS = 30_000;
+    const ACTIVE_ROUTE_PROBE_NATIVE = {
+      icp: 100_000_000n,
+      ckusdc: 1_000_000n,
+      ckusdt: 1_000_000n,
+      icusd: 100_000_000n,
+      ckbtc: 100_000n, // 0.001 ckBTC
+      cketh: 100_000_000_000_000_000n, // 0.1 ckETH
+    };
 
     // ═══════ Canister / actors ═══════
 
@@ -1588,6 +1668,7 @@
       operatorBalances: createSourceState(),
       volumeStats: createSourceState(),
       prices: createSourceState(),
+      activePrices: createSourceState(),
       snapshots: createSourceState(),
       activity: createSourceState(),
       legacyLedger: createSourceState(),
@@ -1758,6 +1839,12 @@
     async function createBalanceActor(ledgerId) {
       const agent = await HttpAgent.create({ host: IC_HOST });
       return Actor.createActor(icrc1IdlFactory, { agent, canisterId: ledgerId });
+    }
+    function createIcpSwapPriceActor(agent, poolId) {
+      return Actor.createActor(icpswapPriceIdlFactory, { agent, canisterId: poolId });
+    }
+    function createRumi3PoolPriceActor(agent) {
+      return Actor.createActor(rumi3PoolPriceIdlFactory, { agent, canisterId: 'fohh4-yyaaa-aaaap-qtkpa-cai' });
     }
     async function createAuthLedgerActor(ledgerId, identity) {
       const agent = await HttpAgent.create({ host: IC_HOST, identity });
@@ -2229,6 +2316,95 @@
       } catch (e) { markSourceFailed(routeSources.prices, e); console.error('loadPrices:', e); }
     }
 
+    function activeRoutePriceError(result) {
+      if (!result || typeof result !== 'object') return 'malformed quote result';
+      if (Object.prototype.hasOwnProperty.call(result, 'err')) return variantKey(result.err);
+      if (Object.prototype.hasOwnProperty.call(result, 'Err')) return variantKey(result.Err);
+      return 'quote rejected';
+    }
+
+    function formatActiveRouteRate(outputNative, inputNative, inputDecimals, outputDecimals) {
+      const numerator = BigInt(outputNative) * (10n ** BigInt(inputDecimals));
+      const denominator = BigInt(inputNative) * (10n ** BigInt(outputDecimals));
+      if (numerator <= 0n || denominator <= 0n) return '—';
+      const whole = numerator / denominator;
+      const places = whole >= 1000n ? 2 : whole >= 1n ? 4 : 6;
+      const scale = 10n ** BigInt(places);
+      const rounded = (numerator * scale + denominator / 2n) / denominator;
+      const integer = rounded / scale;
+      let fractional = String(rounded % scale).padStart(places, '0');
+      fractional = fractional.replace(/0+$/, '');
+      return fractional ? `${integer}.${fractional}` : String(integer);
+    }
+
+    function activeRouteProbeLabel(key) {
+      const native = ACTIVE_ROUTE_PROBE_NATIVE[key];
+      const decimals = TOKEN_INFO[key].decimals;
+      const label = TOKEN_INFO[key].label;
+      const whole = native / (10n ** BigInt(decimals));
+      const remainder = native % (10n ** BigInt(decimals));
+      if (!remainder) return `${whole} ${label} probe`;
+      const fraction = String(remainder).padStart(decimals, '0').replace(/0+$/, '');
+      return `${whole}.${fraction} ${label} probe`;
+    }
+
+    async function loadActiveRoutePrices() {
+      const source = routeSources.activePrices;
+      try {
+        const agent = await HttpAgent.create({ host: IC_HOST });
+        const icpswapResults = await Promise.all(ACTIVE_ROUTE_PRICE_POOLS.map(async spec => {
+          const actor = createIcpSwapPriceActor(agent, spec.principal);
+          const metadataResult = await actor.metadata();
+          if (!metadataResult || !metadataResult.ok) throw new Error(`metadata: ${activeRoutePriceError(metadataResult)}`);
+          const inputLedger = TOKEN_INFO[spec.input].getLedger();
+          const metadata = metadataResult.ok;
+          const zeroForOne = metadata.token0.address === inputLedger;
+          if (!zeroForOne && metadata.token1.address !== inputLedger) throw new Error('metadata does not contain the pinned input ledger');
+          const amountIn = ACTIVE_ROUTE_PROBE_NATIVE[spec.input];
+          const quoteResult = await actor.quote({ amountIn: amountIn.toString(), zeroForOne, amountOutMinimum: '0' });
+          if (!quoteResult || !quoteResult.ok) throw new Error(`quote: ${activeRoutePriceError(quoteResult)}`);
+          return {
+            ...spec,
+            venue: 'ICPSwap',
+            outputNative: quoteResult.ok,
+            inputNative: amountIn,
+            inputDecimals: TOKEN_INFO[spec.input].decimals,
+            outputDecimals: TOKEN_INFO[spec.output].decimals,
+          };
+        }));
+        const threePool = createRumi3PoolPriceActor(agent);
+        const threePoolResults = await Promise.all(ACTIVE_3POOL_PRICE_PAIRS.map(async spec => {
+          const inputCoin = POOL_COIN_MAP[spec.input];
+          const outputCoin = POOL_COIN_MAP[spec.output];
+          const amountIn = ACTIVE_ROUTE_PROBE_NATIVE[spec.input];
+          const result = await threePool.calc_swap(inputCoin.index, outputCoin.index, amountIn);
+          if (!result || !result.Ok) throw new Error(`calc_swap: ${activeRoutePriceError(result)}`);
+          return {
+            id: `rumi-3pool-${spec.input}-${spec.output}`,
+            group: 'Stable routes',
+            input: spec.input,
+            output: spec.output,
+            venue: 'Rumi 3pool',
+            outputNative: result.Ok,
+            inputNative: amountIn,
+            inputDecimals: inputCoin.decimals,
+            outputDecimals: outputCoin.decimals,
+          };
+        }));
+        const prices = [...icpswapResults, ...threePoolResults];
+        markSourceFresh(source, prices);
+        if (state.activeView === 'cockpit') renderCockpit();
+        updateFreshnessIndicator();
+        return prices;
+      } catch (e) {
+        markSourceFailed(source, e);
+        console.error('loadActiveRoutePrices:', e);
+        if (state.activeView === 'cockpit') renderCockpit();
+        updateFreshnessIndicator();
+        return source.value;
+      }
+    }
+
     async function loadOverviewFromSnapshot() {
       try {
         if (!anonymousActor || typeof anonymousActor.get_snapshots !== 'function') { markSourceUnavailable(routeSources.snapshots, 'snapshot query is unavailable'); return; }
@@ -2597,89 +2773,60 @@
       return `${m}m ${s}s`;
     }
 
-    // ═══════ Market-price badges (Cockpit) ═══════
+    // ═══════ Active route price badges (Cockpit) ═══════
     //
-    // Ported from the pre-redesign "STRATEGY PRICES" card (loadOverviewFromSnapshot
-    // in the old dashboard.html, ~git show 134af83^1). Same CycleSnapshot fields,
-    // same scaling — the owner's numbers must match what they're used to:
-    //   rumi_icp_price_usd        / 1e6  → Rumi 3USD/ICP, USD
-    //   icpswap_icp_price_ckusdc  / 1e6  → ICPSwap ckUSDC/ICP, USD
-    //   icpswap_icp_price_ckusdt  / 1e6  → ICPSwap ckUSDT/ICP, USD
-    //   icpswap_icp_price_icusd   / 1e8  → ICPSwap icUSD/ICP, USD
-    //   partydex_icp_price_ckusdc / 1e6  → PartyDEX ckUSDC/ICP, USD
-    //   partydex_icp_price_ckusdt / 1e6  → PartyDEX ckUSDT/ICP, USD
-    //   virtual_price             / 1e18 → Rumi 3pool virtual price (ratio, not USD)
-    //   bob_pool_price_icusd_per_bob / 1e8 → icUSD/BOB pool price
-    //   bob_ref_price_icusd_per_bob  / 1e8 → synthetic BOB/ICP × USD/ICP reference
-    // A zero/missing raw value, or a cold (`__cold`) cache snapshot that never
-    // carried these fields, always renders as "—" — never a stale or fabricated
-    // number. This card is USD-per-ICP throughout except the BOB sub-group,
-    // which is its own axis (icUSD per BOB) and must never share a row with it.
-    function priceBadge({ token, venueKey, hue, value, sub, state }) {
+    // The Cockpit deliberately has no fallback to CycleSnapshot here.  That
+    // snapshot contains historical venues, including PartyDEX, Rumi AMM, and
+    // BOB.  These badges are direct public quotes from the code-pinned active
+    // route pools above, so they remain useful while logged out and while the
+    // route observer is idle.
+    function priceBadge({ token, venueKey, venueName, hue, value, sub, state }) {
       const cls = ['price-badge'];
       if (state) cls.push('price-badge-' + state);
-      const valueHtml = state === 'paused' ? 'Paused' : (value == null ? '—' : esc(value));
-      const venueName = venueKey && VENUES[venueKey] ? VENUES[venueKey].name : '';
+      const valueHtml = value == null ? '—' : esc(value);
+      const resolvedVenueName = venueName || (venueKey && VENUES[venueKey] ? VENUES[venueKey].name : '');
       return `<div class="${cls.join(' ')}" style="--badge-hue:${hue}">
-        <div class="price-badge-venue">${venueKey ? venueLogo(venueKey) : ''}${esc(venueName)}</div>
+        <div class="price-badge-venue">${venueKey ? venueLogo(venueKey) : ''}${esc(resolvedVenueName)}</div>
         <div class="price-badge-token">${esc(token)}</div>
         <div class="price-badge-value">${valueHtml}</div>
         ${sub ? `<div class="price-badge-sub">${esc(sub)}</div>` : ''}
       </div>`;
     }
 
-    function cockpitPriceBadgesHtml(c, cf, stale, bobConfigured) {
-      const snap = latestSnapshot;
-      const cold = !snap || snap.__cold;
-      const rumiPaused = !!(cf && cf.rumi_amm_paused);
+    function activeRoutePriceBadge(price) {
+      const input = TOKEN_INFO[price.input];
+      const output = TOKEN_INFO[price.output];
+      const rate = formatActiveRouteRate(price.outputNative, price.inputNative, price.inputDecimals, price.outputDecimals);
+      return priceBadge({
+        token: `${input.label} → ${output.label}`,
+        venueKey: price.venue === 'ICPSwap' ? 'icpswap' : 'rumi',
+        venueName: price.venue,
+        hue: price.venue === 'ICPSwap' ? 'var(--v-icpswap)' : 'var(--v-rumi)',
+        value: `1 ${input.label} = ${rate} ${output.label}`,
+        sub: activeRouteProbeLabel(price.input),
+      });
+    }
 
-      const raw = (field) => (!cold && snap[field] != null) ? bi(snap[field]) : 0;
-      const usdBadgeValue = (field, scale) => { const v = raw(field); return v > 0 ? '$' + (v / scale).toFixed(4) : null; };
-
-      const ckusdc = usdBadgeValue('icpswap_icp_price_ckusdc', 1e6);
-      const ckusdt = usdBadgeValue('icpswap_icp_price_ckusdt', 1e6);
-      const icusd = usdBadgeValue('icpswap_icp_price_icusd', 1e8);
-      const pdCkusdc = usdBadgeValue('partydex_icp_price_ckusdc', 1e6);
-      const pdCkusdt = usdBadgeValue('partydex_icp_price_ckusdt', 1e6);
-      const rumiUsdRaw = raw('rumi_icp_price_usd');
-      const rumiUsd = rumiUsdRaw > 0 ? '$' + (rumiUsdRaw / 1e6).toFixed(4) : null;
-      const vpRaw = raw('virtual_price');
-      const vp = vpRaw > 0 ? (vpRaw / 1e18).toFixed(6) : null;
-
-      const bobPoolRaw = raw('bob_pool_price_icusd_per_bob');
-      const bobRefRaw = raw('bob_ref_price_icusd_per_bob');
-      const bobPool = bobPoolRaw > 0 ? (bobPoolRaw / 1e8).toFixed(4) : null;
-      const bobRef = bobRefRaw > 0 ? (bobRefRaw / 1e8).toFixed(4) : null;
-
-      const usdBadges = [
-        priceBadge({ token: 'ckUSDC', venueKey: 'icpswap', hue: 'var(--v-icpswap)', value: ckusdc }),
-        priceBadge({ token: 'ckUSDT', venueKey: 'icpswap', hue: 'var(--v-icpswap)', value: ckusdt }),
-        priceBadge({ token: 'icUSD', venueKey: 'icpswap', hue: 'var(--v-rumi)', value: icusd }),
-        priceBadge({ token: 'ckUSDC', venueKey: 'partydex', hue: 'var(--v-partydex)', value: pdCkusdc }),
-        priceBadge({ token: 'ckUSDT', venueKey: 'partydex', hue: 'var(--v-partydex)', value: pdCkusdt }),
-        rumiPaused
-          ? priceBadge({ token: '3USD', venueKey: 'rumi', hue: 'var(--v-rumi)', state: 'paused', sub: 'Paused · Rumi AMM' })
-          : priceBadge({ token: '3USD', venueKey: 'rumi', hue: 'var(--v-rumi)', value: rumiUsd }),
-      ];
-      if (!rumiPaused && vp != null) {
-        usdBadges.push(priceBadge({ token: '3pool VP', venueKey: 'rumi', hue: 'var(--v-rumi)', value: vp, sub: 'virtual price, not USD' }));
-      }
-
-      const bobUnconfigured = !bobConfigured;
-      const bobBadges = bobUnconfigured
-        ? priceBadge({ token: 'icUSD/BOB pools', venueKey: 'bob', hue: 'var(--v-bob)', state: 'unconfigured', sub: 'Unconfigured' })
-        + priceBadge({ token: 'Reference', venueKey: 'synth', hue: 'var(--v-bob)', state: 'unconfigured', sub: 'Unconfigured' })
-        : priceBadge({ token: 'icUSD/BOB pool', venueKey: 'icpswap', hue: 'var(--v-bob)', value: bobPool })
-        + priceBadge({ token: 'Synthetic reference', venueKey: 'synth', hue: 'var(--v-bob)', value: bobRef, sub: 'BOB/ICP × USD/ICP' });
-
+    function cockpitPriceBadgesHtml() {
+      const source = routeSources.activePrices;
+      const status = routeSourceState('activePrices', ACTIVE_ROUTE_PRICE_REFRESH_MS * 2);
+      const prices = Array.isArray(source.value) ? source.value : [];
+      const groups = ['ICP markers', 'ckBTC / ckETH', 'Stable routes'];
+      const content = prices.length
+        ? groups.map(group => {
+            const groupPrices = prices.filter(price => price.group === group);
+            if (!groupPrices.length) return '';
+            return `<div class="price-axis-group">
+              <div class="price-axis-label">${esc(group)}</div>
+              <div class="price-badge-row">${groupPrices.map(activeRoutePriceBadge).join('')}</div>
+            </div>`;
+          }).join('')
+        : `<div class="route-empty${status === 'failed' || status === 'unavailable' ? ' negative' : ''}">${sourceStateLabel('activePrices', ACTIVE_ROUTE_PRICE_REFRESH_MS * 2)}</div>`;
       return `
         <div class="card" style="margin-bottom:var(--sp-4)">
-          <div class="card-header">Market prices — USD per ICP${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
-          <div class="price-badge-row">${usdBadges.join('')}</div>
-          <div class="price-axis-group">
-            <div class="price-axis-label">icUSD per BOB <span class="price-axis-note">— not USD/ICP</span></div>
-            <div class="price-badge-row">${bobBadges}</div>
-          </div>
+          <div class="card-header">Active route pool quotes ${sourceStampHtml('activePrices', ACTIVE_ROUTE_PRICE_REFRESH_MS * 2)}</div>
+          <div class="route-wallet-meta">Direct public reads from the active code-pinned pools. Each rate is normalized to one input unit, includes that pool's fee, and refreshes every 30 seconds.</div>
+          ${content}
         </div>`;
     }
 
@@ -3712,7 +3859,7 @@
           </div>
         </div>
 
-        ${cockpitPriceBadgesHtml(c, cf, stale, bobConfigured)}
+        ${cockpitPriceBadgesHtml()}
 
       `;
     }
@@ -5197,6 +5344,11 @@
       const decimals = routeLedgerAssetDecimals(asset);
       return amount == null || decimals == null ? fallback : `${routeLedgerFormatAmount(amount, decimals)} ${routeAssetLabel(asset)}`;
     }
+    function routeLedgerAmountValue(value, asset, fallback = 'Unavailable') {
+      const amount = routeLedgerTextOption(value, null);
+      const decimals = routeLedgerAssetDecimals(asset);
+      return amount == null || decimals == null ? fallback : routeLedgerFormatAmount(amount, decimals);
+    }
     function routeLedgerOptionalTimestamp(value) {
       const timestamp = routeLedgerTextOption(value, null);
       return timestamp == null ? 'Unavailable' : fmtTime(timestamp);
@@ -5255,6 +5407,39 @@
       if (klass === 'IcpReturning') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 8)} ICP</span>`;
       if (klass === 'StablePar' || klass === 'StableSettledCrossAsset') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 6)} USD</span>`;
       return '<span class="text-muted">Unavailable · profit unit unknown</span>';
+    }
+    function routeLedgerFlowStage(asset, amount) {
+      const label = routeAssetLabel(asset);
+      return `<span class="route-flow-stage">${tokenLogo(label)}<span>${esc(amount)}</span><span class="route-flow-asset">${esc(label)}</span></span>`;
+    }
+    function routeLedgerFlowHtml(record, cached) {
+      if (!cached || cached.status === 'loading') return '<span class="route-flow-loading">Loading realized route amounts…</span>';
+      if (cached.status !== 'fresh' || !cached.final || !cached.value || cached.value.detail_available === false) return '<span class="route-flow-loading">Realized route amounts unavailable for this execution.</span>';
+      const legs = Array.isArray(cached.value.legs) ? cached.value.legs.slice().sort((a, b) => Number(a.leg_index) - Number(b.leg_index)) : [];
+      if (!legs.length) return '<span class="route-flow-loading">Realized route amounts unavailable for this execution.</span>';
+      const stages = [];
+      const first = legs[0];
+      const firstDebit = routeLedgerTextOption(first.actual_input_debit_native, null)
+        ?? routeLedgerTextOption(first.requested_input_native, null);
+      stages.push(routeLedgerFlowStage(first.from, routeLedgerAmountValue(firstDebit, first.from)));
+      for (const leg of legs) {
+        const output = routeLedgerTextOption(leg.actual_output_credit_native, null)
+          ?? routeLedgerTextOption(leg.quoted_output_native, null);
+        stages.push(routeLedgerFlowStage(leg.to, routeLedgerAmountValue(output, leg.to)));
+      }
+      return `<div class="route-execution-flow-inner">${stages.join('<span class="route-flow-arrow" aria-hidden="true">→</span>')}</div>`;
+    }
+    function routeLedgerStartAmount(record, cached) {
+      if (!cached || cached.status === 'loading') return '<span class="text-ter">Loading…</span>';
+      if (cached.status === 'fresh' && cached.final && cached.value && cached.value.detail_available !== false) {
+        const first = Array.isArray(cached.value.legs) ? cached.value.legs.slice().sort((a, b) => Number(a.leg_index) - Number(b.leg_index))[0] : null;
+        if (first) {
+          const debit = routeLedgerTextOption(first.actual_input_debit_native, null)
+            ?? routeLedgerTextOption(first.requested_input_native, null);
+          return routeLedgerAmount(debit, first.from, 'Unavailable');
+        }
+      }
+      return '<span class="text-muted">Unavailable</span>';
     }
     function routeLegDetailHtml(detail) {
       if (!detail || detail.detail_available === false) return '<div class="ledger-detail-state">Detailed legs were not recorded for this historical execution. Evidence unavailable for historical record.</div>';
@@ -5364,12 +5549,9 @@
         ? (cached && cached.status === 'fresh' && cached.final === true ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
         : '';
       const pnl = routeLedgerPnlHtml(record);
-      const startAsset = Array.isArray(record.start_asset)
-        ? (record.start_asset.length ? record.start_asset[0] : null)
-        : record.start_asset;
-      const requestedInput = startAsset ? routeLedgerAmount(record.planned_input_native, startAsset) : `${esc(record.planned_input_native == null ? 'Unavailable' : record.planned_input_native)} raw atoms (asset unavailable)`;
+      const routeStart = routeLedgerStartAmount(record, cached);
       const buttonLabel = expanded ? 'Hide legs' : 'Show legs';
-      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" data-ledger-execution-id="${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${requestedInput}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
+      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" data-ledger-execution-id="${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${routeStart}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="route-execution-flow"><td colspan="6">${routeLedgerFlowHtml(record, cached)}</td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
     }
     async function toggleLedgerExecution(executionId, retry = false) {
       const id = String(executionId);
@@ -5544,6 +5726,12 @@
       if (routeLedgerIncomplete) parts.push(`Incomplete · bounded at ${routeLedgerLoadedCount} route records`);
       return parts.length ? `<div class="ledger-note route-ledger-status ${display === 'stale' || routeLedgerIncomplete ? 'ts-stale' : 'negative'}" id="route-ledger-status">${parts.join(' · ')}</div>` : '<div class="ledger-note route-ledger-status" id="route-ledger-status"></div>';
     }
+    async function preloadRouteLedgerDetails(records) {
+      const ids = records.map(record => String(record.execution_id || '')).filter(Boolean);
+      if (!ids.length) return;
+      await Promise.allSettled(ids.map(id => loadTerminalExecutionDetail(id)));
+      if (routeSources.routeLedgerExecutions.value === records) renderRouteLedgerTable();
+    }
     async function loadRouteLedgerPage(page = routeLedgerRequestedPage) {
       const source = routeSources.routeLedgerExecutions;
       const boundedPage = Math.max(0, Number(page) || 0);
@@ -5580,6 +5768,7 @@
         routeLedgerIncomplete = rows.length >= Number(ROUTE_LEDGER_PAGE_SIZE) && offset + ROUTE_LEDGER_PAGE_SIZE >= ROUTE_LEDGER_MAX;
         markSourceFresh(source, rows);
         renderRouteLedgerTable();
+        void preloadRouteLedgerDetails(rows);
         return true;
       } catch (error) {
         if (generation !== routeLedgerRequestGeneration || boundedPage !== routeLedgerRequestedPage) return false;
@@ -5706,7 +5895,7 @@
           ${routeLedgerSourceStatusHtml()}
           <div class="table-wrap">
             <table class="ledger-table" aria-label="Route execution ledger">
-              <thead><tr><th scope="col">Time</th><th scope="col">Execution</th><th scope="col">Route</th><th scope="col">Status</th><th scope="col">Requested input</th><th scope="col">Realized P&amp;L</th></tr></thead>
+              <thead><tr><th scope="col">Time</th><th scope="col">Execution</th><th scope="col">Route</th><th scope="col">Status</th><th scope="col">Actual route start</th><th scope="col">Realized P&amp;L</th></tr></thead>
               <tbody id="route-ledger-body">${routeLedgerSourceHtml()}</tbody>
             </table>
           </div>
@@ -5798,6 +5987,7 @@
       await loadOverviewFromSnapshot();
       await loadVolumeData();
       await loadRouteData();
+      await loadActiveRoutePrices();
       refreshLegAttribution();
       if (authenticatedActor) await loadPrices();
       if (authenticatedActor && currentConfig) await loadMyBalances(currentConfig);
