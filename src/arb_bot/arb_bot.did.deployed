@@ -1,689 +1,1048 @@
-type BotConfig = record {
-  owner: principal;
-  rumi_amm: principal;
-  rumi_3pool: principal;
-  rumi_amm_paused: bool;
-  icpswap_pool: principal;
-  icp_ledger: principal;
-  ckusdc_ledger: principal;
-  three_usd_ledger: principal;
-  min_spread_bps: nat32;
-  max_trade_size_usd: nat64;
-  paused: bool;
-  icpswap_icp_is_token0: bool;
-  admins: vec principal;
-  icpswap_icusd_pool: principal;
-  icusd_ledger: principal;
-  icpswap_icusd_icp_is_token0: bool;
-  min_profit_usd: int64;
-  icpswap_ckusdt_pool: principal;
-  ckusdt_ledger: principal;
-  icpswap_ckusdt_icp_is_token0: bool;
-  icpswap_3usd_pool: principal;
-  icpswap_3usd_icp_is_token0: bool;
-  slippage_bps: nat64;
-  arb_interval_secs: nat64;
-  partydex_ckusdc_pool: principal;
-  partydex_ckusdt_pool: principal;
-  partydex_ckusdc_fee_pips: nat32;
-  partydex_ckusdt_fee_pips: nat32;
-  icp_inventory_floor_e8s: nat64;
-  icp_inventory_ceiling_e8s: nat64;
-  bob_inventory_floor_e8s: nat64;
-  bob_inventory_ceiling_e8s: nat64;
-  bob_ledger: principal;
-  bob_ledger_fee: nat64;
-  icpswap_bob_icp_pool: principal;
-  icpswap_icusd_bob_pool: principal;
-  icpswap_bob_icp_icp_is_token0: bool;
-  icpswap_icusd_bob_icusd_is_token0: bool;
-  bob_max_trade_size_usd: nat64;
-  bob_min_spread_bps: nat64;
-  bob_execution_enabled: bool;
-  strategy_t_icusd_ckusdc_pool: principal;
-  strategy_t_icusd_ckusdt_pool: principal;
-  strategy_t_ckusdt_ckusdc_pool: principal;
-  strategy_t_enabled: bool;
-  strategy_t_dry_run: bool;
-  strategy_t_min_profit_usd: int64;
-  strategy_t_min_profit_bps: nat32;
-  strategy_t_max_trade_size_usd: nat64;
-  strategy_t_icusd_floor: nat64;
-  strategy_t_icusd_ceiling: nat64;
-  strategy_t_ckusdt_floor: nat64;
-  strategy_t_ckusdt_ceiling: nat64;
-  strategy_t_ckusdc_floor: nat64;
-  strategy_t_ckusdc_ceiling: nat64;
+type ActivityRecord = record {
+  message : text;
+  timestamp : nat64;
+  category : text;
 };
-
-// Candid-boundary type for set_config / InitArgs: identical to BotConfig
-// except the 14 strategy_t_* fields are opt, so a pre-Strategy-T caller
-// omitting them stays a valid subtype of the old interface. See the
-// BotConfigInput doc comment in state.rs.
-type BotConfigInput = record {
-  owner: principal;
-  rumi_amm: principal;
-  rumi_3pool: principal;
-  rumi_amm_paused: bool;
-  icpswap_pool: principal;
-  icp_ledger: principal;
-  ckusdc_ledger: principal;
-  three_usd_ledger: principal;
-  min_spread_bps: nat32;
-  max_trade_size_usd: nat64;
-  paused: bool;
-  icpswap_icp_is_token0: bool;
-  admins: vec principal;
-  icpswap_icusd_pool: principal;
-  icusd_ledger: principal;
-  icpswap_icusd_icp_is_token0: bool;
-  min_profit_usd: int64;
-  icpswap_ckusdt_pool: principal;
-  ckusdt_ledger: principal;
-  icpswap_ckusdt_icp_is_token0: bool;
-  icpswap_3usd_pool: principal;
-  icpswap_3usd_icp_is_token0: bool;
-  slippage_bps: nat64;
-  arb_interval_secs: nat64;
-  partydex_ckusdc_pool: principal;
-  partydex_ckusdt_pool: principal;
-  partydex_ckusdc_fee_pips: nat32;
-  partydex_ckusdt_fee_pips: nat32;
-  icp_inventory_floor_e8s: nat64;
-  icp_inventory_ceiling_e8s: nat64;
-  bob_inventory_floor_e8s: nat64;
-  bob_inventory_ceiling_e8s: nat64;
-  bob_ledger: principal;
-  bob_ledger_fee: nat64;
-  icpswap_bob_icp_pool: principal;
-  icpswap_icusd_bob_pool: principal;
-  icpswap_bob_icp_icp_is_token0: bool;
-  icpswap_icusd_bob_icusd_is_token0: bool;
-  bob_max_trade_size_usd: nat64;
-  bob_min_spread_bps: nat64;
-  bob_execution_enabled: bool;
-  strategy_t_icusd_ckusdc_pool: opt principal;
-  strategy_t_icusd_ckusdt_pool: opt principal;
-  strategy_t_ckusdt_ckusdc_pool: opt principal;
-  strategy_t_enabled: opt bool;
-  strategy_t_dry_run: opt bool;
-  strategy_t_min_profit_usd: opt int64;
-  strategy_t_min_profit_bps: opt nat32;
-  strategy_t_max_trade_size_usd: opt nat64;
-  strategy_t_icusd_floor: opt nat64;
-  strategy_t_icusd_ceiling: opt nat64;
-  strategy_t_ckusdt_floor: opt nat64;
-  strategy_t_ckusdt_ceiling: opt nat64;
-  strategy_t_ckusdc_floor: opt nat64;
-  strategy_t_ckusdc_ceiling: opt nat64;
-};
-
-type Pool = variant {
-  RumiThreeUsd;
-  IcpswapCkusdc;
-  IcpswapIcusd;
-  IcpswapCkusdt;
-  IcpswapThreeUsd;
-  PartyDexIcpCkusdc;
-  PartyDexIcpCkusdt;
-};
-
-type PendingExit = record {
-  entry_pool: Pool;
-  intended_exit_pool: Pool;
-  timestamp: nat64;
-  icp_amount: nat64;
-};
-
-type BobPool = variant {
-  IcusdBob;
-  BobIcp;
-};
-
-type PendingBobExit = record {
-  entry_pool: BobPool;
-  bob_amount: nat64;
-};
-
-type PoolHealth = record {
-  pool: VolumePool;
-  enabled: bool;
-  trade_size_usd: nat64;
-  daily_cost_usd: int64;
-  daily_cost_cap_usd: nat64;
-  last_price: opt nat64;
-  current_price: opt nat64;
-  next_direction: VolumeDirection;
-  input_balance: opt nat64;
-  min_required_native: opt nat64;
-  skip_reason: opt text;
-};
-
-type BotHealthReport = record {
-  arb_cycle_in_progress: bool;
-  arb_cycle_started_at_ns: opt nat64;
-  volume_cycle_in_progress: bool;
-  volume_paused: bool;
-  arb_paused: bool;
-  volume_stranded_icp: nat64;
-  volume_stranded_bob: nat64;
-  pending_exit: opt PendingExit;
-  pending_bob_exit: opt PendingBobExit;
-  balance_bob: nat64;
-  slippage_bps: nat64;
-  pools: vec PoolHealth;
-};
-
-type PublicHealth = record {
-  has_pending_exit: bool;
-  has_pending_bob_exit: bool;
-  has_stranded_volume_funds: bool;
-  arb_paused: bool;
-  volume_paused: bool;
-};
-
 type Asset = variant { Icp; IcUsd; CkUsdc; CkUsdt; CkBtc; CkEth };
-type AssetControlV1 = record { asset: Asset; enabled: bool };
-type PoolControlV1 = record { pool_id: text; enabled: bool };
+type AssetControlV1 = record { asset : Asset; enabled : bool };
 type AssetInventoryBandV1 = record {
-  asset: Asset;
-  floor_native: nat64;
-  ceiling_native: nat64;
-};
-type RouteArbConfigV1 = record {
-  enabled: bool;
-  dry_run: bool;
-  stable_book_enabled: bool;
-  icp_book_enabled: bool;
-  asset_controls: vec AssetControlV1;
-  pool_controls: vec PoolControlV1;
-  stable_size_ladder: vec nat64;
-  icp_size_ladder: vec nat64;
-  max_route_legs: nat8;
-  max_quote_calls_per_observation: nat16;
-  max_concurrent_quote_calls: nat8;
-  max_stable_principal_usd_6dec: nat64;
-  max_icp_principal_e8s: nat64;
-  min_stable_profit_usd_6dec: nat64;
-  min_stable_profit_bps: nat32;
-  min_icp_profit_e8s: nat64;
-  min_icp_profit_bps: nat32;
-  inventory_bands: vec AssetInventoryBandV1;
-  quote_max_age_ns: nat64;
-  settlement_timeout_ns: nat64;
-  reconciliation_queries_per_cycle: nat8;
-  max_open_held_positions: nat16;
-  max_open_non_route_reservations: nat16;
-  max_terminal_execution_records: nat32;
-  max_execution_record_bytes: nat32;
-  max_reconciliation_evidence_items: nat8;
-};
-type RouteArbStatusV1 = record {
-  config_valid: bool;
-  config_incident: opt text;
-  execution_compiled_in: bool;
-  live_execution_authorized: bool;
-  route_count: nat32;
-};
-type WalletAssetBalanceV1 = record {
-  asset: Asset;
-  symbol: text;
-  ledger: principal;
-  expected_decimals: nat8;
-  observed_decimals: opt nat8;
-  ledger_fee_native: opt nat;
-  balance_native: opt nat;
-  metadata_valid: bool;
-  error: opt text;
-};
-type CandidateClass = variant { IcpReturning; StablePar; StableSettledCrossAsset };
-type QuoteLegReportV1 = record {
-  to: Asset; wallet_before: nat; wallet_after: nat; gross_output: nat;
-  venue_input: nat; from: Asset; entry_ledger_fee: nat;
-  output_ledger_fee: nat; full_fill: bool; edge_id: text;
-};
-type RouteCandidateReportV1 = record {
-  asset_path: vec Asset; size_ladder_index: nat8; end_asset: Asset;
-  net_profit_bps: int64; legs: vec QuoteLegReportV1; allowance_status: text;
-  route_id: text; principal_native: nat; par_assumption: bool;
-  start_asset: Asset; candidate_class: CandidateClass;
-  canonical_cycle_id: opt text; quote_timestamp_ns: nat64; eligible: bool;
-  rejection_reason: opt text; inventory_effect: text; venue_edges: vec text;
-  full_fill: bool; net_profit_native: int64;
-};
-type ObservationAccumulatorV1 = record {
-  quote_call_budget_sufficient: bool; observation_id: text; started_at_ns: nat64;
-  candidates_evaluated: nat64; completed_at_ns: opt nat64; total_work_items: nat64;
-  best_icp_candidate: opt RouteCandidateReportV1;
-  provisional_best_stable_candidate: opt RouteCandidateReportV1;
-  incident: opt text; next_cursor: nat64; quote_calls_made: nat64;
-  route_count: nat32; full_fill_rejections: nat64;
-  best_stable_candidate: opt RouteCandidateReportV1; required_quote_calls: nat64;
-  provisional_best_icp_candidate: opt RouteCandidateReportV1; scan_complete: bool;
-};
-type ObservationStartV1 = record {
-  quote_call_budget_sufficient: bool; observation_id: text;
-  route_size_count: nat64; next_cursor: nat64; route_count: nat32;
-  required_quote_calls: nat64;
-};
-type ObservationBatchResultV1 = record {
-  observation: ObservationAccumulatorV1; candidates: vec RouteCandidateReportV1;
+  asset : Asset;
+  ceiling_native : nat64;
+  floor_native : nat64;
 };
 type BestRouteCandidatesV1 = record {
-  icp: opt RouteCandidateReportV1; stable: opt RouteCandidateReportV1;
-  observation_id: opt text; scan_complete: bool;
+  icp : opt RouteCandidateReportV1;
+  stable : opt RouteCandidateReportV1;
+  observation_id : opt text;
+  scan_complete : bool;
 };
-type MutationOwnerV1 = variant { RouteExecution; VolumeOperation; GenericWithdrawal; RetiredVenueRecovery; LegacyMigration };
-type MutationLockV1 = record {
-  operation_id: text; owner: MutationOwnerV1; acquired_at_ns: nat64;
-  reconciliation_required: bool;
+// Which of the two Strategy S pools a stranded BOB balance entered through.
+// Internal to BotState (not part of any candid method signature yet).
+type BobPool = variant {
+  // ICPSwap BOB/ICP pool.
+  BobIcp;
+  // ICPSwap icUSD/BOB pool.
+  IcusdBob;
 };
-type ReservationKindV1 = variant { ActiveRoute; HeldPosition; NonRoute; LegacyFreeze };
-type OwnershipReservationV1 = record {
-  reservation_id: text; asset: Asset; amount_native: nat64;
-  whole_asset_freeze: bool; kind: ReservationKindV1; owner: MutationOwnerV1;
-  operation_id: text; reconciled_at_ns: nat64; active: bool;
+type BotConfig = record {
+  // Strategy B: ICPSwap icUSD/ICP pool canister
+  icpswap_icusd_pool : principal;
+  // Minimum net profit (6-decimal USD) required to execute a trade. 0 = disabled.
+  min_profit_usd : int64;
+  // Per-token inventory bands (native decimals). A candidate whose start
+  // leg would draw the start token below its floor, or whose end leg
+  // would push the end token above its ceiling, is ineligible.
+  strategy_t_icusd_floor : nat64;
+  // Whether ICP is token0 in the ICPSwap icUSD/ICP pool
+  icpswap_icusd_icp_is_token0 : bool;
+  // Strategy C: ckUSDT ledger canister
+  ckusdt_ledger : principal;
+  // Strategy S: minimum pool-vs-reference deviation (bps) required to trade.
+  // Default 150 — covers two-to-three 0.3% fee legs plus thin-pool slippage
+  // and reference uncertainty.
+  bob_min_spread_bps : nat64;
+  rumi_3pool : principal;
+  // BOB inventory band (e8s, 8 decimals). Mirrors `icp_inventory_floor_e8s`
+  // / `icp_inventory_ceiling_e8s` in shape only — stored/settable/displayed;
+  // not wired into any trading or drain logic.
+  bob_inventory_floor_e8s : nat64;
+  // ICP inventory band (e8s). Floor: minimum working balance the drain
+  // always leaves (fee buffer + strategy-S top-up trigger). Ceiling: the
+  // drain skims any balance above this to the best stable pool.
+  icp_inventory_floor_e8s : nat64;
+  // Strategy S: ICPSwap icUSD/BOB pool canister. Anonymous until the pool
+  // is created — this is Strategy S's master gate (inert while anonymous).
+  icpswap_icusd_bob_pool : principal;
+  // Strategy S: ICPSwap BOB/ICP pool canister — BOB's sole reference market.
+  icpswap_bob_icp_pool : principal;
+  strategy_t_icusd_ceiling : nat64;
+  // Whether ICP is token0 in the ICPSwap pool (resolved from pool metadata at init)
+  icpswap_icp_is_token0 : bool;
+  // Kill switch for the Rumi AMM (3USD/ICP) venue. When true, Strategies
+  // A/C/D/Q/R (every strategy that trades against `rumi_amm`) are skipped
+  // entirely in both the auto cycle and force-execute — no network calls
+  // are made, so no cycles are burned checking a venue known to be
+  // illiquid. Toggle via `set_rumi_amm_paused`. Strategies B/F/K/L/M/N/O/P
+  // never touch `rumi_amm` and are unaffected.
+  rumi_amm_paused : bool;
+  owner : principal;
+  // ICPSwap 3USD/ICP pool canister
+  icpswap_3usd_pool : principal;
+  ckusdc_ledger : principal;
+  strategy_t_ckusdt_floor : nat64;
+  strategy_t_ckusdc_ceiling : nat64;
+  strategy_t_ckusdt_ceiling : nat64;
+  // PartyDEX ICP/ckUSDT pool canister (used by Strategies N/O/P/R in PR2b).
+  partydex_ckusdt_pool : principal;
+  // Leg 1 and Leg 2 slippage tolerance in basis points. Runtime-tunable via
+  // `set_slippage_bps`. Widening this reduces Leg 2 failure rate (and the
+  // downstream drain losses) at the cost of accepting worse fills. Default 50.
+  slippage_bps : nat64;
+  // Per-candidate max trade size (6-decimal USD). Dedicated to Strategy T
+  // — never reuse or raise the global `max_trade_size_usd` for this.
+  strategy_t_max_trade_size_usd : nat64;
+  // BOB ledger transfer fee (native units, 8 decimals).
+  bob_ledger_fee : nat64;
+  // Strategy S: max trade size per leg (6-dec USD). Default $50 — BOB/ICP
+  // moves ~1% per $265 of volume, so this keeps clips small relative to depth.
+  bob_max_trade_size_usd : nat64;
+  icp_ledger : principal;
+  // Fee tier (pips) pool_swaps are pinned to on the PartyDEX ckUSDT pool. Default 500 (0.05%).
+  partydex_ckusdt_fee_pips : nat32;
+  // Whether icUSD is token0 in the ICPSwap icUSD/BOB pool (resolved once).
+  icpswap_icusd_bob_icusd_is_token0 : bool;
+  // Master enable switch for Strategy T. Dry-run evaluation runs once all
+  // three pool principals are non-anonymous, independent of this flag.
+  // This flag and `strategy_t_dry_run` exist for a future live-execution
+  // PR; this build has no live-trade path regardless of either value.
+  strategy_t_enabled : bool;
+  // Strategy S execution kill switch. Dry-run evaluation + dashboard
+  // surfacing always run once both BOB pools are configured; live
+  // execution additionally requires this to be true. Defaults false
+  // (dry-run-first, per design decision #5).
+  bob_execution_enabled : bool;
+  strategy_t_ckusdc_floor : nat64;
+  // Whether ICP is token0 in the ICPSwap ckUSDT/ICP pool
+  icpswap_ckusdt_icp_is_token0 : bool;
+  // PartyDEX ICP/ckUSDC pool canister (used by Strategies K/L/M/Q in PR2b).
+  partydex_ckusdc_pool : principal;
+  bob_inventory_ceiling_e8s : nat64;
+  // Additional admin principals (e.g. Internet Identity) that can call admin methods
+  admins : vec principal;
+  max_trade_size_usd : nat64;
+  // ckUSDT/ckUSDC ICPSwap pool (heq6n-fyaaa-aaaag-qkcpq-cai when configured).
+  strategy_t_ckusdt_ckusdc_pool : principal;
+  min_spread_bps : nat32;
+  // Fee tier (pips) pool_swaps are pinned to on the PartyDEX ckUSDC pool. Default 500 (0.05%).
+  partydex_ckusdc_fee_pips : nat32;
+  // icUSD/ckUSDT ICPSwap pool (jogrm-gqaaa-aaaar-qcg2a-cai when configured).
+  strategy_t_icusd_ckusdt_pool : principal;
+  // Forces dry-run-only. Defaults true. Present so a future PR can add
+  // live execution behind an explicit flip rather than a code change.
+  strategy_t_dry_run : bool;
+  rumi_amm : principal;
+  three_usd_ledger : principal;
+  // Whether ICP is token0 in the ICPSwap BOB/ICP pool (resolved once).
+  icpswap_bob_icp_icp_is_token0 : bool;
+  icpswap_pool : principal;
+  // Strategy C: ICPSwap ckUSDT/ICP pool canister
+  icpswap_ckusdt_pool : principal;
+  // Strategy B: icUSD ledger canister
+  icusd_ledger : principal;
+  icp_inventory_ceiling_e8s : nat64;
+  // Minimum net profit in basis points of start-leg notional, evaluated
+  // alongside (both must pass) the absolute floor above.
+  strategy_t_min_profit_bps : nat32;
+  // Minimum net profit (6-decimal USD) for a candidate to be eligible.
+  strategy_t_min_profit_usd : int64;
+  // Whether ICP is token0 in the ICPSwap 3USD/ICP pool
+  icpswap_3usd_icp_is_token0 : bool;
+  // icUSD/ckUSDC ICPSwap pool (eb25l-dyaaa-aaaar-qb4lq-cai when configured).
+  strategy_t_icusd_ckusdc_pool : principal;
+  paused : bool;
+  // Interval between arb cycles in seconds. Runtime-tunable via
+  // `set_arb_interval_secs`. Higher values reduce cycle burn at the cost
+  // of slower reaction to arbitrage opportunities. Default 600.
+  arb_interval_secs : nat64;
+  // Strategy S: BOB ledger canister (mainnet-verified).
+  bob_ledger : principal;
 };
-type HeldBasisV1 = variant {
-  StablePar: record { start_asset: Asset; principal_native: nat64; principal_usd_6dec: nat64 };
-  IcpNative: record { principal_icp_e8s: nat64 };
-  LegacyUnknown: record { preserved_pending_fields: text };
+// Candid-boundary counterpart to `BotConfig`, used ONLY as the argument
+// type for `set_config` and inside `InitArgs`.
+//
+// Candid subtyping is stricter than Rust's `#[serde(default)]`: the
+// latter protects `BotState`'s internal JSON-in-stable-memory
+// serialization (upgrades correctly fill in missing fields from an old
+// on-disk blob), but it does nothing for the WIRE format of an inbound
+// call. A record type used as a function ARGUMENT can only safely gain
+// `opt` fields — a caller built against the pre-Strategy-T interface
+// sends bytes with no `strategy_t_*` fields at all, and Candid's decoder
+// (unlike `#[serde(default)]`) rejects an incoming record that's missing
+// a field the target Rust type declares as required. Confirmed via
+// `didc check` against the pre-Strategy-T `.did`: `set_config`'s old
+// signature was not a safe subtype of the new one until these 14 fields
+// became `opt` at the boundary.
+//
+// `BotConfig` itself (used for `get_config`'s RETURN type, and internally
+// everywhere else) is unaffected and stays fully required — a function's
+// RETURN type gaining fields is always a safe, backward-compatible
+// change, since an old caller simply doesn't read fields it doesn't know
+// about.
+//
+// Every field other than the 14 `strategy_t_*` ones mirrors `BotConfig`
+// exactly (same name, same type, same required-ness) — an old caller's
+// payload for those is decoded and applied exactly as before.
+//
+// The `#[serde(default = ...)]` attributes below are copied verbatim from
+// `BotConfig` for exactly that reason (identical decode behavior for the
+// non-`strategy_t_*` fields) — NOT because this struct participates in
+// the stable-memory upgrade path. It doesn't: `BotConfigInput` derives no
+// `Serialize` and is never persisted; it exists only as a transient
+// Candid-decode target for one inbound call, then it's consumed by
+// `into_full_config` and dropped.
+type BotConfigInput = record {
+  icpswap_icusd_pool : principal;
+  min_profit_usd : int64;
+  strategy_t_icusd_floor : opt nat64;
+  icpswap_icusd_icp_is_token0 : bool;
+  ckusdt_ledger : principal;
+  bob_min_spread_bps : nat64;
+  rumi_3pool : principal;
+  bob_inventory_floor_e8s : nat64;
+  icp_inventory_floor_e8s : nat64;
+  icpswap_icusd_bob_pool : principal;
+  icpswap_bob_icp_pool : principal;
+  strategy_t_icusd_ceiling : opt nat64;
+  icpswap_icp_is_token0 : bool;
+  rumi_amm_paused : bool;
+  owner : principal;
+  icpswap_3usd_pool : principal;
+  ckusdc_ledger : principal;
+  strategy_t_ckusdt_floor : opt nat64;
+  strategy_t_ckusdc_ceiling : opt nat64;
+  strategy_t_ckusdt_ceiling : opt nat64;
+  partydex_ckusdt_pool : principal;
+  slippage_bps : nat64;
+  strategy_t_max_trade_size_usd : opt nat64;
+  bob_ledger_fee : nat64;
+  bob_max_trade_size_usd : nat64;
+  icp_ledger : principal;
+  partydex_ckusdt_fee_pips : nat32;
+  icpswap_icusd_bob_icusd_is_token0 : bool;
+  strategy_t_enabled : opt bool;
+  bob_execution_enabled : bool;
+  strategy_t_ckusdc_floor : opt nat64;
+  icpswap_ckusdt_icp_is_token0 : bool;
+  partydex_ckusdc_pool : principal;
+  bob_inventory_ceiling_e8s : nat64;
+  admins : vec principal;
+  max_trade_size_usd : nat64;
+  strategy_t_ckusdt_ckusdc_pool : opt principal;
+  min_spread_bps : nat32;
+  partydex_ckusdc_fee_pips : nat32;
+  strategy_t_icusd_ckusdt_pool : opt principal;
+  strategy_t_dry_run : opt bool;
+  rumi_amm : principal;
+  three_usd_ledger : principal;
+  icpswap_bob_icp_icp_is_token0 : bool;
+  icpswap_pool : principal;
+  icpswap_ckusdt_pool : principal;
+  icusd_ledger : principal;
+  icp_inventory_ceiling_e8s : nat64;
+  strategy_t_min_profit_bps : opt nat32;
+  strategy_t_min_profit_usd : opt int64;
+  icpswap_3usd_icp_is_token0 : bool;
+  strategy_t_icusd_ckusdc_pool : opt principal;
+  paused : bool;
+  arb_interval_secs : nat64;
+  bob_ledger : principal;
 };
-type HeldLotV1 = record {
-  asset: Asset; native_amount: nat64; attributable_fees_native: nat64; reserved_native: nat64;
+// Admin diagnostic: single call revealing every gate that could block the
+// arb drain or volume cycle. Returned by `get_bot_health`.
+type BotHealthReport = record {
+  arb_paused : bool;
+  pending_exit : opt PendingExit;
+  // BOB stranded on the volume subaccount (8 dec) — see `volume_stranded_bob` state.
+  volume_stranded_bob : nat64;
+  volume_stranded_icp : nat64;
+  slippage_bps : nat64;
+  // When the in-progress arb cycle acquired the lock (ns since epoch).
+  // None when idle. Lets the UI flag a cycle wedged far past the interval.
+  arb_cycle_started_at_ns : opt nat64;
+  volume_cycle_in_progress : bool;
+  volume_paused : bool;
+  // BOB balance (8 dec). 0 if the ledger query failed.
+  balance_bob : nat64;
+  pools : vec PoolHealth;
+  // Strategy S: BOB acquired by a leg 1 whose leg 2 hasn't completed.
+  pending_bob_exit : opt PendingBobExit;
+  arb_cycle_in_progress : bool;
 };
-type HeldPositionV1 = record {
-  position_id: text; originating_execution_id: text; originating_route_id: text;
-  basis: HeldBasisV1; lots: vec HeldLotV1; reason: text;
-  first_held_timestamp_ns: nat64; last_reconciled_timestamp_ns: nat64;
+type CandidateClass = variant {
+  IcpReturning;
+  StablePar;
+  StableSettledCrossAsset;
 };
+type CandidateReport = record {
+  fill_ok : bool;
+  fill_note : text;
+  economic_profit_usd : int64;
+  allowance_status : text;
+  inventory_eligible : bool;
+  closing : opt StrategyTPool;
+  start : StrategyTToken;
+  rumi_out : StrategyTToken;
+  meets_profit_threshold : bool;
+  // Empty when inventory_eligible reflects a real check_inventory_bands
+  // result. Non-empty explains why inventory_eligible was forced false
+  // without a real check — currently only "balance fetch failed for
+  // <token> — failing closed" when the start or end token's on-chain
+  // balance could not be read this cycle.
+  inventory_note : text;
+  start_amount_native : nat64;
+};
+type CandidateResult = record {
+  input_amount : nat64;
+  output_amount : nat64;
+  profit_usd : int64;
+  icp_amount : nat64;
+};
+// Snapshot of all prices, balances, and spreads captured every arb cycle.
+type CycleSnapshot = record {
+  virtual_price : nat64;
+  icpswap_icp_price_ckusdc : nat64;
+  // Strategy C: ckUSDT per 1 ICP (6 dec). 0 if N/A.
+  icpswap_icp_price_ckusdt : nat64;
+  // Strategy S: icUSD out per 1 BOB on the icUSD/BOB pool (8 dec), 0 if N/A.
+  bob_pool_price_icusd_per_bob : nat64;
+  // Strategy L spread (PartyDEX ckUSDC vs ICPSwap ckUSDT/ICP), 0 if N/A. Populated in PR2b.
+  spread_l_bps : int32;
+  // Strategy S spread (pool vs reference), 0 if N/A.
+  spread_s_bps : int64;
+  balance_ckusdc : nat64;
+  balance_ckusdt : nat64;
+  // Strategy N spread (PartyDEX ckUSDT vs ICPSwap ckUSDC/ICP), 0 if N/A. Populated in PR2b.
+  spread_n_bps : int32;
+  traded : bool;
+  icpswap_icp_price_icusd : nat64;
+  // Strategy S: reference icUSD per 1 BOB — (ICP/BOB) × (USD/ICP) (8 dec), 0 if N/A.
+  bob_ref_price_icusd_per_bob : nat64;
+  spread_b_bps : int32;
+  // PartyDEX ckUSDC per 1 ICP (6 dec USD), 0 if N/A.
+  partydex_icp_price_ckusdc : nat64;
+  // PartyDEX ckUSDT per 1 ICP (6 dec USD), 0 if N/A.
+  partydex_icp_price_ckusdt : nat64;
+  // Strategy P spread (PartyDEX ckUSDT vs ICPSwap icUSD/ICP), 0 if N/A. Populated in PR2b.
+  spread_p_bps : int32;
+  // Strategy D spread (Rumi 3pool vs ICPSwap icUSD), 0 if N/A
+  spread_d_bps : int32;
+  // Strategy K spread (PartyDEX ckUSDC vs ICPSwap ckUSDC/ICP), 0 if N/A. Populated in PR2b.
+  spread_k_bps : int32;
+  // Strategy R spread (Rumi 3pool vs PartyDEX ckUSDT), 0 if N/A. Populated in PR2b.
+  spread_r_bps : int32;
+  rumi_icp_price_3usd : nat64;
+  strategy_used : text;
+  // Strategy F spread (ICPSwap icUSD/ICP vs ICPSwap ckUSDT/ICP), 0 if N/A
+  spread_f_bps : int32;
+  timestamp : nat64;
+  // Strategy M spread (PartyDEX ckUSDC vs ICPSwap icUSD/ICP), 0 if N/A. Populated in PR2b.
+  spread_m_bps : int32;
+  balance_icusd : nat64;
+  // BOB balance (8 dec), 0 while Strategy S is inert.
+  balance_bob : nat64;
+  balance_icp : nat64;
+  spread_a_bps : int32;
+  rumi_icp_price_usd : nat64;
+  // Strategy O spread (PartyDEX ckUSDT vs ICPSwap ckUSDT/ICP), 0 if N/A. Populated in PR2b.
+  spread_o_bps : int32;
+  // Strategy C spread, 0 if N/A
+  spread_c_bps : int32;
+  balance_3usd : nat64;
+  // Strategy Q spread (Rumi 3pool vs PartyDEX ckUSDC), 0 if N/A. Populated in PR2b.
+  spread_q_bps : int32;
+};
+type Direction = variant { RumiToIcpswap; IcpswapToRumi };
+type DryRunResult = record {
+  virtual_price : nat64;
+  direction : opt Direction;
+  expected_icp_amount : nat64;
+  optimal_input_token : opt Token;
+  should_trade : bool;
+  spread_bps : int32;
+  candidates_evaluated : vec CandidateResult;
+  balance_ckusdc : nat64;
+  icpswap_price_usd : nat64;
+  expected_output_token : opt Token;
+  rumi_price_usd : nat64;
+  message : text;
+  expected_profit_usd : int64;
+  expected_output_amount : nat64;
+  balance_3usd : nat64;
+  optimal_input_amount : nat64;
+};
+type ErrorRecord = record { message : text; timestamp : nat64 };
 type ExecutionPhaseV1 = variant {
-  Planned; LegPrepared; LegSubmitted; AwaitingSettlement; ReconciliationRequired;
-  LegSettled; RemainingRouteRequoted; Completed; Aborted; HeldInventory;
-};
-type ReconciliationEvidenceV1 = record {
-  evidence_kind: text; source_reference: text; amount_native: nat64; observed_at_ns: nat64;
+  LegSettled;
+  Planned;
+  RemainingRouteRequoted;
+  LegPrepared;
+  LegSubmitted;
+  ReconciliationRequired;
+  Completed;
+  Aborted;
+  HeldInventory;
+  AwaitingSettlement;
 };
 type ExecutionRecordV1 = record {
-  execution_id: text; route_id: text; canonical_cycle_id: opt text;
-  candidate_class: CandidateClass; phase: ExecutionPhaseV1; current_leg_index: nat8;
-  planned_input_native: nat64; required_min_output_native: nat64;
-  quote_timestamp_ns: nat64; submission_started_at_ns: opt nat64;
-  adapter_request_fingerprint: opt text; evidence: vec ReconciliationEvidenceV1;
-  reconciliation_query_count: nat8; incident: opt text; updated_at_ns: nat64;
+  submission_started_at_ns : opt nat64;
+  current_leg_index : nat8;
+  route_id : text;
+  updated_at_ns : nat64;
+  adapter_request_fingerprint : opt text;
+  required_min_output_native : nat64;
+  // Stable-par USD6 for stable books; ICP e8s for IcpReturning.
+  // None for held inventory and historical records without attributable P&L.
+  realized_profit : opt int;
+  // Exact parent input asset for new executions; unavailable for historical records without it.
+  start_asset : opt Asset;
+  candidate_class : CandidateClass;
+  evidence : vec ReconciliationEvidenceV1;
+  incident : opt text;
+  canonical_cycle_id : opt text;
+  quote_timestamp_ns : nat64;
+  reconciliation_query_count : nat8;
+  phase : ExecutionPhaseV1;
+  planned_input_native : nat64;
+  execution_id : text;
 };
-
-type Direction = variant {
-  RumiToIcpswap;
-  IcpswapToRumi;
+type HeldBasisV1 = variant {
+  LegacyUnknown : record { preserved_pending_fields : text };
+  StablePar : record {
+    principal_native : nat64;
+    start_asset : Asset;
+    principal_usd_6dec : nat64;
+  };
+  IcpNative : record { principal_icp_e8s : nat64 };
 };
-
-type Token = variant {
-  ThreeUSD;
-  CkUSDC;
+type HeldLotV1 = record {
+  asset : Asset;
+  native_amount : nat64;
+  attributable_fees_native : nat64;
+  reserved_native : nat64;
 };
-
-type TradeRecord = record {
-  timestamp: nat64;
-  direction: Direction;
-  icp_amount: nat64;
-  input_amount: nat64;
-  input_token: Token;
-  output_amount: nat64;
-  output_token: Token;
-  virtual_price: nat64;
-  ledger_fees_usd: int64;
-  net_profit_usd: int64;
-  spread_bps: nat32;
+type HeldPositionV1 = record {
+  first_held_timestamp_ns : nat64;
+  originating_execution_id : text;
+  lots : vec HeldLotV1;
+  originating_route_id : text;
+  basis : HeldBasisV1;
+  last_reconciled_timestamp_ns : nat64;
+  reason : text;
+  position_id : text;
 };
-
-type TradeSummary = record {
-  total_legs: nat64;
-  total_usd_in: int64;
-  total_usd_out: int64;
-  total_fees_usd: int64;
-  net_pnl_usd: int64;
-  leg1_count: nat64;
-  leg2_count: nat64;
-  drain_count: nat64;
-  rumi_count: nat64;
-  icpswap_count: nat64;
-  unpaired_drain_usd: int64;
-  unpaired_drain_sold_usd: int64;
+type HttpRequest = record {
+  url : text;
+  method : text;
+  body : blob;
+  headers : vec record { text; text };
 };
-
+type HttpResponse = record {
+  body : blob;
+  headers : vec record { text; text };
+  status_code : nat16;
+};
+// `config` is `BotConfigInput`, not `BotConfig` — see that type's doc
+// comment. A caller built against the pre-Strategy-T interface omits the
+// 14 `strategy_t_*` fields entirely; `into_full_config` resolves those to
+// the same inert defaults `BotState::default()` already establishes,
+// since a genuinely fresh install has no prior config to preserve.
+type InitArgs = record { config : BotConfigInput };
 type LegType = variant {
   Leg1;
   Leg2;
   Drain;
+  // Strategy S: ICP inventory top-up bought from the best stable pool
+  // ahead of a reverse-direction (ICP→BOB→icUSD) trade. Appended after
+  // Drain — candid-append-safe, old logs decode unchanged.
   TopUp;
 };
-
-type TradeLeg = record {
-  timestamp: nat64;
-  leg_type: LegType;
-  dex: text;
-  sold_token: text;
-  sold_amount: nat64;
-  bought_token: text;
-  bought_amount: nat64;
-  sold_usd_value: int64;
-  bought_usd_value: int64;
-  fees_usd: int64;
+type MutationLockV1 = record {
+  owner : MutationOwnerV1;
+  operation_id : text;
+  acquired_at_ns : nat64;
+  reconciliation_required : bool;
 };
-
-type CycleSnapshot = record {
-  timestamp: nat64;
-  rumi_icp_price_3usd: nat64;
-  rumi_icp_price_usd: nat64;
-  icpswap_icp_price_ckusdc: nat64;
-  virtual_price: nat64;
-  spread_a_bps: int32;
-  icpswap_icp_price_icusd: nat64;
-  spread_b_bps: int32;
-  balance_icp: nat64;
-  balance_3usd: nat64;
-  balance_ckusdc: nat64;
-  balance_ckusdt: nat64;
-  balance_icusd: nat64;
-  icpswap_icp_price_ckusdt: nat64;
-  spread_c_bps: int32;
-  spread_d_bps: int32;
-  spread_f_bps: int32;
-  spread_k_bps: int32;
-  spread_l_bps: int32;
-  spread_m_bps: int32;
-  spread_n_bps: int32;
-  spread_o_bps: int32;
-  spread_p_bps: int32;
-  spread_q_bps: int32;
-  spread_r_bps: int32;
-  partydex_icp_price_ckusdc: nat64;
-  partydex_icp_price_ckusdt: nat64;
-  bob_pool_price_icusd_per_bob: nat64;
-  bob_ref_price_icusd_per_bob: nat64;
-  spread_s_bps: int64;
-  balance_bob: nat64;
-  traded: bool;
-  strategy_used: text;
+type MutationOwnerV1 = variant {
+  LegacyMigration;
+  GenericWithdrawal;
+  RouteExecution;
+  RetiredVenueRecovery;
+  VolumeOperation;
 };
-
-type ErrorRecord = record {
-  timestamp: nat64;
-  message: text;
+type ObservationAccumulatorV1 = record {
+  quote_call_budget_sufficient : bool;
+  observation_id : text;
+  started_at_ns : nat64;
+  candidates_evaluated : nat64;
+  completed_at_ns : opt nat64;
+  total_work_items : nat64;
+  best_icp_candidate : opt RouteCandidateReportV1;
+  provisional_best_stable_candidate : opt RouteCandidateReportV1;
+  incident : opt text;
+  next_cursor : nat64;
+  quote_calls_made : nat64;
+  route_count : nat32;
+  full_fill_rejections : nat64;
+  best_stable_candidate : opt RouteCandidateReportV1;
+  required_quote_calls : nat64;
+  provisional_best_icp_candidate : opt RouteCandidateReportV1;
+  scan_complete : bool;
 };
-
-type ActivityRecord = record {
-  timestamp: nat64;
-  category: text;
-  message: text;
+type ObservationBatchResultV1 = record {
+  observation : ObservationAccumulatorV1;
+  candidates : vec RouteCandidateReportV1;
 };
-
-type HttpRequest = record {
-  method: text;
-  url: text;
-  headers: vec record { text; text };
-  body: blob;
+type ObservationStartV1 = record {
+  quote_call_budget_sufficient : bool;
+  observation_id : text;
+  route_size_count : nat64;
+  next_cursor : nat64;
+  route_count : nat32;
+  required_quote_calls : nat64;
 };
-
-type HttpResponse = record {
-  status_code: nat16;
-  headers: vec record { text; text };
-  body: blob;
+type OwnershipReservationV1 = record {
+  active : bool;
+  whole_asset_freeze : bool;
+  reservation_id : text;
+  asset : Asset;
+  owner : MutationOwnerV1;
+  kind : ReservationKindV1;
+  amount_native : nat64;
+  operation_id : text;
+  reconciled_at_ns : nat64;
 };
-
+// Records the pool Strategy S acquired BOB through after a successful
+// leg 1. Stage-1 retirement: this field's presence now triggers
+// `legacy_route_freeze_reason`'s freeze on BOB spending only (not ICP)
+// until an operator resolves the incident manually (see Section 11).
+type PendingBobExit = record {
+  // BOB received by leg 1 (8 dec).
+  bob_amount : nat64;
+  entry_pool : BobPool;
+};
+// Records the intended exit pool after a successful Leg 1, so the drain
+// can prefer it (and avoid draining back into the entry pool).
+type PendingExit = record {
+  entry_pool : Pool;
+  timestamp : nat64;
+  // ICP received by Leg1 — drain must not exceed this amount.
+  icp_amount : nat64;
+  intended_exit_pool : Pool;
+};
+// Identifies a specific liquidity pool for drain routing.
+type Pool = variant {
+  RumiThreeUsd;
+  IcpswapThreeUsd;
+  // PartyDEX ICP/ckUSDC pool. Label-only in PR2a — NOT wired into drain
+  // candidates (PartyDEX legs always settle ICP back to the main balance,
+  // so existing ICPSwap/Rumi drain already covers recovery).
+  PartyDexIcpCkusdc;
+  // PartyDEX ICP/ckUSDT pool. Label-only in PR2a — see PartyDexIcpCkusdc.
+  PartyDexIcpCkusdt;
+  IcpswapCkusdc;
+  IcpswapCkusdt;
+  IcpswapIcusd;
+};
+type PoolControlV1 = record { enabled : bool; pool_id : text };
+// Live health snapshot for a single volume pool. `skip_reason` is the first
+// gate that would prevent the pool from trading in the next cycle, or None if
+// it would proceed. Populated by `get_bot_health` — mirrors the gate order in
+// `volume::run_volume_cycle`.
+type PoolHealth = record {
+  input_balance : opt nat64;
+  daily_cost_usd : int64;
+  skip_reason : opt text;
+  pool : VolumePool;
+  daily_cost_cap_usd : nat64;
+  last_price : opt nat64;
+  current_price : opt nat64;
+  min_required_native : opt nat64;
+  enabled : bool;
+  trade_size_usd : nat64;
+  next_direction : VolumeDirection;
+};
+type PoolQuote = record { estimated_output : nat64 };
 type PriceInfo = record {
-  rumi_icp_price_3usd: nat64;
-  rumi_icp_price_usd_6dec: nat64;
-  icpswap_icp_price_ckusdc: nat64;
-  virtual_price: nat64;
-  spread_bps: int32;
-  icpswap_icusd_icp_price: nat64;
-  strategy_b_spread_bps: int32;
+  virtual_price : nat64;
+  icpswap_icp_price_ckusdc : nat64;
+  spread_bps : int32;
+  icpswap_icusd_icp_price : nat64;
+  rumi_icp_price_3usd : nat64;
+  rumi_icp_price_usd_6dec : nat64;
+  strategy_b_spread_bps : int32;
 };
-
-type CandidateResult = record {
-  input_amount: nat64;
-  icp_amount: nat64;
-  output_amount: nat64;
-  profit_usd: int64;
+// Anonymous-safe subset of `BotHealthReport`: bare stuck-state flags only —
+// no balances, no principals, no config. Returned by `get_public_health`.
+type PublicHealth = record {
+  arb_paused : bool;
+  // True if either stranded pot (ICP or BOB) is non-zero.
+  has_stranded_volume_funds : bool;
+  has_pending_bob_exit : bool;
+  volume_paused : bool;
+  has_pending_exit : bool;
 };
-
-type DryRunResult = record {
-  should_trade: bool;
-  direction: opt Direction;
-  spread_bps: int32;
-  rumi_price_usd: nat64;
-  icpswap_price_usd: nat64;
-  virtual_price: nat64;
-  optimal_input_amount: nat64;
-  optimal_input_token: opt Token;
-  expected_icp_amount: nat64;
-  expected_output_amount: nat64;
-  expected_output_token: opt Token;
-  expected_profit_usd: int64;
-  candidates_evaluated: vec CandidateResult;
-  balance_3usd: nat64;
-  balance_ckusdc: nat64;
-  message: text;
+type QuoteLegReportV1 = record {
+  to : Asset;
+  wallet_before : nat;
+  wallet_after : nat;
+  gross_output : nat;
+  venue_input : nat;
+  from : Asset;
+  entry_ledger_fee : nat;
+  output_ledger_fee : nat;
+  full_fill : bool;
+  edge_id : text;
 };
-
-// One of the three par-valued stablecoins Strategy T routes between.
-type StrategyTToken = variant {
-  IcUsd;
-  CkUsdt;
-  CkUsdc;
+type ReconciliationEvidenceV1 = record {
+  evidence_kind : text;
+  source_reference : text;
+  observed_at_ns : nat64;
+  amount_native : nat64;
 };
-
+type VenueKind = variant { IcpSwap; Rumi3Pool };
+type RouteExecutionDetailV1 = record {
+  asset_path : vec Asset;
+  legs : vec RouteExecutionLegV1;
+  detail_available : bool;
+  "record" : ExecutionRecordV1;
+};
+type RouteExecutionLegStatusV1 = variant {
+  Quoted;
+  Refunded;
+  Prepared;
+  Submitted;
+  ReconciliationRequired;
+  Aborted;
+  HeldInventory;
+  Settled;
+  RejectedBeforeDebit;
+  AwaitingSettlement;
+};
+type RouteExecutionLegV1 = record {
+  to : Asset;
+  refund_credit_native : opt nat64;
+  leg_index : nat8;
+  status : RouteExecutionLegStatusV1;
+  minimum_output_native : nat64;
+  submitted_at_ns : opt nat64;
+  venue : VenueKind;
+  from : Asset;
+  prepared_at_ns : opt nat64;
+  input_fee_native : nat64;
+  actual_output_credit_native : opt nat64;
+  actual_input_debit_native : opt nat64;
+  quoted_output_native : opt nat64;
+  evidence : vec ReconciliationEvidenceV1;
+  incident : opt text;
+  pool_principal : principal;
+  settled_at_ns : opt nat64;
+  quoted_input_native : nat64;
+  // Exact venue request amount; unavailable for pre-detail historical records.
+  requested_input_native : opt nat64;
+  pool_id : text;
+  reconciled_at_ns : opt nat64;
+  actual_effective_input_native : opt nat64;
+  edge_id : text;
+  output_fee_native : nat64;
+};
+type ReservationKindV1 = variant {
+  ActiveRoute;
+  LegacyFreeze;
+  HeldPosition;
+  NonRoute;
+};
+type Result = variant { Ok : ExecutionRecordV1; Err : text };
+type Result_1 = variant { Ok; Err : text };
+type Result_2 = variant { Ok : RouteExecutionDetailV1; Err : text };
+type Result_3 = variant { Ok : vec HeldPositionV1; Err : text };
+type Result_4 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
+type Result_5 = variant { Ok : vec OwnershipReservationV1; Err : text };
+type Result_6 = variant { Ok : RuntimeStatus; Err : text };
+type Result_7 = variant { Ok : vec ExecutionRecordV1; Err : text };
+type Result_8 = variant { Ok : ObservationBatchResultV1; Err : text };
+type Result_9 = variant { Ok : record { nat64; nat64 }; Err : text };
+type Result_10 = variant { Ok : ObservationStartV1; Err : text };
+type RouteArbConfigV1 = record {
+  max_icp_principal_e8s : nat64;
+  asset_controls : vec AssetControlV1;
+  quote_max_age_ns : nat64;
+  max_stable_principal_usd_6dec : nat64;
+  min_icp_profit_bps : nat32;
+  min_icp_profit_e8s : nat64;
+  stable_book_enabled : bool;
+  max_open_held_positions : nat16;
+  max_route_legs : nat8;
+  settlement_timeout_ns : nat64;
+  max_open_non_route_reservations : nat16;
+  enabled : bool;
+  max_execution_record_bytes : nat32;
+  max_concurrent_quote_calls : nat8;
+  pool_controls : vec PoolControlV1;
+  max_reconciliation_evidence_items : nat8;
+  inventory_bands : vec AssetInventoryBandV1;
+  max_terminal_execution_records : nat32;
+  max_quote_calls_per_observation : nat16;
+  reconciliation_queries_per_cycle : nat8;
+  icp_book_enabled : bool;
+  stable_size_ladder : vec nat64;
+  dry_run : bool;
+  min_stable_profit_bps : nat32;
+  icp_size_ladder : vec nat64;
+  min_stable_profit_usd_6dec : nat64;
+};
+type RouteArbStatusV1 = record {
+  config_incident : opt text;
+  config_valid : bool;
+  execution_compiled_in : bool;
+  live_execution_authorized : bool;
+  route_count : nat32;
+};
+type RouteCandidateReportV1 = record {
+  asset_path : vec Asset;
+  size_ladder_index : nat8;
+  end_asset : Asset;
+  net_profit_bps : int64;
+  legs : vec QuoteLegReportV1;
+  allowance_status : text;
+  route_id : text;
+  principal_native : nat;
+  par_assumption : bool;
+  start_asset : Asset;
+  candidate_class : CandidateClass;
+  canonical_cycle_id : opt text;
+  quote_timestamp_ns : nat64;
+  eligible : bool;
+  rejection_reason : opt text;
+  inventory_effect : text;
+  venue_edges : vec text;
+  full_fill : bool;
+  net_profit_native : int64;
+};
+type RuntimeStatus = record {
+  last_error : opt text;
+  compiled_support : bool;
+  // Stable-par USD6 or ICP e8s, based on attributable completed movements.
+  last_realized_profit : opt int;
+  enabled : bool;
+  dry_run : bool;
+  last_tick_ns : nat64;
+  last_profit_class : opt CandidateClass;
+  live_authorized : bool;
+};
+type StrategyTDryRunResult = record {
+  // Highest `economic_profit_usd` among candidates that ALSO have
+  // `allowance_status == Sufficient/NotRequired` AND `inventory_eligible`.
+  // `None` if no candidate is both profitable and currently executable.
+  best_executable : opt CandidateReport;
+  // Highest `economic_profit_usd` among fully-quoted candidates that
+  // clear the profit threshold — regardless of allowance/inventory
+  // eligibility. A profitable route must never disappear from this
+  // list just because it isn't executable today.
+  best_economic : opt CandidateReport;
+  candidates : vec CandidateReport;
+};
 // Which ICPSwap pool connects a given unordered pair of Strategy T
-// stablecoins.
+// stablecoins. Each of the three pairs among {IcUsd, CkUsdt, CkUsdc} has
+// exactly one pool (verified live 2026-09-02/03 `metadata` calls).
 type StrategyTPool = variant {
+  // eb25l-dyaaa-aaaar-qb4lq-cai — token0=icUSD, token1=ckUSDC.
   IcusdCkusdc;
+  // jogrm-gqaaa-aaaar-qcg2a-cai — token0=ckUSDT, token1=icUSD.
   IcusdCkusdt;
+  // heq6n-fyaaa-aaaag-qkcpq-cai — token0=ckUSDT, token1=ckUSDC.
   CkusdtCkusdc;
 };
-
-type CandidateReport = record {
-  start: StrategyTToken;
-  rumi_out: StrategyTToken;
-  closing: opt StrategyTPool;
-  start_amount_native: nat64;
-  economic_profit_usd: int64;
-  meets_profit_threshold: bool;
-  allowance_status: text;
-  inventory_eligible: bool;
-  inventory_note: text;
-  fill_ok: bool;
-  fill_note: text;
+// One of the three par-valued stablecoins Strategy T routes between.
+// Rumi 3pool coin index is fixed by the pool's own token ordering
+// (verified live 2026-09-02/03): IcUsd=0, CkUsdt=1, CkUsdc=2.
+type StrategyTToken = variant { IcUsd; CkUsdc; CkUsdt };
+type Token = variant { CkUSDC; ThreeUSD };
+type TradeLeg = record {
+  dex : text;
+  fees_usd : int64;
+  sold_token : text;
+  bought_amount : nat64;
+  timestamp : nat64;
+  sold_usd_value : int64;
+  leg_type : LegType;
+  sold_amount : nat64;
+  bought_usd_value : int64;
+  bought_token : text;
 };
-
-type StrategyTDryRunResult = record {
-  candidates: vec CandidateReport;
-  best_economic: opt CandidateReport;
-  best_executable: opt CandidateReport;
+type TradeRecord = record {
+  virtual_price : nat64;
+  input_amount : nat64;
+  direction : Direction;
+  ledger_fees_usd : int64;
+  spread_bps : nat32;
+  net_profit_usd : int64;
+  output_amount : nat64;
+  timestamp : nat64;
+  icp_amount : nat64;
+  input_token : Token;
+  output_token : Token;
 };
-
-type InitArgs = record {
-  config: BotConfigInput;
+type TradeSummary = record {
+  unpaired_drain_sold_usd : int64;
+  unpaired_drain_usd : int64;
+  total_usd_out : int64;
+  total_legs : nat64;
+  drain_count : nat64;
+  total_fees_usd : int64;
+  total_usd_in : int64;
+  leg1_count : nat64;
+  net_pnl_usd : int64;
+  rumi_count : nat64;
+  leg2_count : nat64;
+  icpswap_count : nat64;
 };
-
-type VolumePool = variant { IcusdIcp; ThreeUsdIcp; IcusdBob };
-
-type VolumeDirection = variant { BuyIcp; SellIcp; BuyBob; SellBob };
-
-type VolumeTradeType = variant { PingPong; Rebalance };
-
+type VolumeDirection = variant {
+  // icUSD/BOB pool: spend icUSD to buy BOB.
+  BuyBob;
+  BuyIcp;
+  // icUSD/BOB pool: sell BOB for icUSD.
+  SellBob;
+  SellIcp;
+};
+type VolumePool = variant {
+  // icUSD/BOB ICPSwap pool. Ships inert (enabled=false, pool anonymous)
+  // until an admin enables it and sets the pool — see `VolumePoolConfig::default()`.
+  IcusdBob;
+  IcusdIcp;
+  ThreeUsdIcp;
+};
 type VolumePoolConfig = record {
-    enabled: bool;
-    idle_threshold_bps: nat64;
-    trade_size_usd: nat64;
-    trade_variance_pct: nat64;
-    daily_cost_cap_usd: nat64;
+  daily_cost_cap_usd : nat64;
+  idle_threshold_bps : nat64;
+  enabled : bool;
+  trade_size_usd : nat64;
+  trade_variance_pct : nat64;
 };
-
 type VolumePoolState = record {
-    last_price: opt nat64;
-    next_direction: VolumeDirection;
-    trade_count: nat64;
-    total_volume_usd: nat64;
-    total_cost_usd: int64;
-    daily_cost_usd: int64;
+  daily_cost_usd : int64;
+  total_volume_usd : nat64;
+  last_price : opt nat64;
+  total_cost_usd : int64;
+  next_direction : VolumeDirection;
+  trade_count : nat64;
 };
-
 type VolumePoolStatus = record {
-    config: VolumePoolConfig;
-    state: VolumePoolState;
+  state : VolumePoolState;
+  config : VolumePoolConfig;
 };
-
 type VolumeStats = record {
-    volume_paused: bool;
-    interval_secs: nat64;
-    daily_spend_usd: int64;
-    daily_cost_cap_usd_icusd: nat64;
-    daily_cost_cap_usd_3usd: nat64;
-    icusd_icp: VolumePoolStatus;
-    three_usd_icp: VolumePoolStatus;
-    daily_cost_cap_usd_icusd_bob: nat64;
-    icusd_bob: VolumePoolStatus;
-    total_trade_count: nat64;
+  daily_cost_cap_usd_icusd_bob : nat64;
+  daily_cost_cap_usd_3usd : nat64;
+  interval_secs : nat64;
+  icusd_bob : VolumePoolStatus;
+  icusd_icp : VolumePoolStatus;
+  daily_spend_usd : int64;
+  volume_paused : bool;
+  total_trade_count : nat64;
+  three_usd_icp : VolumePoolStatus;
+  daily_cost_cap_usd_icusd : nat64;
 };
-
 type VolumeTradeLeg = record {
-    timestamp: nat64;
-    pool: VolumePool;
-    direction: VolumeDirection;
-    trade_type: VolumeTradeType;
-    token_in: principal;
-    token_out: principal;
-    amount_in: nat64;
-    amount_out: nat64;
-    cost_usd: int64;
-    price_before: nat64;
-    price_after: nat64;
+  direction : VolumeDirection;
+  price_after : nat64;
+  cost_usd : int64;
+  token_in : principal;
+  price_before : nat64;
+  pool : VolumePool;
+  trade_type : VolumeTradeType;
+  amount_out : nat64;
+  timestamp : nat64;
+  amount_in : nat64;
+  token_out : principal;
 };
-
+type VolumeTradeType = variant { Rebalance; PingPong };
+type WalletAssetBalanceV1 = record {
+  expected_decimals : nat8;
+  asset : Asset;
+  observed_decimals : opt nat8;
+  error : opt text;
+  ledger : principal;
+  balance_native : opt nat;
+  metadata_valid : bool;
+  symbol : text;
+  ledger_fee_native : opt nat;
+};
 service : (InitArgs) -> {
-  get_route_arb_config_v1: () -> (RouteArbConfigV1) query;
-  set_route_arb_config_v1: (RouteArbConfigV1) -> (variant { Ok; Err: text });
-  get_route_arb_status_v1: () -> (RouteArbStatusV1) query;
-  get_route_wallet_balances_v1: () -> (vec WalletAssetBalanceV1);
-  start_route_observation_v1: () -> (variant { Ok: ObservationStartV1; Err: text });
-  quote_route_observation_batch_v1: (nat64, nat16) -> (variant { Ok: ObservationBatchResultV1; Err: text });
-  get_route_observation_v1: () -> (opt ObservationAccumulatorV1) query;
-  get_route_observations_v1: (nat64, nat64) -> (variant { Ok: vec ObservationAccumulatorV1; Err: text }) query;
-  get_best_route_candidates_v1: () -> (BestRouteCandidatesV1) query;
-  get_route_mutation_lock_v1: () -> (opt MutationLockV1) query;
-  get_route_reservations_v1: (nat64, nat64) -> (variant { Ok: vec OwnershipReservationV1; Err: text }) query;
-  get_held_positions_v1: (nat64, nat64) -> (variant { Ok: vec HeldPositionV1; Err: text }) query;
-  get_current_route_execution_v1: () -> (opt ExecutionRecordV1) query;
-  get_terminal_route_executions_v1: (nat64, nat64) -> (variant { Ok: vec ExecutionRecordV1; Err: text }) query;
-  prepare_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
-  advance_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
-  reconcile_route_execution_v1: (text) -> (variant { Ok: ExecutionRecordV1; Err: text });
-  // Query methods
-  get_config: () -> (BotConfig) query;
-  get_trade_history: (nat64, nat64) -> (vec TradeRecord) query;
-  get_trade_legs: (nat64, nat64) -> (vec TradeLeg) query;
-  get_summary: () -> (TradeSummary) query;
-  get_errors: (nat64, nat64) -> (vec ErrorRecord) query;
-  get_activity_log: (nat64, nat64) -> (vec ActivityRecord) query;
-  get_snapshots: (nat64, nat64) -> (vec CycleSnapshot) query;
-  http_request: (HttpRequest) -> (HttpResponse) query;
-
-  // Auth
-  is_admin: (principal) -> (bool) query;
-  add_admin: (principal) -> ();
-  remove_admin: (principal) -> ();
-
-  // Prices
-  get_prices: () -> (PriceInfo);
-
-  // Admin methods
-  set_config: (BotConfigInput) -> ();
-  pause: () -> ();
-  resume: () -> ();
-  clear_cycle_lock: () -> ();
-  set_rumi_amm_paused: (bool) -> (variant { Ok; Err: text });
-  setup_approvals: () -> (text);
-  withdraw: (principal, principal, nat64) -> ();
-  recover_partydex_balance: (principal) -> (variant { Ok: record { nat64; nat64 }; Err: text });
-  backfill_trade_legs: (vec TradeLeg) -> ();
-  manual_arb_cycle: () -> ();
-  execute_strategy_a: () -> ();
-  execute_strategy_b: () -> ();
-  execute_strategy_c: () -> ();
-  execute_strategy_d: () -> ();
-  execute_strategy_f: () -> ();
-  execute_strategy_k: () -> ();
-  execute_strategy_l: () -> ();
-  execute_strategy_m: () -> ();
-  execute_strategy_n: () -> ();
-  execute_strategy_o: () -> ();
-  execute_strategy_p: () -> ();
-  execute_strategy_q: () -> ();
-  execute_strategy_r: () -> ();
-  execute_strategy_s: () -> ();
-  dry_run_arb_cycle: () -> (DryRunResult);
-  dry_run_strategy_b: () -> (DryRunResult);
-  dry_run_strategy_c: () -> (DryRunResult);
-  dry_run_strategy_d: () -> (DryRunResult);
-  dry_run_strategy_f: () -> (DryRunResult);
-  dry_run_strategy_k: () -> (DryRunResult);
-  dry_run_strategy_l: () -> (DryRunResult);
-  dry_run_strategy_m: () -> (DryRunResult);
-  dry_run_strategy_n: () -> (DryRunResult);
-  dry_run_strategy_o: () -> (DryRunResult);
-  dry_run_strategy_p: () -> (DryRunResult);
-  dry_run_strategy_q: () -> (DryRunResult);
-  dry_run_strategy_r: () -> (DryRunResult);
-  dry_run_strategy_t: () -> (StrategyTDryRunResult);
-
-  // 3pool operations (coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC)
-  pool_deposit: (nat8, nat64, nat64) -> ();
-  pool_redeem: (nat8, nat64, nat64) -> ();
-  pool_quote_deposit: (nat8, nat64) -> (record { estimated_output: nat64 });
-  pool_quote_redeem: (nat8, nat64) -> (record { estimated_output: nat64 });
-
-  // 3pool direct swap (stable ↔ stable)
-  pool_exchange: (nat8, nat8, nat64, nat64) -> ();
-  pool_quote_exchange: (nat8, nat8, nat64) -> (record { estimated_output: nat64 });
-
-  // Rumi AMM manual swap (ICP ↔ 3USD)
-  rumi_quote: (principal, nat64) -> (record { estimated_output: nat64 });
-  rumi_manual_swap: (principal, nat64, nat64) -> ();
-
-  // Volume bot
-  set_volume_config: (VolumePool, VolumePoolConfig) -> (variant { Ok; Err: text });
-  set_volume_global: (nat64, nat64) -> ();
-  pause_volume: () -> ();
-  resume_volume: () -> ();
-  fund_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
-  withdraw_volume_subaccount: (principal, nat64) -> (variant { Ok; Err: text });
-  trigger_volume_cycle: () -> (text);
-  set_slippage_bps: (nat64) -> (variant { Ok; Err: text });
-  set_arb_interval_secs: (nat64) -> (variant { Ok; Err: text });
-  set_icp_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
-  set_bob_inventory_band: (nat64, nat64) -> (variant { Ok; Err: text });
-  set_bob_pools: (principal, principal) -> (variant { Ok; Err: text });
-  set_bob_params: (nat64, nat64) -> (variant { Ok; Err: text });
-  set_bob_execution_enabled: (bool) -> (variant { Ok; Err: text });
-
-  // Strategy T (dry-run-only three-stablecoin router)
-  set_strategy_t_pools: (principal, principal, principal) -> (variant { Ok; Err: text });
-  set_strategy_t_enabled: (bool) -> ();
-  set_strategy_t_dry_run: (bool) -> ();
-  set_strategy_t_thresholds: (int64, nat32, nat64) -> (variant { Ok; Err: text });
-  set_strategy_t_icusd_band: (nat64, nat64) -> (variant { Ok; Err: text });
-  set_strategy_t_ckusdt_band: (nat64, nat64) -> (variant { Ok; Err: text });
-  set_strategy_t_ckusdc_band: (nat64, nat64) -> (variant { Ok; Err: text });
-
-  get_bot_health: () -> (BotHealthReport);
-  get_public_health: () -> (PublicHealth) query;
-  trigger_volume_rebalance: () -> ();
-  volume_swap: (bool, nat64, nat64) -> ();
-  get_volume_stats: () -> (VolumeStats) query;
-  get_volume_trades: (nat64, nat64) -> (vec VolumeTradeLeg) query;
-
-  // Cycles
-  cycles_balance: () -> (nat) query;
+  // Add an admin principal (owner only)
+  add_admin : (principal) -> ();
+  advance_route_execution_v1 : (text) -> (Result);
+  // One-time backfill: append historical trade legs to the log.
+  // NOTE: Post stable-memory migration, this now APPENDS (previously prepended).
+  // Chronological ordering of historical entries is not preserved.
+  backfill_trade_legs : (vec TradeLeg) -> ();
+  // Admin escape hatch for a stuck arb-cycle lock. Cycles gate on an in-progress
+  // flag released by a Drop guard; a wasm trap after the flag commits unwinds
+  // without running Drop, wedging every future cycle and manual strategy run
+  // until an upgrade. This force-clears the flag (and per-cycle caches) so cycles
+  // can resume without redeploying.
+  clear_cycle_lock : () -> ();
+  cycles_balance : () -> (nat) query;
+  dry_run_arb_cycle : () -> (DryRunResult);
+  dry_run_strategy_b : () -> (DryRunResult);
+  dry_run_strategy_c : () -> (DryRunResult);
+  dry_run_strategy_d : () -> (DryRunResult);
+  dry_run_strategy_f : () -> (DryRunResult);
+  dry_run_strategy_k : () -> (DryRunResult);
+  dry_run_strategy_l : () -> (DryRunResult);
+  dry_run_strategy_m : () -> (DryRunResult);
+  dry_run_strategy_n : () -> (DryRunResult);
+  dry_run_strategy_o : () -> (DryRunResult);
+  dry_run_strategy_p : () -> (DryRunResult);
+  dry_run_strategy_q : () -> (DryRunResult);
+  dry_run_strategy_r : () -> (DryRunResult);
+  dry_run_strategy_t : () -> (StrategyTDryRunResult);
+  execute_strategy_a : () -> ();
+  execute_strategy_b : () -> ();
+  execute_strategy_c : () -> ();
+  execute_strategy_d : () -> ();
+  execute_strategy_f : () -> ();
+  execute_strategy_k : () -> ();
+  execute_strategy_l : () -> ();
+  execute_strategy_m : () -> ();
+  execute_strategy_n : () -> ();
+  execute_strategy_o : () -> ();
+  execute_strategy_p : () -> ();
+  execute_strategy_q : () -> ();
+  execute_strategy_r : () -> ();
+  // Admin override for Strategy S — executes regardless of
+  // bob_execution_enabled, matching A–R force-execute semantics.
+  execute_strategy_s : () -> ();
+  fund_volume_subaccount : (principal, nat64) -> (Result_1);
+  get_activity_log : (nat64, nat64) -> (vec ActivityRecord) query;
+  get_best_route_candidates_v1 : () -> (BestRouteCandidatesV1) query;
+  get_bot_health : () -> (BotHealthReport);
+  get_config : () -> (BotConfig) query;
+  get_current_route_execution_v1 : () -> (opt ExecutionRecordV1) query;
+  get_errors : (nat64, nat64) -> (vec ErrorRecord) query;
+  get_held_positions_v1 : (nat64, nat64) -> (Result_3) query;
+  get_prices : () -> (PriceInfo);
+  // Anonymous-safe stuck-state flags for the logged-out dashboard wedge
+  // banner. Booleans only — details require the admin-gated `get_bot_health`.
+  get_public_health : () -> (PublicHealth) query;
+  get_route_arb_config_v1 : () -> (RouteArbConfigV1) query;
+  get_route_arb_status_v1 : () -> (RouteArbStatusV1) query;
+  get_route_execution_detail_v1 : (text) -> (Result_2) query;
+  get_route_mutation_lock_v1 : () -> (opt MutationLockV1) query;
+  get_route_observation_v1 : () -> (opt ObservationAccumulatorV1) query;
+  get_route_observations_v1 : (nat64, nat64) -> (Result_4) query;
+  get_route_reservations_v1 : (nat64, nat64) -> (Result_5) query;
+  get_route_runtime_status_v1 : () -> (Result_6) query;
+  get_route_wallet_balances_v1 : () -> (vec WalletAssetBalanceV1);
+  get_snapshots : (nat64, nat64) -> (vec CycleSnapshot) query;
+  get_summary : () -> (TradeSummary) query;
+  get_terminal_route_executions_v1 : (nat64, nat64) -> (Result_7) query;
+  get_trade_history : (nat64, nat64) -> (vec TradeRecord) query;
+  get_trade_legs : (nat64, nat64) -> (vec TradeLeg) query;
+  get_volume_stats : () -> (VolumeStats) query;
+  get_volume_trades : (nat64, nat64) -> (vec VolumeTradeLeg) query;
+  http_request : (HttpRequest) -> (HttpResponse) query;
+  // Check if a principal is an authorized admin (used by dashboard to show/hide controls)
+  is_admin : (principal) -> (bool) query;
+  manual_arb_cycle : () -> ();
+  pause : () -> ();
+  pause_volume : () -> ();
+  // Deposit a single stablecoin into the 3pool to mint 3USD LP tokens.
+  // coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC
+  pool_deposit : (nat8, nat64, nat64) -> ();
+  // Swap one stablecoin for another directly via the 3pool.
+  // coin_in/coin_out: 0=icUSD, 1=ckUSDT, 2=ckUSDC
+  pool_exchange : (nat8, nat8, nat64, nat64) -> ();
+  // Quote how much 3USD LP you'd get from depositing a stablecoin.
+  pool_quote_deposit : (nat8, nat64) -> (PoolQuote);
+  // Quote a direct stablecoin-to-stablecoin swap via the 3pool.
+  pool_quote_exchange : (nat8, nat8, nat64) -> (PoolQuote);
+  // Quote how much stablecoin you'd get from redeeming 3USD LP.
+  pool_quote_redeem : (nat8, nat64) -> (PoolQuote);
+  // Redeem 3USD LP tokens for a single stablecoin.
+  // coin_index: 0=icUSD, 1=ckUSDT, 2=ckUSDC
+  pool_redeem : (nat8, nat64, nat64) -> ();
+  prepare_route_execution_v1 : (text) -> (Result);
+  quote_route_observation_batch_v1 : (nat64, nat16) -> (Result_8);
+  reconcile_route_execution_v1 : (text) -> (Result);
+  // Manual recovery lever for funds stranded INSIDE a PartyDEX pool's internal
+  // balance (e.g. a trade settled but the post-trade withdraw failed). Sweeps
+  // the full available base and quote balances back to the bot's main account.
+  // Returns `(base_withdrawn, quote_withdrawn)` in native units. The normal
+  // sweep-entire-available-balance on the next successful trade auto-recovers
+  // otherwise; this is the escape hatch for the "pool never trades again" case.
+  recover_partydex_balance : (principal) -> (Result_9);
+  // Remove an admin principal (owner only)
+  remove_admin : (principal) -> ();
+  resume : () -> ();
+  resume_volume : () -> ();
+  // Execute a Rumi AMM swap (ICP ↔ 3USD). token_in is the ledger of the token being sold.
+  rumi_manual_swap : (principal, nat64, nat64) -> ();
+  // Quote a Rumi AMM swap (ICP ↔ 3USD). token_in is the ledger of the token being sold.
+  rumi_quote : (principal, nat64) -> (PoolQuote);
+  set_arb_interval_secs : (nat64) -> (Result_1);
+  // Execution kill switch for Strategy S. Dry-run evaluation + dashboard
+  // surfacing run regardless of this flag once both BOB pools are configured;
+  // this only gates whether Strategy S can actually execute trades.
+  set_bob_execution_enabled : (bool) -> (Result_1);
+  // Sets the BOB inventory band (e8s, 8 decimals). Mirrors
+  // `set_icp_inventory_band` exactly: stored/settable/displayed config only —
+  // not wired into any trading or drain logic.
+  set_bob_inventory_band : (nat64, nat64) -> (Result_1);
+  // Sets Strategy S's sizing/gating knobs. Single method so the pair can't
+  // pass through an invalid intermediate state.
+  set_bob_params : (nat64, nat64) -> (Result_1);
+  // Sets both Strategy S pool principals in one call. Resets the resolved-
+  // ordering flag for any pool whose principal actually changes, so a
+  // re-pointed pool gets its token ordering re-probed on the next cycle
+  // instead of running with stale `icp_is_token0`/`icusd_is_token0` bits.
+  set_bob_pools : (principal, principal) -> (Result_1);
+  // `config` is `BotConfigInput`, not `BotConfig` — see that type's doc
+  // comment. A caller built against the pre-Strategy-T interface (old
+  // dashboard, old dfx-generated bindings, or any external tooling that
+  // hasn't picked up the 14 new fields) sends a payload with none of them
+  // set; `into_full_config` preserves whatever this canister's CURRENT
+  // config already has for those fields rather than resetting them to the
+  // hardcoded default, so a routine old-style config write can never
+  // silently wipe Strategy T settings made via `set_strategy_t_*`.
+  set_config : (BotConfigInput) -> ();
+  // Sets the ICP inventory band (e8s) the drain uses in place of the old fixed
+  // `ICP_RESERVE`. Floor: minimum working balance always left behind. Ceiling:
+  // steady-state skim threshold. Single method so the pair can't pass through
+  // an invalid intermediate state (e.g. floor temporarily above ceiling).
+  set_icp_inventory_band : (nat64, nat64) -> (Result_1);
+  set_route_arb_config_v1 : (RouteArbConfigV1) -> (Result_1);
+  set_route_runtime_authorized_v1 : (bool) -> (Result_6);
+  // Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
+  // (every strategy that trades against `rumi_amm`) without touching the
+  // other ICPSwap/PartyDEX cross-pool strategies or the global `paused` flag.
+  set_rumi_amm_paused : (bool) -> (Result_1);
+  set_slippage_bps : (nat64) -> (Result_1);
+  set_strategy_t_ckusdc_band : (nat64, nat64) -> (Result_1);
+  set_strategy_t_ckusdt_band : (nat64, nat64) -> (Result_1);
+  set_strategy_t_dry_run : (bool) -> ();
+  // Master enable switch for Strategy T. Dry-run evaluation (`dry_run_strategy_t`)
+  // runs once all three pool principals are non-anonymous, independent of
+  // this flag — there is no arb-cycle wiring for Strategy T in this build.
+  // This flag and `strategy_t_dry_run` exist for a future live-execution PR;
+  // this build has no live-trade path regardless of either value.
+  set_strategy_t_enabled : (bool) -> ();
+  set_strategy_t_icusd_band : (nat64, nat64) -> (Result_1);
+  // Sets the three Strategy T ICPSwap closing-pool principals.
+  //
+  // IMPORTANT: `strategy_t::ClosingPool::zero_for_one_from` hardcodes each
+  // pool's `token0`/`token1` ordering at compile time, asserted against the
+  // specific mainnet principals documented on `ClosingPool` (verified live
+  // 2026-09-02/03) — it is not runtime-probed. This setter only validates
+  // that the three principals are non-anonymous and pairwise distinct; it
+  // does NOT verify they are actually the correct, documented pools. Pointing
+  // this at a genuinely different pool (or transposing two of the three
+  // slots) will silently produce inverted `zeroForOne` swap quotes. Runtime
+  // `metadata` probing (matching the `icusd_token_ordering_resolved` /
+  // `ckusdt_token_ordering_resolved` pattern used elsewhere in `state.rs`)
+  // is out of scope here — re-pointing to different pools requires updating
+  // `strategy_t.rs` to match.
+  set_strategy_t_pools : (principal, principal, principal) -> (Result_1);
+  set_strategy_t_thresholds : (int64, nat32, nat64) -> (Result_1);
+  set_volume_config : (VolumePool, VolumePoolConfig) -> (Result_1);
+  set_volume_global : (nat64, nat64) -> ();
+  setup_approvals : () -> (text);
+  start_route_observation_v1 : () -> (Result_10);
+  trigger_volume_cycle : () -> (text);
+  trigger_volume_rebalance : () -> ();
+  // Swap ICP ↔ icUSD using the volume subaccount.
+  // Handles the full multi-hop route: ICP ↔ 3USD (Rumi AMM) ↔ icUSD (3pool).
+  // direction: "icp_to_icusd" or "icusd_to_icp"
+  volume_swap : (bool, nat64, nat64) -> ();
+  withdraw : (principal, principal, nat64) -> ();
+  withdraw_volume_subaccount : (principal, nat64) -> (Result_1);
 }
