@@ -213,15 +213,15 @@ pub fn get_durable_detail(
                 .filter(|execution| execution.record.execution_id == execution_id)
         });
     if let Some(execution) = runtime {
-        if let Some(detail) = &execution.detail {
-            return Ok(Some(detail.clone()));
-        }
+        return Ok(Some(
+            execution
+                .detail
+                .clone()
+                .unwrap_or_else(|| detail_for(execution)),
+        ));
     }
     if let Some(detail) = state::get_route_execution_detail(execution_id)? {
         return Ok(Some(detail));
-    }
-    if let Some(execution) = runtime {
-        return Ok(Some(detail_for(execution)));
     }
     Ok(None)
 }
