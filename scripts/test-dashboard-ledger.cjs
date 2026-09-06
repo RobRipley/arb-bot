@@ -23,6 +23,7 @@ function record(id = 'route-2') {
     phase: { Completed: null },
     planned_input_native: 40_000_000n,
     updated_at_ns: 1_700_000_000_000_000_000n,
+    candidate_class: { StablePar: null },
     realized_profit: option(550_000n),
   };
 }
@@ -88,7 +89,8 @@ function makeContext(actor, details = new Map()) {
     state: { expandedRows: new Set() },
     leg,
     routeOpt: option,
-    routeAssetLabel: asset => Object.keys(asset || {})[0] || '—',
+    routeAssetKey: asset => Object.keys(asset || {})[0] || '—',
+    routeAssetLabel: asset => ({ Icp: 'ICP', IcUsd: 'icUSD', CkUsdc: 'ckUSDC', CkUsdt: 'ckUSDT', CkBtc: 'ckBTC', CkEth: 'ckETH' }[Object.keys(asset || {})[0]] || '—'),
     routePhaseLabel: phase => Object.keys(phase || {})[0] || '—',
     variantKey: value => value && typeof value === 'object' ? Object.keys(value)[0] : '—',
     esc: value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
@@ -158,6 +160,28 @@ for (const count of [2, 3, 4, 6]) {
   assert.match(rendered, /Settlement evidence/);
 }
 
+context.entry = { ...record('stable-pnl'), candidate_class: { StablePar: null }, realized_profit: option(1_234_567n) };
+const stablePnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(stablePnl, /USD/);
+assert.match(stablePnl, /raw atoms \(asset unavailable\)/);
+context.entry = { ...record('icp-pnl'), candidate_class: { IcpReturning: null }, realized_profit: option(123_456_789n) };
+const icpPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(icpPnl, /ICP/);
+assert.doesNotMatch(icpPnl, /\$123/);
+
+context.executionDetail = detail('decimal-exec', 2, {
+  legs: [leg(0, 2, { from: { CkBtc: null }, to: { CkEth: null }, evidence: [{ evidence_kind: 'receipt', source_reference: 'tx-decimal', amount_native: 123456789n, observed_at_ns: 1n }] }), leg(1, 2)],
+});
+const decimalHtml = vm.runInContext('routeLegDetailHtml(executionDetail)', context);
+assert.match(decimalHtml, /ckBTC/);
+assert.match(decimalHtml, /ckETH/);
+assert.match(decimalHtml, /raw atoms/);
+assert.doesNotMatch(decimalHtml, /amount_native[^<]*native/);
+
+const specialId = vm.runInContext('routeLedgerEntryHtml({ ...entry, execution_id: "exec\' & <" })', context);
+assert.doesNotMatch(specialId, /onclick=.*exec/);
+assert.match(specialId, /data-ledger-execution-id=/);
+
 const unavailable = vm.runInContext('routeLegDetailHtml({ detail_available: false, legs: [] })', context);
 assert.match(unavailable, /Detailed legs were not recorded for this historical execution/);
 assert.match(unavailable, /Evidence unavailable for historical record/);
@@ -203,9 +227,21 @@ assert.match(summary, /aria-controls="ledger-detail-keyboard-exec"/);
   assert.equal(attempts, 1);
   assert.match(retryFixture.elements.get('ledger-detail-retry-exec').innerHTML, /Unavailable/);
   assert.match(retryFixture.elements.get('ledger-detail-retry-exec').innerHTML, /Retry/);
+  await vm.runInContext("toggleLedgerExecution('retry-exec')", retryFixture.context);
+  await vm.runInContext("toggleLedgerExecution('retry-exec')", retryFixture.context);
+  assert.equal(attempts, 1, 'collapse and reopen must keep failed detail cached');
   await vm.runInContext("toggleLedgerExecution('retry-exec', true)", retryFixture.context);
   assert.equal(attempts, 2);
   assert.match(retryFixture.elements.get('ledger-detail-retry-exec').innerHTML, /Leg 1 of 2/);
+
+  const unavailableFixture = makeContext(null);
+  unavailableFixture.elements.set('ledger-disclosure-unavailable-exec', { id: 'ledger-disclosure-unavailable-exec', hidden: false, textContent: '', attrs: { 'aria-expanded': 'false' }, getAttribute(name) { return this.attrs[name] || null; }, setAttribute(name, value) { this.attrs[name] = String(value); }, focus() { this.focused = true; } });
+  unavailableFixture.elements.set('ledger-detail-unavailable-exec', { id: 'ledger-detail-unavailable-exec', hidden: false, innerHTML: '', querySelector() { return this; } });
+  await vm.runInContext("toggleLedgerExecution('unavailable-exec')", unavailableFixture.context);
+  assert.match(unavailableFixture.elements.get('ledger-detail-unavailable-exec').innerHTML, /Unavailable/);
+  await vm.runInContext("toggleLedgerExecution('unavailable-exec')", unavailableFixture.context);
+  await vm.runInContext("toggleLedgerExecution('unavailable-exec')", unavailableFixture.context);
+  assert.match(unavailableFixture.elements.get('ledger-detail-unavailable-exec').innerHTML, /Unavailable/);
   console.log('dashboard ledger behavior tests passed');
 })().catch(error => {
   console.error(error);

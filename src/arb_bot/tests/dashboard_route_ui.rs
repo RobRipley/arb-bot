@@ -336,6 +336,8 @@ fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
         "get_route_execution_detail_v1",
         "routeExecutionDetails",
         "routeExecutionDetailLoads",
+        "data-ledger-execution-id",
+        "bindRouteLedgerDisclosureHandlers",
         "aria-expanded",
         "aria-controls",
         "Leg ${index + 1} of ${count}",
@@ -355,6 +357,7 @@ fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
         .next()
         .unwrap();
     assert!(!summary.contains("get_route_execution_detail_v1"), "summary rendering must not eagerly fetch detail");
+    assert!(!summary.contains("onclick="), "route execution IDs must use delegated handlers, not inline JS");
     assert!(!route_helpers
         .split("function routeLegDetailHtml")
         .nth(1)
@@ -363,6 +366,17 @@ fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
         .next()
         .unwrap()
         .contains("realized_profit"), "child legs must not render a second P&L");
+    for marker in [
+        "routeLedgerExecutions",
+        "ROUTE_LEDGER_PAGE_SIZE",
+        "ROUTE_LEDGER_MAX",
+        "loadRouteLedgerPage",
+        "routeLedgerIncomplete",
+        "Incomplete · bounded at",
+        "Stale · ${esc(sourceLastSuccessLabel(source))}",
+    ] {
+        assert!(DASHBOARD.contains(marker), "route ledger source missing marker: {marker}");
+    }
     for marker in [
         "Route execution history",
         "id=\"route-ledger-body\"",
@@ -376,4 +390,12 @@ fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
     let route_pos = ledger.find("Route execution history").unwrap();
     let legacy_pos = ledger.find("Legacy trade history").unwrap();
     assert!(route_pos < legacy_pos, "route executions must be the primary ledger section");
+    let legacy = ledger
+        .split("Legacy trade history")
+        .nth(1)
+        .unwrap()
+        .split("Activity log")
+        .next()
+        .unwrap();
+    assert_eq!(legacy.matches("<div").count(), legacy.matches("</div>").count(), "legacy card HTML must be balanced");
 }

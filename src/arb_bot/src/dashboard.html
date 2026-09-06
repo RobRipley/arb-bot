@@ -1471,6 +1471,10 @@
     let latestTerminalExecutions = [];
     let terminalExecutionsIncomplete = false;
     let terminalExecutionsLoadedCount = 0;
+    let routeLedgerPage = 0;
+    let routeLedgerHasMore = false;
+    let routeLedgerIncomplete = false;
+    let routeLedgerLoadedCount = 0;
     let routeDataRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
     let routeRuntimeAuthoritativeRefreshPromise = null;
@@ -1497,6 +1501,8 @@
     const ROUTE_RUNTIME_STALE_AFTER_MS = 30_000;
     const TERMINAL_EXECUTIONS_PAGE_SIZE = 100n;
     const TERMINAL_EXECUTIONS_MAX = 1000n;
+    const ROUTE_LEDGER_PAGE_SIZE = 25n;
+    const ROUTE_LEDGER_MAX = 10_000n;
     function createSourceState() {
       return { status: 'loading', value: null, error: null, lastSuccessMs: null, lastAttemptMs: null };
     }
@@ -1530,6 +1536,7 @@
       heldPositions: createSourceState(),
       currentExecution: createSourceState(),
       terminalExecutions: createSourceState(),
+      routeLedgerExecutions: createSourceState(),
       runtime: createSourceState(),
       wallet: createSourceState(),
       health: createSourceState(),
@@ -4668,6 +4675,20 @@
       const item = Array.isArray(value) ? routeOpt(value) : value;
       return item == null ? fallback : item;
     }
+    function routeLedgerAssetDecimals(asset) {
+      return ({ Icp: 8, IcUsd: 8, CkUsdc: 6, CkUsdt: 6, CkBtc: 8, CkEth: 18 })[routeAssetKey(asset)] ?? null;
+    }
+    function routeLedgerFormatAmount(value, decimals) {
+      const rawValue = typeof value === 'bigint' ? value.toString() : String(value);
+      const negative = rawValue.startsWith('-');
+      const raw = negative ? rawValue.slice(1) : rawValue;
+      if (!/^\d+$/.test(raw)) return 'Unavailable';
+      if (decimals === 0) return `${negative ? '-' : ''}${raw}`;
+      const padded = raw.padStart(decimals + 1, '0');
+      const whole = padded.slice(0, -decimals) || '0';
+      const fraction = padded.slice(-decimals).replace(/0+$/, '');
+      return `${negative ? '-' : ''}${whole}.${fraction || '0'}`;
+    }
     function routeLedgerPrincipalLabel(principal) {
       if (principal == null) return 'Unavailable';
       try { return typeof principal.toText === 'function' ? principal.toText() : String(principal); }
@@ -4675,12 +4696,13 @@
     }
     function routeLedgerAmount(value, asset, fallback = 'Unavailable') {
       const amount = routeLedgerTextOption(value, null);
-      return amount == null ? fallback : fmtTokAmt(amount, routeAssetLabel(asset));
+      const decimals = routeLedgerAssetDecimals(asset);
+      return amount == null || decimals == null ? fallback : `${routeLedgerFormatAmount(amount, decimals)} ${routeAssetLabel(asset)}`;
     }
     function routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired = false) {
       const rows = Array.isArray(evidence) ? evidence : [];
       if (!rows.length) return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v text-ter">${noEvidenceRequired ? 'No evidence required' : 'No evidence yet'}</span></div>`;
-      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')} · ${fmtTokAmt(item.amount_native, 'native')} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
+      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')} · raw atoms (asset association unavailable): ${esc(item.amount_native == null ? 'Unavailable' : item.amount_native)} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
     }
     function routeLedgerEvidenceGroupHtml(leg, label, matcher) {
       const evidence = (Array.isArray(leg.evidence) ? leg.evidence : []).filter(item => matcher.test(String(item.evidence_kind || '')));
@@ -4703,6 +4725,14 @@
       if (key === 'HeldInventory') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Partial / held inventory</span></div>';
       if (key === 'Aborted') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Aborted</span></div>';
       return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v text-ter">No incident recorded</span></div>';
+    }
+    function routeLedgerPnlHtml(record) {
+      const realized = routeLedgerTextOption(record.realized_profit, null);
+      if (realized == null) return '<span class="text-muted">Unavailable</span>';
+      const klass = variantKey(record.candidate_class);
+      if (klass === 'IcpReturning') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 8)} ICP</span>`;
+      if (klass === 'StablePar' || klass === 'StableSettledCrossAsset') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 6)} USD</span>`;
+      return '<span class="text-muted">Unavailable · profit unit unknown</span>';
     }
     function routeLegDetailHtml(detail) {
       if (!detail || detail.detail_available === false) return '<div class="ledger-detail-state">Detailed legs were not recorded for this historical execution. Evidence unavailable for historical record.</div>';
@@ -4728,7 +4758,7 @@
     }
     function routeLedgerDetailStateHtml(status, error, executionId) {
       if (status === 'loading') return '<div class="ledger-detail-state">Loading leg details…</div>';
-      if (status === 'failed') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''} <button type="button" class="btn btn-sm btn-ghost" onclick="toggleLedgerExecution('${esc(executionId)}', true)">Retry</button></div>`;
+      if (status === 'failed') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''} <button type="button" class="btn btn-sm btn-ghost" data-ledger-retry-execution-id="${esc(executionId)}">Retry</button></div>`;
       if (status === 'unavailable') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''}</div>`;
       return '<div class="ledger-detail-state">Unavailable</div>';
     }
@@ -4740,11 +4770,10 @@
       const detailHtml = expanded
         ? (cached && cached.status === 'fresh' ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
         : '';
-      const realized = routeLedgerTextOption(record.realized_profit, null);
-      const pnl = realized == null ? '<span class="text-muted">Unavailable</span>' : `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${fmt$(realized)}</span>`;
-      const requestedInput = record.start_asset ? routeLedgerAmount(record.planned_input_native, record.start_asset) : `${esc(record.planned_input_native == null ? 'Unavailable' : record.planned_input_native)} native`;
+      const pnl = routeLedgerPnlHtml(record);
+      const requestedInput = record.start_asset ? routeLedgerAmount(record.planned_input_native, record.start_asset) : `${esc(record.planned_input_native == null ? 'Unavailable' : record.planned_input_native)} raw atoms (asset unavailable)`;
       const buttonLabel = expanded ? 'Hide legs' : 'Show legs';
-      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}" onclick="toggleLedgerExecution('${esc(executionId)}')">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${requestedInput}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
+      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" data-ledger-execution-id="${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${requestedInput}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
     }
     async function toggleLedgerExecution(executionId, retry = false) {
       const id = String(executionId);
@@ -4769,10 +4798,12 @@
       detailRow.hidden = false;
       if (state.expandedRows) state.expandedRows.add(id);
       const cached = routeExecutionDetails.get(id);
-      if (cached && cached.status === 'fresh' && !retry) {
-        detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
+      if (cached && !retry) {
+        if (cached.status === 'fresh') detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
+        else if (cached.status === 'loading') detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+        else detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml(cached.status, cached.error, id);
         button.focus();
-        return true;
+        return cached.status === 'fresh';
       }
       if (routeExecutionDetailLoads.has(id)) {
         detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
@@ -4803,6 +4834,21 @@
       })();
       routeExecutionDetailLoads.set(id, load);
       return load;
+    }
+    function bindRouteLedgerDisclosureHandlers() {
+      const body = document.getElementById('route-ledger-body');
+      if (!body || typeof body.addEventListener !== 'function' || body.__routeLedgerBound) return;
+      body.__routeLedgerBound = true;
+      body.addEventListener('click', event => {
+        let target = event.target;
+        while (target && target !== body && !(target.getAttribute && (target.getAttribute('data-ledger-execution-id') || target.getAttribute('data-ledger-retry-execution-id')))) target = target.parentNode;
+        if (!target || target === body) return;
+        const retryId = target.getAttribute('data-ledger-retry-execution-id');
+        const executionId = retryId || target.getAttribute('data-ledger-execution-id');
+        if (!executionId) return;
+        event.preventDefault();
+        toggleLedgerExecution(executionId, Boolean(retryId));
+      });
     }
 
     function ledgerEntryHtml(e) {
@@ -4880,17 +4926,75 @@
       if (pageEl) pageEl.textContent = `Page ${tradesPage + 1}`;
     }
     function routeLedgerSourceHtml() {
-      const source = routeSources.terminalExecutions;
-      const display = routeSourceState('terminalExecutions');
-      if (display === 'loading') return '<tr><td colspan="6" class="ledger-detail-state">Loading route executions…</td></tr>';
-      if (display === 'failed' || display === 'unavailable') return `<tr><td colspan="6" class="ledger-detail-state negative">Unavailable${esc(routeSourceError(source))}</td></tr>`;
-      if (!latestTerminalExecutions.length) return `<tr><td colspan="6" class="ledger-detail-state${display === 'stale' ? ' ts-stale' : ''}">${display === 'stale' ? `Stale · ${esc(sourceLastSuccessLabel(source))} · no cached route executions` : 'No terminal route executions.'}</td></tr>`;
-      return latestTerminalExecutions.map(routeLedgerEntryHtml).join('');
+      const display = routeSources.routeLedgerExecutions.status;
+      const rows = Array.isArray(routeSources.routeLedgerExecutions.value) ? routeSources.routeLedgerExecutions.value : [];
+      if (display === 'loading' && !rows.length) return '<tr><td colspan="6" class="ledger-detail-state">Loading route executions…</td></tr>';
+      if ((display === 'failed' || display === 'unavailable') && !rows.length) return `<tr><td colspan="6" class="ledger-detail-state negative">Unavailable${esc(routeSourceError(routeSources.routeLedgerExecutions))}</td></tr>`;
+      if (!rows.length) return '<tr><td colspan="6" class="ledger-detail-state">No terminal route executions.</td></tr>';
+      return rows.map(routeLedgerEntryHtml).join('');
+    }
+    function routeLedgerSourceStatusHtml() {
+      const source = routeSources.routeLedgerExecutions;
+      const display = source.status;
+      const parts = [];
+      if (display === 'stale') parts.push(`Stale · ${esc(sourceLastSuccessLabel(source))}`);
+      if (display === 'failed' || display === 'unavailable') parts.push(`Unavailable${esc(routeSourceError(source))}`);
+      if (routeLedgerIncomplete) parts.push(`Incomplete · bounded at ${routeLedgerLoadedCount} route records`);
+      return parts.length ? `<div class="ledger-note route-ledger-status ${display === 'stale' || routeLedgerIncomplete ? 'ts-stale' : 'negative'}" id="route-ledger-status">${parts.join(' · ')}</div>` : '<div class="ledger-note route-ledger-status" id="route-ledger-status"></div>';
+    }
+    async function loadRouteLedgerPage(page = routeLedgerPage) {
+      const source = routeSources.routeLedgerExecutions;
+      if (!anonymousActor || typeof anonymousActor.get_terminal_route_executions_v1 !== 'function') {
+        markSourceUnavailable(source, 'route ledger is unavailable');
+        renderRouteLedgerTable();
+        return false;
+      }
+      const boundedPage = Math.max(0, Number(page) || 0);
+      const offset = BigInt(boundedPage) * ROUTE_LEDGER_PAGE_SIZE;
+      if (offset >= ROUTE_LEDGER_MAX) {
+        routeLedgerIncomplete = true;
+        routeLedgerHasMore = false;
+        routeLedgerLoadedCount = Number(ROUTE_LEDGER_MAX);
+        renderRouteLedgerTable();
+        return false;
+      }
+      try {
+        const result = await anonymousActor.get_terminal_route_executions_v1(offset, ROUTE_LEDGER_PAGE_SIZE);
+        if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route ledger query failed');
+        const rows = Array.isArray(result.Ok) ? result.Ok.slice().sort((a, b) => {
+          const left = BigInt(a.updated_at_ns || 0), right = BigInt(b.updated_at_ns || 0);
+          return left === right ? 0 : left > right ? -1 : 1;
+        }) : [];
+        routeLedgerPage = boundedPage;
+        routeLedgerLoadedCount = Number(offset) + rows.length;
+        routeLedgerHasMore = rows.length >= Number(ROUTE_LEDGER_PAGE_SIZE) && offset + ROUTE_LEDGER_PAGE_SIZE < ROUTE_LEDGER_MAX;
+        routeLedgerIncomplete = rows.length >= Number(ROUTE_LEDGER_PAGE_SIZE) && offset + ROUTE_LEDGER_PAGE_SIZE >= ROUTE_LEDGER_MAX;
+        markSourceFresh(source, rows);
+        renderRouteLedgerTable();
+        return true;
+      } catch (error) {
+        markSourceFailed(source, error);
+        renderRouteLedgerTable();
+        return false;
+      }
     }
     function renderRouteLedgerTable() {
       const body = document.getElementById('route-ledger-body');
-      if (body) body.innerHTML = routeLedgerSourceHtml();
+      if (body) {
+        body.innerHTML = routeLedgerSourceHtml();
+        bindRouteLedgerDisclosureHandlers();
+      }
+      const status = document.getElementById('route-ledger-status');
+      if (status) status.outerHTML = routeLedgerSourceStatusHtml();
+      const page = document.getElementById('route-ledger-page');
+      const prev = document.getElementById('route-ledger-prev');
+      const next = document.getElementById('route-ledger-next');
+      if (page) page.textContent = `Page ${routeLedgerPage + 1}`;
+      if (prev) prev.disabled = routeLedgerPage === 0;
+      if (next) next.disabled = !routeLedgerHasMore;
     }
+    window.routeLedgerPrev = () => { if (routeLedgerPage > 0) loadRouteLedgerPage(routeLedgerPage - 1); };
+    window.routeLedgerNext = () => { if (routeLedgerHasMore) loadRouteLedgerPage(routeLedgerPage + 1); };
     window.ledgerPrev = () => { if (tradesPage > 0) { tradesPage--; loadLedgerPage(); } };
     window.ledgerNext = () => { if (ledgerHasMore) { tradesPage++; loadLedgerPage(); } };
     function ledgerPagesizeHtml() {
@@ -4970,11 +5074,17 @@
         <div class="card-subtitle">Route executions are the primary ledger. Expand a terminal execution to inspect its ordered legs; realized P&amp;L is shown once on the parent transaction.</div>
         <div class="card">
           <div class="card-header">Route execution history</div>
+          ${routeLedgerSourceStatusHtml()}
           <div class="table-wrap">
             <table class="ledger-table" aria-label="Route execution ledger">
               <thead><tr><th scope="col">Time</th><th scope="col">Execution</th><th scope="col">Route</th><th scope="col">Status</th><th scope="col">Requested input</th><th scope="col">Realized P&amp;L</th></tr></thead>
               <tbody id="route-ledger-body">${routeLedgerSourceHtml()}</tbody>
             </table>
+          </div>
+          <div class="pagination">
+            <button class="btn btn-sm btn-ghost" id="route-ledger-prev" type="button" onclick="routeLedgerPrev()">◂ Prev</button>
+            <span id="route-ledger-page">Page ${routeLedgerPage + 1}</span>
+            <button class="btn btn-sm btn-ghost" id="route-ledger-next" type="button" onclick="routeLedgerNext()">Next ▸</button>
           </div>
         </div>
         <div class="card" style="margin-top:var(--sp-4)">
@@ -5002,7 +5112,7 @@
             <span id="ledger-count" style="margin-left:auto"></span>
           </div>
         </div>
-
+        </div>
         <div class="card" style="margin-top:var(--sp-4)">
           <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
             <span>Activity log</span>
@@ -5018,6 +5128,8 @@
           </div>
         </div>
       `;
+      bindRouteLedgerDisclosureHandlers();
+      loadRouteLedgerPage();
       loadLedgerPage();
       // Populate synchronously so the select is never briefly empty, and so the
       // active filter is visibly restored the instant the view re-renders.
