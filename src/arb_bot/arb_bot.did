@@ -383,6 +383,8 @@ type ExecutionRecordV1 = record {
   // Stable-par USD6 for stable books; ICP e8s for IcpReturning.
   // None for held inventory and historical records without attributable P&L.
   realized_profit : opt int;
+  // Exact parent input asset for new executions; unavailable for historical records without it.
+  start_asset : opt Asset;
   candidate_class : CandidateClass;
   evidence : vec ReconciliationEvidenceV1;
   incident : opt text;
@@ -625,6 +627,8 @@ type RouteExecutionLegV1 = record {
   pool_principal : principal;
   settled_at_ns : opt nat64;
   quoted_input_native : nat64;
+  // Exact venue request amount; unavailable for pre-detail historical records.
+  requested_input_native : opt nat64;
   pool_id : text;
   reconciled_at_ns : opt nat64;
   actual_effective_input_native : opt nat64;

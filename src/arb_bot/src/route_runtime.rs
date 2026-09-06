@@ -161,6 +161,7 @@ fn detail_for(ex: &RuntimeExecution) -> RouteExecutionDetailV1 {
                     from: trace.edge.from,
                     to: trace.edge.to,
                     quoted_input_native: trace.quoted_input_native,
+                    requested_input_native: request.map(|request| request.input_native),
                     quoted_output_native: trace.quoted_output_native,
                     minimum_output_native: trace.minimum_output_native,
                     input_fee_native: trace.input_fee_native,
@@ -537,6 +538,105 @@ fn trace_mut(ex: &mut RuntimeExecution, leg_index: u8) -> Result<&mut RuntimeLeg
         .find(|trace| trace.leg_index == leg_index)
         .ok_or_else(|| format!("missing route execution trace for leg {leg_index}"))
 }
+
+/// Rebuild only the durable trace facts that can be derived from fields that
+/// existed before the detail read model was introduced. Quote metadata comes
+/// from the preserved candidate and request metadata comes from the persisted
+/// request/intent lists. Settlement values are copied only from persisted
+/// RuntimeSettlement values; this helper never derives movement from a quote.
+fn recover_legacy_traces(ex: &mut RuntimeExecution) -> Result<(), String> {
+    if !ex.leg_traces.is_empty() {
+        return Ok(());
+    }
+    let edges = resolve_route_edges(&ex.original.venue_edges, &ex.original.asset_path)?;
+    let mut traces = initial_leg_traces(&ex.original, &edges)?;
+
+    for (request, _) in &ex.submitted_intents {
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("legacy request references unknown leg {}", request.leg_index))?;
+        trace.quoted_input_native = request.input_native;
+        trace.minimum_output_native = request.min_output_native;
+        trace.input_fee_native = request.input_fee_native;
+        trace.output_fee_native = request.output_fee_native;
+    }
+    if let Some(request) = &ex.request {
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("current request references unknown leg {}", request.leg_index))?;
+        trace.quoted_input_native = request.input_native;
+        trace.minimum_output_native = request.min_output_native;
+        trace.input_fee_native = request.input_fee_native;
+        trace.output_fee_native = request.output_fee_native;
+    }
+
+    if ex.settlements.len() > ex.submitted_intents.len() {
+        return Err("legacy runtime has settlement facts without persisted requests".into());
+    }
+    for (index, settlement) in ex.settlements.iter().enumerate() {
+        let request = ex
+            .submitted_intents
+            .get(index)
+            .map(|(request, _)| request)
+            .ok_or("legacy settlement request missing")?;
+        let trace = traces
+            .iter_mut()
+            .find(|trace| trace.leg_index == request.leg_index)
+            .ok_or_else(|| format!("legacy settlement references unknown leg {}", request.leg_index))?;
+        trace.settlement = Some(settlement.clone());
+        trace.settled_at_ns = settlement.evidence.iter().map(|e| e.observed_at_ns).max();
+        trace.reconciled_at_ns = trace.settled_at_ns;
+        trace.status = if settlement.refund_credit_native > 0 {
+            RouteExecutionLegStatusV1::Refunded
+        } else if settlement.effective_input_native != request.input_native
+            || settlement.output_credit_native < request.min_output_native
+        {
+            RouteExecutionLegStatusV1::HeldInventory
+        } else {
+            RouteExecutionLegStatusV1::Settled
+        };
+    }
+
+    let current_index = ex.record.current_leg_index;
+    if let Some(trace) = traces.iter_mut().find(|trace| trace.leg_index == current_index) {
+        match ex.record.phase {
+            ExecutionPhaseV1::Planned => {}
+            ExecutionPhaseV1::LegPrepared => trace.status = RouteExecutionLegStatusV1::Prepared,
+            ExecutionPhaseV1::LegSubmitted => {
+                trace.status = RouteExecutionLegStatusV1::Submitted;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::AwaitingSettlement => {
+                trace.status = RouteExecutionLegStatusV1::AwaitingSettlement;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::ReconciliationRequired => {
+                trace.status = RouteExecutionLegStatusV1::ReconciliationRequired;
+                trace.submitted_at_ns = ex.record.submission_started_at_ns;
+            }
+            ExecutionPhaseV1::LegSettled | ExecutionPhaseV1::RemainingRouteRequoted => {
+                if trace.settlement.is_none() {
+                    trace.status = RouteExecutionLegStatusV1::Settled;
+                }
+            }
+            ExecutionPhaseV1::Completed => {
+                if trace.settlement.is_none() {
+                    trace.status = RouteExecutionLegStatusV1::Settled;
+                }
+            }
+            ExecutionPhaseV1::Aborted => trace.status = RouteExecutionLegStatusV1::Aborted,
+            ExecutionPhaseV1::HeldInventory => {
+                trace.status = RouteExecutionLegStatusV1::HeldInventory
+            }
+        }
+        trace.incident = ex.record.incident.clone();
+    }
+    ex.leg_traces = traces;
+    Ok(())
+}
+
 fn initial_leg_traces(
     candidate: &RouteCandidateReportV1,
     edges: &[DirectedEdge],
@@ -831,10 +931,11 @@ pub fn has_current() -> Result<bool, String> {
     Ok(load()?.current.is_some())
 }
 fn current(id: &str) -> Result<RuntimeExecution, String> {
-    let ex = load()?.current.ok_or("no active runtime execution")?;
+    let mut ex = load()?.current.ok_or("no active runtime execution")?;
     if ex.record.execution_id != id {
         return Err("execution id mismatch".into());
     }
+    recover_legacy_traces(&mut ex)?;
     Ok(ex)
 }
 pub async fn advance(id: &str) -> Result<ExecutionRecordV1, String> {
@@ -1466,6 +1567,8 @@ mod tests {
             .expect("execution detail");
         assert_eq!(detail.legs[0].status, RouteExecutionLegStatusV1::AwaitingSettlement);
         assert!(detail.legs[0].submitted_at_ns.is_some());
+        assert_eq!(detail.record.start_asset, Some(Asset::CkUsdc));
+        assert!(detail.legs[0].requested_input_native.is_some());
         assert_eq!(
             block_on(reconcile_with(&io, &ex.execution_id)).unwrap().phase,
             ExecutionPhaseV1::LegSettled
@@ -1493,6 +1596,41 @@ mod tests {
         let detail = route_execution_detail(&recovered);
         assert!(!detail.detail_available);
         assert!(detail.legs.is_empty());
+    }
+
+    #[test]
+    fn pre_detail_runtime_continues_submission_and_reconciliation_after_upgrade() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let mut old_runtime: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        old_runtime["current"]
+            .as_object_mut()
+            .unwrap()
+            .remove("leg_traces");
+        state::set_runtime_bytes(serde_json::to_vec(&old_runtime).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        io.accepted.set(true);
+        assert_eq!(
+            block_on(advance_with(&io, &record.execution_id))
+                .unwrap()
+                .phase,
+            ExecutionPhaseV1::AwaitingSettlement
+        );
+        assert_eq!(io.submissions.get(), 1);
+        assert_eq!(
+            block_on(reconcile_with(&io, &record.execution_id))
+                .unwrap()
+                .phase,
+            ExecutionPhaseV1::LegSettled
+        );
+        let detail = state::get_route_execution_detail(&record.execution_id)
+            .unwrap()
+            .expect("recovered detail");
+        assert!(detail.detail_available);
+        assert_eq!(detail.legs[0].status, RouteExecutionLegStatusV1::Settled);
+        assert!(detail.legs[0].actual_output_credit_native.is_some());
     }
     #[test]
     fn runtime_snapshot_survives_detail_projection_failure_at_creation_boundary() {

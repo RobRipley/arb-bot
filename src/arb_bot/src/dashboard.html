@@ -967,7 +967,7 @@
         quote_timestamp_ns: I.Nat64, submission_started_at_ns: I.Opt(I.Nat64),
         adapter_request_fingerprint: I.Opt(I.Text), evidence: I.Vec(ReconciliationEvidenceV1),
         reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
-        realized_profit: I.Opt(I.Int64),
+        realized_profit: I.Opt(I.Int64), start_asset: I.Opt(RouteAsset),
       });
       const RouteExecutionLegStatusV1 = I.Variant({
         Quoted: I.Null, Refunded: I.Null, Prepared: I.Null, Submitted: I.Null,
@@ -982,7 +982,7 @@
         actual_output_credit_native: I.Opt(I.Nat64), actual_input_debit_native: I.Opt(I.Nat64),
         quoted_output_native: I.Opt(I.Nat64), evidence: I.Vec(ReconciliationEvidenceV1),
         incident: I.Opt(I.Text), pool_principal: I.Principal, settled_at_ns: I.Opt(I.Nat64),
-        quoted_input_native: I.Nat64, pool_id: I.Text, reconciled_at_ns: I.Opt(I.Nat64),
+        quoted_input_native: I.Nat64, requested_input_native: I.Opt(I.Nat64), pool_id: I.Text, reconciled_at_ns: I.Opt(I.Nat64),
         actual_effective_input_native: I.Opt(I.Nat64), edge_id: I.Text, output_fee_native: I.Nat64,
       });
       const RouteExecutionDetailV1 = I.Record({

@@ -476,15 +476,20 @@ fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route
     state::get_terminal_route_executions_page(offset, limit)
 }
 
-fn route_execution_detail_response_with<D, R>(
+fn route_execution_detail_response_with<C, D, R>(
     execution_id: &str,
+    canonical_lookup: C,
     detail_lookup: D,
     record_lookup: R,
 ) -> Result<route_arb::RouteExecutionDetailV1, String>
 where
+    C: FnOnce(&str) -> Result<Option<route_arb::RouteExecutionDetailV1>, String>,
     D: FnOnce(&str) -> Result<Option<route_arb::RouteExecutionDetailV1>, String>,
     R: FnOnce(&str) -> Result<Option<route_arb::ExecutionRecordV1>, String>,
 {
+    if let Some(detail) = canonical_lookup(execution_id)? {
+        return Ok(detail);
+    }
     if let Some(detail) = detail_lookup(execution_id)? {
         return Ok(detail);
     }
@@ -504,6 +509,7 @@ fn get_route_execution_detail_v1(
 ) -> Result<route_arb::RouteExecutionDetailV1, String> {
     route_execution_detail_response_with(
         &execution_id,
+        route_runtime::get_durable_detail,
         state::get_route_execution_detail,
         state::find_route_execution_record,
     )
@@ -531,6 +537,7 @@ mod route_execution_detail_query_tests {
             incident: None,
             updated_at_ns: 1,
             realized_profit: None,
+            start_asset: None,
         }
     }
 
@@ -548,6 +555,7 @@ mod route_execution_detail_query_tests {
         let expected = detail(record("current"));
         let actual = route_execution_detail_response_with(
             "current",
+            |_| Ok(None),
             |_| Ok(Some(expected.clone())),
             |_| panic!("record lookup must not run when detail is available"),
         )
@@ -560,6 +568,7 @@ mod route_execution_detail_query_tests {
         let expected_record = record("historical");
         let actual = route_execution_detail_response_with(
             "historical",
+            |_| Ok(None),
             |_| Ok(None),
             |_| Ok(Some(expected_record.clone())),
         )
@@ -576,6 +585,7 @@ mod route_execution_detail_query_tests {
             "missing",
             |_| Ok(None),
             |_| Ok(None),
+            |_| Ok(None),
         )
         .unwrap_err();
         assert_eq!(error, "unknown route execution: missing");
@@ -586,10 +596,24 @@ mod route_execution_detail_query_tests {
         let error = route_execution_detail_response_with(
             "storage-error",
             |_| Ok(None),
+            |_| Ok(None),
             |_| Err("storage read failed".into()),
         )
         .unwrap_err();
         assert_eq!(error, "storage read failed");
+    }
+
+    #[test]
+    fn canonical_runtime_snapshot_wins_when_projection_read_fails() {
+        let expected = detail(record("runtime-canonical"));
+        let actual = route_execution_detail_response_with(
+            "runtime-canonical",
+            |_| Ok(Some(expected.clone())),
+            |_| Err("projection read failed".into()),
+            |_| panic!("historical record lookup must not run"),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
     }
 }
 

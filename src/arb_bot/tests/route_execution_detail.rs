@@ -36,6 +36,7 @@ fn three_leg_execution_detail() -> RouteExecutionDetailV1 {
             from: edge.from,
             to: edge.to,
             quoted_input_native: [1_000_000, 1_000_000, 1_247_000][index],
+            requested_input_native: (index == 1).then_some(999_500),
             quoted_output_native: [Some(999_000), Some(1_250_000), Some(1_245_000)][index],
             minimum_output_native: [998_000, 1_240_000, 1_240_000][index],
             input_fee_native: 1_000,
@@ -79,6 +80,7 @@ fn three_leg_execution_detail() -> RouteExecutionDetailV1 {
             incident: None,
             updated_at_ns: 32,
             realized_profit: Some(2_000),
+            start_asset: Some(Asset::CkUsdc),
         },
         asset_path: path,
         legs,
@@ -96,12 +98,14 @@ fn detail_keeps_variable_legs_in_route_order() {
     );
     assert_eq!(detail.legs[0].edge_id, "rumi-3pool:CkUsdc>IcUsd");
     assert_eq!(detail.legs[1].quoted_output_native, Some(1_250_000));
+    assert_eq!(detail.legs[1].requested_input_native, Some(999_500));
     assert_eq!(detail.legs[1].actual_output_credit_native, Some(1_247_000));
     assert_ne!(
         detail.legs[1].quoted_output_native,
         detail.legs[1].actual_output_credit_native
     );
     assert_eq!(detail.record.realized_profit, Some(2_000));
+    assert_eq!(detail.record.start_asset, Some(Asset::CkUsdc));
 }
 
 #[test]

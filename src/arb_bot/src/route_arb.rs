@@ -1394,6 +1394,10 @@ pub struct ExecutionRecordV1 {
     /// None for held inventory and historical records without attributable P&L.
     #[serde(default)]
     pub realized_profit: Option<i128>,
+    /// Exact parent input asset for new executions. Historical records may not
+    /// have preserved this field and therefore decode as unavailable.
+    #[serde(default)]
+    pub start_asset: Option<Asset>,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -1421,6 +1425,11 @@ pub struct RouteExecutionLegV1 {
     pub from: Asset,
     pub to: Asset,
     pub quoted_input_native: u64,
+    /// Exact venue request amount, excluding the input ledger fee. This is
+    /// distinct from the quote's input amount and is unavailable for legacy
+    /// records that predate durable per-leg requests.
+    #[serde(default)]
+    pub requested_input_native: Option<u64>,
     pub quoted_output_native: Option<u64>,
     pub minimum_output_native: u64,
     pub input_fee_native: u64,
@@ -1494,6 +1503,7 @@ pub fn prepare_execution(
         quote_timestamp_ns: candidate.quote_timestamp_ns, submission_started_at_ns: None,
         adapter_request_fingerprint: None, evidence: Vec::new(),
         reconciliation_query_count: 0, incident: None, updated_at_ns: now_ns, realized_profit: None,
+        start_asset: Some(candidate.start_asset),
     })
 }
 

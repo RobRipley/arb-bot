@@ -24,6 +24,7 @@ fn detail_fixture() -> RouteExecutionDetailV1 {
             incident: None,
             updated_at_ns: 3,
             realized_profit: Some(1),
+            start_asset: Some(Asset::CkUsdc),
         },
         asset_path: vec![Asset::CkUsdc, Asset::IcUsd],
         legs: vec![RouteExecutionLegV1 {
@@ -36,6 +37,7 @@ fn detail_fixture() -> RouteExecutionDetailV1 {
             from: Asset::CkUsdc,
             to: Asset::IcUsd,
             quoted_input_native: 100,
+            requested_input_native: Some(99),
             quoted_output_native: Some(101),
             minimum_output_native: 99,
             input_fee_native: 1,
@@ -112,6 +114,7 @@ fn detail_map_is_empty_for_pre_detail_runtime_without_changing_current_record() 
         incident: None,
         updated_at_ns: 0,
         realized_profit: None,
+        start_asset: None,
     };
     arb_bot::state::put_current_route_execution(record.clone()).unwrap();
     assert!(arb_bot::state::get_route_execution_detail("pre-detail-current")
