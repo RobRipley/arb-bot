@@ -34,7 +34,7 @@ The implementation is covered by focused Rust tests for:
 - scheduler ordering, complete-scan gating, and reconciliation while new trading is disabled (`route_scheduler`);
 - route registry, graph, accounting, policy, storage, lock, Candid, legacy-freeze, and dashboard behavior.
 
-The repository acceptance command is `scripts/check-route-arb-acceptance.sh`. It runs the focused suites, the `route_runtime` library tests, Candid and Stage-1 structural guards, dashboard checks, a release Wasm build, executable-code-size inspection, and `git diff --check`. The full-bot `RUSTFLAGS=-Awarnings cargo test -p arb_bot` passed with zero failures, the equivalent library runtime target `cargo test -p arb_bot --lib route_runtime` passed 11/11, and the acceptance command completed successfully. These commands prove this checkout only; they do not prove deployment or live venue receipt availability.
+The repository acceptance command is `scripts/check-route-arb-acceptance.sh`. It runs the focused suites, the `route_runtime` library tests, Candid and Stage-1 structural guards, dashboard checks, a release Wasm build, executable-code-size inspection, and `git diff --check`. The full-bot `RUSTFLAGS=-Awarnings cargo test -p arb_bot` passed with zero failures, the equivalent library runtime target `cargo test -p arb_bot --lib route_runtime` passed 14/14, and the acceptance command completed successfully. These commands prove this checkout only; they do not prove deployment or live venue receipt availability.
 
 ## Operations UI and Diagnostics evidence
 
@@ -53,7 +53,7 @@ Fresh local acceptance output from the exact checkout:
 - `node scripts/test-dashboard-runtime.cjs`: runtime state and configuration-failure checks passed.
 - `bash -n scripts/check-route-arb-acceptance.sh`, `bash -n scripts/check-stage1-disposition.sh`, dashboard `node --check --input-type=module`, and `git diff --check` passed.
 
-The release artifact was `4,039,163` bytes with a `2,960,585`-byte Wasm code section, leaving `9,622,327` bytes below the current `12,582,912`-byte executable-code limit. Its SHA-256 is `8ae326d1057d6f464f0c293c635388545cb84f9196645d6674f5d104a7543a1b`. This is source and artifact evidence for this checkout only. It does not prove that the dashboard was deployed, that the new query exists in a deployed canister, that a runtime is authorized or enabled, or that any venue settled a live trade.
+The release artifact was `4,039,419` bytes with a `2,960,585`-byte Wasm code section, leaving `9,622,327` bytes below the current `12,582,912`-byte executable-code limit. Its SHA-256 is `bbf5880b7056928eb23e896bc252d39be7a5eb909a4a06746c9d302410d194a7`. This is source and artifact evidence for this checkout only. It does not prove that the dashboard was deployed, that the new query exists in a deployed canister, that a runtime is authorized or enabled, or that any venue settled a live trade.
 
 ## Required invariant and remaining proof
 

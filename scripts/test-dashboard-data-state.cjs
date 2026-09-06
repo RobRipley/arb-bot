@@ -91,6 +91,10 @@ assert(!activeZeroRuntimeHtml.includes('onclick='));
 
 const operationsSection = html.slice(html.indexOf('    function routeWalletHtml'), html.indexOf('    function routeTradingLabel'));
 vm.runInContext(operationsSection, context);
+assert.equal(vm.runInContext("diagnosticsSourceFailureLabel('failed')", context), 'Failed', 'Diagnostics must label an internal query failure');
+assert.equal(vm.runInContext("diagnosticsSourceFailureLabel('unavailable')", context), 'Unavailable', 'Diagnostics must label a missing query as unavailable');
+assert(html.includes('data-diagnostics-source="lock"'), 'Diagnostics must own mutation-lock source state');
+assert(html.includes('data-diagnostics-source="terminalExecutions"'), 'Diagnostics must own terminal-execution source state');
 vm.runInContext("markSourceFresh(routeSources.lock, [{ owner: { Bot: null }, operation_id: 'lock-1', reconciliation_required: false }], 60000); markSourceFailed(routeSources.lock, Error('offline'), Date.now()); latestRouteLock = routeSources.lock.value[0];", context);
 assert(vm.runInContext('routeOperationsHtml()', context).includes('Stale · as of'));
 

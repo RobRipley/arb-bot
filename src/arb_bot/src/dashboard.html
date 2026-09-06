@@ -2657,19 +2657,22 @@
         return `<div class="route-wallet"><div class="route-wallet-symbol">${esc(label)}</div><div class="route-wallet-value">${esc(balance)}</div><div class="route-wallet-meta ${err || walletState === 'failed' || walletState === 'unavailable' ? 'negative' : walletState === 'stale' ? 'ts-stale' : ''}">${esc(sourceMeta)}</div></div>`;
       }).join('');
     }
+    function diagnosticsSourceFailureLabel(status) {
+      return status === 'failed' ? 'Failed' : 'Unavailable';
+    }
     function diagnosticsSourceBadge(name, staleAfterMs = null) {
       const source = routeSources[name];
       const status = routeSourceState(name, staleAfterMs);
       if (status === 'fresh') return '<span class="badge badge-live">Fresh</span>';
       if (status === 'stale') return `<span class="badge badge-stale">Stale · ${esc(sourceLastSuccessLabel(source))}${source.error ? ` · ${esc(source.error)}` : ''}</span>`;
       if (status === 'loading') return '<span class="badge badge-unconfigured">Loading…</span>';
-      return `<span class="badge badge-stuck">Unavailable${esc(routeSourceError(source))}</span>`;
+      return `<span class="badge badge-stuck">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</span>`;
     }
     function diagnosticsSourceFailure(name, staleAfterMs = null) {
       const source = routeSources[name];
       const status = routeSourceState(name, staleAfterMs);
       if (status === 'loading') return '<div class="route-empty">Loading…</div>';
-      if (status === 'failed' || status === 'unavailable') return `<div class="route-empty negative">Unavailable${esc(routeSourceError(source))}</div>`;
+      if (status === 'failed' || status === 'unavailable') return `<div class="route-empty negative">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</div>`;
       return null;
     }
     function diagnosticsEvidenceHtml(record, label) {
@@ -2737,7 +2740,7 @@
         : '<div class="route-empty">Runtime status unavailable.</div>';
       const configBody = configFailure || configState === 'loading' ? (configFailure || '<div class="route-empty">Loading…</div>')
         : currentConfig ? `<div class="route-wallet-meta">Configuration loaded${configState === 'stale' ? ` · Stale · ${esc(sourceLastSuccessLabel(routeSources.config))}` : ''}</div>` : '<div class="route-empty">Configuration unavailable.</div>';
-      const apiFailures = Object.entries(routeSources).filter(([name, source]) => ['failed', 'unavailable'].includes(routeSourceState(name))).map(([name, source]) => `<div class="route-list-row"><span>${esc(name)}</span><span class="negative">Unavailable${esc(routeSourceError(source))}</span></div>`).join('');
+      const apiFailures = Object.entries(routeSources).filter(([name, source]) => ['failed', 'unavailable'].includes(routeSourceState(name))).map(([name, source]) => { const status = routeSourceState(name); return `<div class="route-list-row"><span>${esc(name)}</span><span class="negative">${diagnosticsSourceFailureLabel(status)}${esc(routeSourceError(source))}</span></div>`; }).join('');
       const legacyFailure = diagnosticsSourceFailure('health');
       const legacyBody = legacyFailure || healthState === 'loading' ? (legacyFailure || '<div class="route-empty">Loading…</div>')
         : publicHealth ? `<div class="route-list-row"><span>pending_exit: ${publicHealth.has_pending_exit ? 'present' : 'clear'}</span><span>pending_bob_exit: ${publicHealth.has_pending_bob_exit ? 'present' : 'clear'}</span><span>stranded volume: ${publicHealth.has_stranded_volume_funds ? 'present' : 'clear'}</span></div><div class="route-wallet-meta">These A-S/T fields are preserved as historical compatibility state and do not authorize route execution.${healthState === 'stale' ? ` Stale · ${esc(sourceLastSuccessLabel(routeSources.health))}` : ''}</div>`
