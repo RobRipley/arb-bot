@@ -1398,6 +1398,8 @@
     let snapshotsLoaded = false;
     let chartsRefreshInterval = null;
     let latestHealthReport = null;
+    let latestPublicHealth = null;
+    let publicHealthFailed = false;
     let latestRouteStatus = null;
     let latestRouteWallet = [];
     let latestRouteObservation = null;
@@ -1785,21 +1787,8 @@
     }
 
     function fetchHealth() {
-      if (!authenticatedActor) return Promise.resolve(null);
-      if (healthRequestPromise) return healthRequestPromise;
-      healthRequestPromise = (async () => {
-        try {
-          const report = await authenticatedActor.get_bot_health();
-          latestHealthReport = report;
-          updateWedgeBanner(report);
-          if (state.activeView === 'ops' || state.activeView === 'cockpit' || state.activeView === 'markets') renderCurrentView();
-          return report;
-        } catch (e) {
-          toast('Health load failed: ' + e.message, 'error');
-          return null;
-        } finally { healthRequestPromise = null; }
-      })();
-      return healthRequestPromise;
+      // The public query reads durable incident flags without polling retired venues.
+      return fetchPublicHealth();
     }
 
     function wedgeConditions(report) {
@@ -1841,7 +1830,7 @@
       const key = conditions.join(',');
       currentWedgeKey = key;
       if (wedgeDismissedKey === key) { el.classList.remove('show'); el.innerHTML = ''; return; }
-      const message = latestHealthReport ? wedgeMessage(conditions, latestHealthReport) : 'Bot may be stuck — log in for details.';
+      const message = latestHealthReport ? wedgeMessage(conditions, latestHealthReport) : 'Pending exits or stranded volume funds need review in Operations.';
       el.classList.add('show');
       el.innerHTML = `
         <div class="wedge-banner-msg"><span class="wedge-dot"></span><span><strong>Cycle may be stuck.</strong> ${esc(message)}</span></div>
@@ -1855,7 +1844,7 @@
     window.dismissWedgeBanner = function () { wedgeDismissedKey = currentWedgeKey; renderBanner(); };
 
     function fetchPublicHealth() {
-      if (authenticatedActor || !anonymousActor) return Promise.resolve(null);
+      if (!anonymousActor) return Promise.resolve(null);
       if (publicHealthRequestPromise) return publicHealthRequestPromise;
       publicHealthRequestPromise = (async () => {
         try {
@@ -1864,10 +1853,13 @@
           if (pub.has_pending_exit) conditions.push('pending_exit');
           if (pub.has_pending_bob_exit) conditions.push('pending_bob_exit');
           if (pub.has_stranded_volume_funds) conditions.push('volume_stranded');
+          latestPublicHealth = pub;
+          publicHealthFailed = false;
           window._publicWedge = conditions;
           renderBanner();
+          renderCurrentView();
           return pub;
-        } catch (e) { console.error('public health poll failed:', e); return null; }
+        } catch (e) { publicHealthFailed = true; console.error('public health poll failed:', e); renderCurrentView(); return null; }
         finally { publicHealthRequestPromise = null; }
       })();
       return publicHealthRequestPromise;
@@ -2148,15 +2140,16 @@
           title: 'Route execution requires reconciliation', meta: esc(latestRouteLock.operation_id),
           actionLabel: 'View route', go: () => goTo('markets') });
       }
-      const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
-      const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
-      [stable, icp].filter(Boolean).forEach(candidate => {
-        if (!candidate.eligible || state.dismissedAttn.has(candidate.route_id)) return;
-        items.push({ key: candidate.route_id, kind: 'opportunity',
-          title: `${candidate.asset_path.map(routeAssetLabel).join(' → ')} · ${Number(candidate.net_profit_bps) >= 0 ? '+' : ''}${Number(candidate.net_profit_bps)} bps`,
-          meta: `Quote-only candidate · ${routeAge(candidate.quote_timestamp_ns)} old`,
-          actionLabel: 'View route →', go: () => goTo('markets') });
-      });
+      if (publicHealthFailed || !latestPublicHealth) {
+        items.push({ key: 'health-unavailable', kind: 'incident',
+          title: 'Health status unavailable', meta: 'Pending exits and stranded-fund status could not be verified.',
+          actionLabel: 'Retry', go: () => fetchHealth() });
+      }
+      if ((window._publicWedge || []).length) {
+        items.push({ key: 'legacy-incident', kind: 'incident',
+          title: 'Pending exit or stranded volume funds', meta: 'Recorded recovery flags need review in Operations.',
+          actionLabel: 'View operations', go: () => goTo('ops') });
+      }
       VOLUME_POOLS.forEach(p => {
         const live = volumeLive(p);
         if (live.state === 'BLOCKED' || live.state === 'STUCK') {
@@ -2460,7 +2453,7 @@
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${routeCandidateHtml(stable, 'stable-returning')}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${routeCandidateHtml(icp, 'ICP-returning')}</div></div>
         </div>
-        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${status.live_execution_authorized ? 'authorized' : 'disabled'}` : 'Loading route status…'}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${status ? `${bi(status.route_count)} routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}` : 'Loading route status…'}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
         ${routeOperationsHtml()}
         <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
       </div>`;
@@ -2521,7 +2514,7 @@
       const strandedText = health
         ? [bi(health.volume_stranded_icp) > 0 ? (Number(health.volume_stranded_icp) / 1e8).toFixed(4) + ' ICP' : null,
            bi(health.volume_stranded_bob) > 0 ? (Number(health.volume_stranded_bob) / 1e8).toFixed(4) + ' BOB' : null].filter(Boolean).join(' + ') || 'None'
-        : (stranded ? 'possible — log in' : 'None');
+        : (stranded ? 'Recorded' : publicHealthFailed || !latestPublicHealth ? 'Unknown' : 'None');
       const cycling = health ? health.arb_cycle_in_progress : false;
       const stuckSecs = health ? arbCycleStuckSecs(health) : null;
       // Unconfigured-ness needs real Principal fields — unknown (assume
@@ -2539,7 +2532,7 @@
         <div class="status-strip">
           <div class="status-chip info" onclick="goTo('markets')">
             <span class="status-chip-label">Route arbitrage</span>
-            <span class="status-chip-value">${!latestRouteStatus ? '—' : latestRouteStatus.live_execution_authorized ? 'Live' : 'Quote-only'}</span>
+            <span class="status-chip-value">${!latestRouteStatus ? '—' : !latestRouteStatus.execution_compiled_in ? 'Quote-only · Not implemented' : latestRouteStatus.live_execution_authorized ? 'Live' : 'Trading disabled'}</span>
           </div>
           <div class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
             <span class="status-chip-label">Volume engine</span>
@@ -2602,7 +2595,7 @@
             <div class="attn-empty">
               <div class="attn-empty-glyph">✓</div>
               <div class="attn-empty-text">Nothing needs you.</div>
-              <div class="attn-empty-sub">No blocked gates, no stranded funds, no spread crossing threshold.</div>
+              <div class="attn-empty-sub">No recorded incidents. Quote snapshots are available in Markets and do not require action.</div>
             </div>` : `
             <div class="attn-list">
               ${attn.map(a => `
