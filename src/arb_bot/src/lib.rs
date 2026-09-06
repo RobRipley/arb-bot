@@ -476,14 +476,19 @@ fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route
     state::get_terminal_route_executions_page(offset, limit)
 }
 
-#[query]
-fn get_route_execution_detail_v1(
-    execution_id: String,
-) -> Result<route_arb::RouteExecutionDetailV1, String> {
-    if let Some(detail) = state::get_route_execution_detail(&execution_id)? {
+fn route_execution_detail_response_with<D, R>(
+    execution_id: &str,
+    detail_lookup: D,
+    record_lookup: R,
+) -> Result<route_arb::RouteExecutionDetailV1, String>
+where
+    D: FnOnce(&str) -> Result<Option<route_arb::RouteExecutionDetailV1>, String>,
+    R: FnOnce(&str) -> Result<Option<route_arb::ExecutionRecordV1>, String>,
+{
+    if let Some(detail) = detail_lookup(execution_id)? {
         return Ok(detail);
     }
-    let record = state::find_route_execution_record(&execution_id)?
+    let record = record_lookup(execution_id)?
         .ok_or_else(|| format!("unknown route execution: {execution_id}"))?;
     Ok(route_arb::RouteExecutionDetailV1 {
         record,
@@ -491,6 +496,101 @@ fn get_route_execution_detail_v1(
         legs: vec![],
         detail_available: false,
     })
+}
+
+#[query]
+fn get_route_execution_detail_v1(
+    execution_id: String,
+) -> Result<route_arb::RouteExecutionDetailV1, String> {
+    route_execution_detail_response_with(
+        &execution_id,
+        state::get_route_execution_detail,
+        state::find_route_execution_record,
+    )
+}
+
+#[cfg(test)]
+mod route_execution_detail_query_tests {
+    use super::*;
+
+    fn record(execution_id: &str) -> route_arb::ExecutionRecordV1 {
+        route_arb::ExecutionRecordV1 {
+            execution_id: execution_id.into(),
+            route_id: "route-test".into(),
+            canonical_cycle_id: None,
+            candidate_class: route_arb::CandidateClass::StablePar,
+            phase: route_arb::ExecutionPhaseV1::Completed,
+            current_leg_index: 0,
+            planned_input_native: 1,
+            required_min_output_native: 1,
+            quote_timestamp_ns: 1,
+            submission_started_at_ns: None,
+            adapter_request_fingerprint: None,
+            evidence: vec![],
+            reconciliation_query_count: 0,
+            incident: None,
+            updated_at_ns: 1,
+            realized_profit: None,
+        }
+    }
+
+    fn detail(record: route_arb::ExecutionRecordV1) -> route_arb::RouteExecutionDetailV1 {
+        route_arb::RouteExecutionDetailV1 {
+            record,
+            asset_path: vec![route_arb::Asset::IcUsd],
+            legs: vec![],
+            detail_available: true,
+        }
+    }
+
+    #[test]
+    fn returns_current_detail_when_detail_is_available() {
+        let expected = detail(record("current"));
+        let actual = route_execution_detail_response_with(
+            "current",
+            |_| Ok(Some(expected.clone())),
+            |_| panic!("record lookup must not run when detail is available"),
+        )
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn returns_historical_record_with_detail_unavailable() {
+        let expected_record = record("historical");
+        let actual = route_execution_detail_response_with(
+            "historical",
+            |_| Ok(None),
+            |_| Ok(Some(expected_record.clone())),
+        )
+        .unwrap();
+        assert_eq!(actual.record, expected_record);
+        assert!(actual.asset_path.is_empty());
+        assert!(actual.legs.is_empty());
+        assert!(!actual.detail_available);
+    }
+
+    #[test]
+    fn rejects_unknown_execution_id() {
+        let error = route_execution_detail_response_with(
+            "missing",
+            |_| Ok(None),
+            |_| Ok(None),
+        )
+        .unwrap_err();
+        assert_eq!(error, "unknown route execution: missing");
+    }
+
+    #[test]
+    fn propagates_record_lookup_storage_error() {
+        let error = route_execution_detail_response_with(
+            "storage-error",
+            |_| Ok(None),
+            |_| Err("storage read failed".into()),
+        )
+        .unwrap_err();
+        assert_eq!(error, "storage read failed");
+    }
 }
 
 #[query]
