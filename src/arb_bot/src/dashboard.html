@@ -523,6 +523,28 @@
   .ledger-legs { font-size: 10.5px; color: var(--text-muted); }
   .table-wrap { overflow-x: auto; }
   .ledger-note { font-size: 11.5px; color: var(--text-muted); margin-top: var(--sp-3); }
+  .ledger-disclosure-row td { padding: 0; background: var(--surface-input); }
+  .ledger-detail { padding: var(--sp-4); border-top: 1px solid var(--border); }
+  .ledger-detail-list { list-style: none; display: flex; flex-direction: column; gap: var(--sp-3); }
+  .ledger-leg { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--sp-4); background: var(--surface-1); }
+  .ledger-leg-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  .ledger-leg-title { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+  .ledger-leg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); }
+  .ledger-detail-group { border-top: 1px solid var(--border); padding-top: var(--sp-3); margin-top: var(--sp-3); }
+  .ledger-detail-group-label { font-size: 10px; color: var(--text-tertiary); text-transform: uppercase; letter-spacing: .08em; margin-bottom: var(--sp-2); }
+  .ledger-detail-kv { display: flex; justify-content: space-between; gap: var(--sp-3); font-size: 11px; line-height: 1.45; }
+  .ledger-detail-kv + .ledger-detail-kv { margin-top: 4px; }
+  .ledger-detail-kv .k { color: var(--text-tertiary); }
+  .ledger-detail-kv .v { color: var(--text-secondary); text-align: right; word-break: break-word; }
+  .ledger-detail-state { padding: var(--sp-4); color: var(--text-secondary); font-size: 12px; }
+  .ledger-detail-state.negative { color: var(--loss); }
+  .ledger-legacy-heading { margin-bottom: var(--sp-3); }
+  @media (max-width: 900px) {
+    .ledger-leg-grid { grid-template-columns: 1fr; }
+    .ledger-leg-head { align-items: flex-start; flex-direction: column; }
+    .ledger-detail-kv { justify-content: flex-start; flex-direction: column; gap: 2px; }
+    .ledger-detail-kv .v { text-align: left; }
+  }
 
   /* ═══════════════════ MODAL ═══════════════════ */
 
@@ -4635,6 +4657,154 @@
 
     // ═══════ Ledger ═══════
 
+    function routeLedgerStatusKey(status) { return variantKey(status); }
+    function routeLedgerStatusLabel(status) {
+      return String(routeLedgerStatusKey(status) || 'Unknown').replace(/([a-z])([A-Z])/g, '$1 $2');
+    }
+    function routeLedgerVenueLabel(venue) {
+      return String(variantKey(venue) || 'Unknown').replace(/([a-z])([A-Z])/g, '$1 $2');
+    }
+    function routeLedgerTextOption(value, fallback = 'Unavailable') {
+      const item = Array.isArray(value) ? routeOpt(value) : value;
+      return item == null ? fallback : item;
+    }
+    function routeLedgerPrincipalLabel(principal) {
+      if (principal == null) return 'Unavailable';
+      try { return typeof principal.toText === 'function' ? principal.toText() : String(principal); }
+      catch (_) { return 'Unavailable'; }
+    }
+    function routeLedgerAmount(value, asset, fallback = 'Unavailable') {
+      const amount = routeLedgerTextOption(value, null);
+      return amount == null ? fallback : fmtTokAmt(amount, routeAssetLabel(asset));
+    }
+    function routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired = false) {
+      const rows = Array.isArray(evidence) ? evidence : [];
+      if (!rows.length) return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v text-ter">${noEvidenceRequired ? 'No evidence required' : 'No evidence yet'}</span></div>`;
+      return `<div class="ledger-detail-kv"><span class="k">${esc(label)}</span><span class="v">${rows.map(item => `${esc(item.evidence_kind || 'evidence')}: ${esc(item.source_reference || 'Unavailable')} · ${fmtTokAmt(item.amount_native, 'native')} · ${fmtTime(item.observed_at_ns)}`).join('<br>')}</span></div>`;
+    }
+    function routeLedgerEvidenceGroupHtml(leg, label, matcher) {
+      const evidence = (Array.isArray(leg.evidence) ? leg.evidence : []).filter(item => matcher.test(String(item.evidence_kind || '')));
+      const noEvidenceRequired = /settlement|receipt/i.test(label) && ['RejectedBeforeDebit', 'Aborted'].includes(routeLedgerStatusKey(leg.status));
+      return routeLedgerEvidenceHtml(evidence, label, noEvidenceRequired);
+    }
+    function routeLedgerLegValue(value, asset, statusKey, kind) {
+      if (kind === 'actual' && value == null || (Array.isArray(value) && !value.length)) {
+        return statusKey === 'AwaitingSettlement' ? 'Awaiting settlement' : 'Unavailable';
+      }
+      if (kind === 'refund' && (value == null || (Array.isArray(value) && !value.length))) return 'No refund recorded';
+      return routeLedgerAmount(value, asset);
+    }
+    function routeLedgerIncidentHtml(leg) {
+      const incident = routeLedgerTextOption(leg.incident, null);
+      if (incident != null) return `<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v negative">${esc(incident)}</span></div>`;
+      const key = routeLedgerStatusKey(leg.status);
+      if (key === 'RejectedBeforeDebit') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Rejected before debit</span></div>';
+      if (key === 'ReconciliationRequired') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Reconciliation required</span></div>';
+      if (key === 'HeldInventory') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Partial / held inventory</span></div>';
+      if (key === 'Aborted') return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v">Aborted</span></div>';
+      return '<div class="ledger-detail-kv"><span class="k">Incident</span><span class="v text-ter">No incident recorded</span></div>';
+    }
+    function routeLegDetailHtml(detail) {
+      if (!detail || detail.detail_available === false) return '<div class="ledger-detail-state">Detailed legs were not recorded for this historical execution. Evidence unavailable for historical record.</div>';
+      const legs = Array.isArray(detail.legs) ? detail.legs.slice().sort((a, b) => Number(a.leg_index) - Number(b.leg_index)) : [];
+      if (!legs.length) return '<div class="ledger-detail-state">Detailed legs are Unavailable for this execution.</div>';
+      const count = legs.length;
+      return `<div class="ledger-detail"><ol class="ledger-detail-list">${legs.map((leg, index) => {
+        const statusKey = routeLedgerStatusKey(leg.status);
+        const from = routeAssetLabel(leg.from), to = routeAssetLabel(leg.to);
+        const actualInput = routeLedgerLegValue(leg.actual_input_debit_native, leg.from, statusKey, 'actual');
+        const actualOutput = routeLedgerLegValue(leg.actual_output_credit_native, leg.to, statusKey, 'actual');
+        const refund = routeLedgerLegValue(leg.refund_credit_native, leg.to, statusKey, 'refund');
+        return `<li class="ledger-leg" data-leg-index="${esc(leg.leg_index)}">
+          <div class="ledger-leg-head"><span class="ledger-leg-title">Leg ${index + 1} of ${count} · ${esc(routeLedgerStatusLabel(leg.status))}</span><span class="text-ter">${esc(from)} → ${esc(to)}</span></div>
+          <div class="ledger-leg-grid">
+            <div><div class="ledger-detail-group-label">Route</div><div class="ledger-detail-kv"><span class="k">Venue</span><span class="v">${esc(routeLedgerVenueLabel(leg.venue))}</span></div><div class="ledger-detail-kv"><span class="k">Pool</span><span class="v">${esc(leg.pool_id || 'Unavailable')} · ${esc(routeLedgerPrincipalLabel(leg.pool_principal))}</span></div><div class="ledger-detail-kv"><span class="k">Path / edge</span><span class="v">${esc(leg.edge_id || 'Unavailable')} · ${esc(from)} → ${esc(to)}</span></div></div>
+            <div><div class="ledger-detail-group-label">Quote and request</div><div class="ledger-detail-kv"><span class="k">Requested input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted input</span><span class="v">${routeLedgerAmount(leg.quoted_input_native, leg.from)}</span></div><div class="ledger-detail-kv"><span class="k">Quoted output</span><span class="v">${routeLedgerAmount(leg.quoted_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Minimum accepted</span><span class="v">${routeLedgerAmount(leg.minimum_output_native, leg.to)}</span></div><div class="ledger-detail-kv"><span class="k">Ledger fees</span><span class="v">${routeLedgerAmount(leg.input_fee_native, leg.from)} + ${routeLedgerAmount(leg.output_fee_native, leg.to)}</span></div></div>
+            <div><div class="ledger-detail-group-label">Actual settlement</div><div class="ledger-detail-kv"><span class="k">Actual input debit</span><span class="v">${actualInput}</span></div><div class="ledger-detail-kv"><span class="k">Effective input</span><span class="v">${routeLedgerLegValue(leg.actual_effective_input_native, leg.from, statusKey, 'actual')}</span></div><div class="ledger-detail-kv"><span class="k">Actual output</span><span class="v">${actualOutput}</span></div><div class="ledger-detail-kv"><span class="k">Refund</span><span class="v">${refund}</span></div></div>
+          </div>
+          <div class="ledger-detail-group"><div class="ledger-detail-group-label">Submission, receipt, and settlement evidence</div>${routeLedgerEvidenceGroupHtml(leg, 'Submission evidence', /submit|request|prepared/i)}${routeLedgerEvidenceGroupHtml(leg, 'Receipt evidence', /receipt|tx|transfer/i)}${routeLedgerEvidenceGroupHtml(leg, 'Settlement evidence', /settle|reconcil|balance/i)}<div class="ledger-detail-kv"><span class="k">Prepared</span><span class="v">${leg.prepared_at_ns ? fmtTime(leg.prepared_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Submitted</span><span class="v">${leg.submitted_at_ns ? fmtTime(leg.submitted_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Settled</span><span class="v">${leg.settled_at_ns ? fmtTime(leg.settled_at_ns) : 'Unavailable'}</span></div><div class="ledger-detail-kv"><span class="k">Reconciled</span><span class="v">${leg.reconciled_at_ns ? fmtTime(leg.reconciled_at_ns) : 'Unavailable'}</span></div>${routeLedgerIncidentHtml(leg)}</div>
+        </li>`;
+      }).join('')}</ol></div>`;
+    }
+    function routeLedgerDetailStateHtml(status, error, executionId) {
+      if (status === 'loading') return '<div class="ledger-detail-state">Loading leg details…</div>';
+      if (status === 'failed') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''} <button type="button" class="btn btn-sm btn-ghost" onclick="toggleLedgerExecution('${esc(executionId)}', true)">Retry</button></div>`;
+      if (status === 'unavailable') return `<div class="ledger-detail-state negative">Unavailable${error ? `: ${esc(error)}` : ''}</div>`;
+      return '<div class="ledger-detail-state">Unavailable</div>';
+    }
+    function routeLedgerEntryHtml(record) {
+      const executionId = String(record.execution_id || 'unknown');
+      const detailId = `ledger-detail-${executionId}`;
+      const expanded = Boolean(state.expandedRows && state.expandedRows.has(executionId));
+      const cached = routeExecutionDetails.get(executionId);
+      const detailHtml = expanded
+        ? (cached && cached.status === 'fresh' ? routeLegDetailHtml(cached.value) : routeLedgerDetailStateHtml(cached ? cached.status : 'loading', cached && cached.error, executionId))
+        : '';
+      const realized = routeLedgerTextOption(record.realized_profit, null);
+      const pnl = realized == null ? '<span class="text-muted">Unavailable</span>' : `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${fmt$(realized)}</span>`;
+      const requestedInput = record.start_asset ? routeLedgerAmount(record.planned_input_native, record.start_asset) : `${esc(record.planned_input_native == null ? 'Unavailable' : record.planned_input_native)} native`;
+      const buttonLabel = expanded ? 'Hide legs' : 'Show legs';
+      return `<tr class="route-execution-summary" id="route-execution-summary-${esc(executionId)}"><td class="text-ter">${record.updated_at_ns ? fmtTime(record.updated_at_ns) : 'Unavailable'}</td><td><button type="button" class="btn btn-sm btn-ghost ledger-disclosure" id="ledger-disclosure-${esc(executionId)}" aria-expanded="${expanded ? 'true' : 'false'}" aria-controls="${esc(detailId)}" onclick="toggleLedgerExecution('${esc(executionId)}')">${buttonLabel}</button> <span class="num">${esc(executionId)}</span></td><td style="font-family:var(--font-ui);font-size:11.5px" class="text-sec">${esc(record.route_id || 'Route unavailable')}</td><td class="ledger-legs">${esc(routePhaseLabel(record.phase))}</td><td>${requestedInput}</td><td aria-label="Realized P&amp;L"><span class="ledger-parent-pnl">${pnl}</span></td></tr><tr class="ledger-disclosure-row" id="${esc(detailId)}"${expanded ? '' : ' hidden'}><td colspan="6">${detailHtml}</td></tr>`;
+    }
+    async function toggleLedgerExecution(executionId, retry = false) {
+      const id = String(executionId);
+      const button = document.getElementById(`ledger-disclosure-${id}`);
+      const detailRow = document.getElementById(`ledger-detail-${id}`);
+      if (!button || !detailRow) return false;
+      if (retry) {
+        routeExecutionDetails.delete(id);
+        routeExecutionDetailLoads.delete(id);
+      }
+      const expanded = button.getAttribute('aria-expanded') === 'true';
+      if (expanded && !retry) {
+        button.setAttribute('aria-expanded', 'false');
+        button.textContent = 'Show legs';
+        detailRow.hidden = true;
+        if (state.expandedRows) state.expandedRows.delete(id);
+        button.focus();
+        return true;
+      }
+      button.setAttribute('aria-expanded', 'true');
+      button.textContent = 'Hide legs';
+      detailRow.hidden = false;
+      if (state.expandedRows) state.expandedRows.add(id);
+      const cached = routeExecutionDetails.get(id);
+      if (cached && cached.status === 'fresh' && !retry) {
+        detailRow.querySelector('td').innerHTML = routeLegDetailHtml(cached.value);
+        button.focus();
+        return true;
+      }
+      if (routeExecutionDetailLoads.has(id)) {
+        detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+        button.focus();
+        return routeExecutionDetailLoads.get(id);
+      }
+      if (!anonymousActor || typeof anonymousActor.get_route_execution_detail_v1 !== 'function') {
+        routeExecutionDetails.set(id, { status: 'unavailable', error: 'route execution detail is unavailable' });
+        detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('unavailable', 'route execution detail is unavailable', id);
+        button.focus();
+        return false;
+      }
+      routeExecutionDetails.set(id, { status: 'loading' });
+      detailRow.querySelector('td').innerHTML = routeLedgerDetailStateHtml('loading', '', id);
+      const load = (async () => {
+        try {
+          const result = await anonymousActor.get_route_execution_detail_v1(id);
+          if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) throw new Error(result && result.Err ? result.Err : 'route detail query failed');
+          routeExecutionDetails.set(id, { status: 'fresh', value: result.Ok });
+          if (state.expandedRows && state.expandedRows.has(id) && document.getElementById(`ledger-detail-${id}`)) document.getElementById(`ledger-detail-${id}`).querySelector('td').innerHTML = routeLegDetailHtml(result.Ok);
+          return result.Ok;
+        } catch (error) {
+          const message = error && error.message ? error.message : String(error);
+          routeExecutionDetails.set(id, { status: 'failed', error: message });
+          if (document.getElementById(`ledger-detail-${id}`)) document.getElementById(`ledger-detail-${id}`).querySelector('td').innerHTML = routeLedgerDetailStateHtml('failed', message, id);
+          return null;
+        } finally { routeExecutionDetailLoads.delete(id); button.focus(); }
+      })();
+      routeExecutionDetailLoads.set(id, load);
+      return load;
+    }
+
     function ledgerEntryHtml(e) {
       const legs = e.legs.length;
       const ts = e.ts ? fmtTime(e.ts) : '—';
@@ -4677,6 +4847,11 @@
         </div>`;
     }
 
+    // Route execution details are fetched only after an operator expands a
+    // terminal execution. The cache survives routine view re-renders and
+    // keeps a failed request distinct from an unavailable historical detail.
+    const routeExecutionDetails = new Map();
+    const routeExecutionDetailLoads = new Map();
     let ledgerCache = { entries: [], summaryCount: 0 };
     async function loadLedgerPage() {
       const tbody = document.getElementById('ledger-body');
@@ -4703,6 +4878,18 @@
       if (prevBtn) prevBtn.disabled = tradesPage === 0;
       if (nextBtn) nextBtn.disabled = !ledgerHasMore;
       if (pageEl) pageEl.textContent = `Page ${tradesPage + 1}`;
+    }
+    function routeLedgerSourceHtml() {
+      const source = routeSources.terminalExecutions;
+      const display = routeSourceState('terminalExecutions');
+      if (display === 'loading') return '<tr><td colspan="6" class="ledger-detail-state">Loading route executions…</td></tr>';
+      if (display === 'failed' || display === 'unavailable') return `<tr><td colspan="6" class="ledger-detail-state negative">Unavailable${esc(routeSourceError(source))}</td></tr>`;
+      if (!latestTerminalExecutions.length) return `<tr><td colspan="6" class="ledger-detail-state${display === 'stale' ? ' ts-stale' : ''}">${display === 'stale' ? `Stale · ${esc(sourceLastSuccessLabel(source))} · no cached route executions` : 'No terminal route executions.'}</td></tr>`;
+      return latestTerminalExecutions.map(routeLedgerEntryHtml).join('');
+    }
+    function renderRouteLedgerTable() {
+      const body = document.getElementById('route-ledger-body');
+      if (body) body.innerHTML = routeLedgerSourceHtml();
     }
     window.ledgerPrev = () => { if (tradesPage > 0) { tradesPage--; loadLedgerPage(); } };
     window.ledgerNext = () => { if (ledgerHasMore) { tradesPage++; loadLedgerPage(); } };
@@ -4780,9 +4967,21 @@
       const filter = state.ledgerFilter;
       const allIds = STRATEGIES.map(s => s.id);
       el.innerHTML = `
-        <div class="card-subtitle">Unified, filterable trade ledger. Legs of one arb render as a single grouped entry with combined P&amp;L. Strategy attribution is derived from real venue + token fields — unattributable legs show the venue pair, never a fabricated letter.</div>
+        <div class="card-subtitle">Route executions are the primary ledger. Expand a terminal execution to inspect its ordered legs; realized P&amp;L is shown once on the parent transaction.</div>
+        <div class="card">
+          <div class="card-header">Route execution history</div>
+          <div class="table-wrap">
+            <table class="ledger-table" aria-label="Route execution ledger">
+              <thead><tr><th scope="col">Time</th><th scope="col">Execution</th><th scope="col">Route</th><th scope="col">Status</th><th scope="col">Requested input</th><th scope="col">Realized P&amp;L</th></tr></thead>
+              <tbody id="route-ledger-body">${routeLedgerSourceHtml()}</tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="margin-top:var(--sp-4)">
+          <div class="card-header ledger-legacy-heading">Legacy trade history</div>
+          <div class="ledger-note" style="margin-top:0;margin-bottom:var(--sp-3)">Legacy TradeLeg records are historical only. Their adjacency-based grouping cannot establish arbitrary route identity or per-leg settlement evidence.</div>
         <div class="ledger-filters">
-          <span class="text-ter" style="font-size:12px">Filter:</span>
+          <span class="text-ter" style="font-size:12px">Legacy filter:</span>
           <button class="btn btn-sm ${!filter ? 'btn-primary' : 'btn-ghost'}" onclick="setLedgerFilter(null)">All</button>
           ${allIds.map(id => `<button class="btn btn-sm ${filter === id ? 'btn-primary' : 'btn-ghost'}" onclick="setLedgerFilter('${id}')">${id}</button>`).join('')}
           <button class="chip chip-sm ${state.ledgerLegendOpen ? 'active' : ''}" style="margin-left:auto" onclick="toggleLedgerLegend()">Legend</button>
@@ -4790,8 +4989,8 @@
         ${state.ledgerLegendOpen ? legendHtml() : ''}
         <div class="card">
           <div class="table-wrap">
-            <table class="ledger-table">
-              <thead><tr><th>Time</th><th>Strategy</th><th>Venues</th><th>Legs</th><th>Amount</th><th>P&amp;L</th></tr></thead>
+            <table class="ledger-table" aria-label="Legacy trade ledger">
+              <thead><tr><th scope="col">Time</th><th scope="col">Strategy</th><th scope="col">Venues</th><th scope="col">Legs</th><th scope="col">Amount</th><th scope="col">P&amp;L</th></tr></thead>
               <tbody id="ledger-body"><tr><td colspan="6" style="text-align:center;color:var(--text-tertiary)">Loading…</td></tr></tbody>
             </table>
           </div>

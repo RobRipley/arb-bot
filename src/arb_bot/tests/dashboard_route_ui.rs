@@ -318,3 +318,62 @@ fn mobile_primary_tabs_size_to_content() {
     assert!(responsive.contains(".nav-item"));
     assert!(responsive.contains("width: auto") || responsive.contains("width: max-content"));
 }
+
+#[test]
+fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
+    let route_helpers = rendered_region(
+        "function routeLedgerStatusKey",
+        "function legendHtml",
+    );
+    let ledger = rendered_region(
+        "function renderLedger()",
+        "// ═══════ Progress indicator",
+    );
+    for marker in [
+        "function routeLedgerEntryHtml",
+        "function routeLegDetailHtml",
+        "async function toggleLedgerExecution",
+        "get_route_execution_detail_v1",
+        "routeExecutionDetails",
+        "routeExecutionDetailLoads",
+        "aria-expanded",
+        "aria-controls",
+        "Leg ${index + 1} of ${count}",
+        "Awaiting settlement",
+        "No evidence yet",
+        "Submission evidence",
+        "Settlement evidence",
+        "Retry",
+    ] {
+        assert!(route_helpers.contains(marker), "route ledger missing marker: {marker}");
+    }
+    let summary = route_helpers
+        .split("function routeLedgerEntryHtml")
+        .nth(1)
+        .unwrap()
+        .split("async function toggleLedgerExecution")
+        .next()
+        .unwrap();
+    assert!(!summary.contains("get_route_execution_detail_v1"), "summary rendering must not eagerly fetch detail");
+    assert!(!route_helpers
+        .split("function routeLegDetailHtml")
+        .nth(1)
+        .unwrap()
+        .split("function routeLedgerDetailStateHtml")
+        .next()
+        .unwrap()
+        .contains("realized_profit"), "child legs must not render a second P&L");
+    for marker in [
+        "Route execution history",
+        "id=\"route-ledger-body\"",
+        "aria-label=\"Route execution ledger\"",
+        "Legacy trade history",
+        "Legacy TradeLeg records are historical only",
+        "scope=\"col\"",
+    ] {
+        assert!(ledger.contains(marker), "ledger missing ownership/accessibility marker: {marker}");
+    }
+    let route_pos = ledger.find("Route execution history").unwrap();
+    let legacy_pos = ledger.find("Legacy trade history").unwrap();
+    assert!(route_pos < legacy_pos, "route executions must be the primary ledger section");
+}
