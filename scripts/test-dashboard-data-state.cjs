@@ -109,6 +109,7 @@ assert(html.includes('Blocked · stale runtime status'), 'stale runtime must be 
 assert(html.includes("runtimeState === 'fresh'"), 'stale runtime must not expose an actionable mutation button');
 
 const loadRouteDataSection = html.slice(html.indexOf('    async function loadRouteData()'), html.indexOf('    window.startRouteObservation'));
+const terminalLoaderSection = html.slice(html.indexOf('    async function loadTerminalExecutionsForToday'), html.indexOf('    async function loadRouteData()'));
 const runtime = { compiled_support: true, live_authorized: false, enabled: false, dry_run: true, last_tick_ns: 1000000000n };
 const routeActor = {
   get_route_arb_status_v1: async () => ({ config_valid: true, execution_compiled_in: true, live_execution_authorized: false, route_count: 1 }),
@@ -118,7 +119,7 @@ const routeActor = {
   get_route_reservations_v1: async () => ({ Ok: [{ reservation_id: 'reservation-1', active: true }] }),
   get_held_positions_v1: async () => ({ Ok: [{ position_id: 'held-1', lots: [] }] }),
   get_current_route_execution_v1: async () => [{ execution_id: 'exec-1', route_id: 'route-1', phase: { Quoting: null } }],
-  get_terminal_route_executions_v1: async () => ({ Ok: [] }),
+  get_terminal_route_executions_v1: null,
   get_route_runtime_status_v1: async () => ({ Ok: runtime }),
 };
 const walletActor = {
@@ -139,14 +140,75 @@ Object.assign(context, {
   latestRouteRuntime: null,
   latestRouteWallet: [],
   routeOpt: value => Array.isArray(value) && value.length ? value[0] : null,
+  TERMINAL_EXECUTIONS_PAGE_SIZE: 100n,
+  TERMINAL_EXECUTIONS_MAX: 1000n,
+  terminalExecutionsIncomplete: false,
+  terminalExecutionsLoadedCount: 0,
 });
+const terminalRows = Array.from({ length: 125 }, (_, index) => ({
+  execution_id: `exec-${index}`,
+  updated_at_ns: BigInt(Date.now()) * 1000000n - BigInt(index) * 1000000000n,
+  phase: { Completed: null },
+}));
+let terminalQueryCount = 0;
+routeActor.get_terminal_route_executions_v1 = async (offset, limit) => {
+  terminalQueryCount += 1;
+  const start = Number(offset);
+  return { Ok: terminalRows.slice(start, start + Number(limit)) };
+};
+vm.runInContext(terminalLoaderSection, context);
 vm.runInContext(loadRouteDataSection, context);
 (async () => {
   await vm.runInContext('loadRouteData()', context);
+  assert.equal(vm.runInContext('routeSources.terminalExecutions.status', context), 'fresh');
+  assert.equal(vm.runInContext('latestTerminalExecutions.length', context), 125, 'today metrics must fetch beyond the old 20-row page');
+  assert.equal(terminalQueryCount, 2, 'bounded today coverage should use two 100-row pages for 125 rows');
+  assert.equal(vm.runInContext('terminalExecutionsIncomplete', context), false);
   for (const name of ['lock', 'currentExecution', 'reservations', 'heldPositions', 'runtime', 'wallet']) {
     assert.equal(vm.runInContext(`routeSources.${name}.status`, context), 'fresh', `${name} should load fresh`);
   }
   assert.equal(vm.runInContext('routeSources.runtime.lastSuccessMs', context), 1000);
+
+  const cockpitSection = html.slice(html.indexOf('    function cockpitSourceLabel'), html.indexOf('    function renderCockpit'));
+  const todayNs = BigInt(Date.now()) * 1000000n;
+  Object.assign(context, {
+    cockpitStates: { currentExecution: 'fresh', terminalExecutions: 'fresh', runtime: 'fresh' },
+    routeSourceState: name => context.cockpitStates[name] || 'fresh',
+    routeSourceError: () => '',
+    sourceLastSuccessLabel: () => 'as of now',
+    routePhaseLabel: () => 'Completed',
+    routeAge: () => '1s',
+    bi: value => typeof value === 'bigint' ? Number(value) : value,
+    fmt$: value => `$${(Number(value) / 1e6).toFixed(4)}`,
+    fmtTok: (value, decimals) => (Number(value) / 10 ** decimals).toFixed(decimals > 6 ? 4 : 2),
+    latestRouteExecution: null,
+    latestRouteRuntime: { compiled_support: true, live_authorized: true, enabled: true, dry_run: false, last_tick_ns: todayNs },
+    latestTerminalExecutions: [
+      { execution_id: 'stable-1', updated_at_ns: todayNs - 1000000n, candidate_class: { StablePar: null }, phase: { Completed: null }, realized_profit: [1250000n] },
+      { execution_id: 'icp-1', updated_at_ns: todayNs - 2000000n, candidate_class: { IcpReturning: null }, phase: { Aborted: null }, realized_profit: [123456789n] },
+    ],
+    terminalExecutionsIncomplete: false,
+    terminalExecutionsLoadedCount: 2,
+  });
+  vm.runInContext(cockpitSection, context);
+  const todayMetrics = vm.runInContext('cockpitTodayResults("fresh")', context);
+  assert.equal(todayMetrics.stableResult, '$1.2500', 'stable terminal profit must stay USD6');
+  assert.equal(todayMetrics.icpResult, '1.2346 ICP', 'ICP terminal profit must stay ICP e8s');
+  assert.equal(todayMetrics.completed, '1');
+  assert.equal(todayMetrics.failed, '1');
+  context.cockpitStates.currentExecution = 'stale';
+  const staleCurrent = vm.runInContext('cockpitStatus()', context);
+  assert.equal(staleCurrent.label, 'Scanning', 'current source degradation must not override runtime status');
+  assert.match(staleCurrent.executionSource.label, /^Stale/);
+  context.cockpitStates.currentExecution = 'fresh';
+  context.cockpitStates.terminalExecutions = 'unavailable';
+  const unavailableTerminal = vm.runInContext('cockpitStatus()', context);
+  assert.equal(unavailableTerminal.label, 'Scanning', 'terminal source degradation must not override runtime status');
+  assert.match(unavailableTerminal.terminalSource.label, /^Unavailable/);
+  context.cockpitStates.terminalExecutions = 'fresh';
+  context.cockpitStates.runtime = 'stale';
+  assert.equal(vm.runInContext('cockpitStatus().label', context), 'Blocked', 'stale runtime must block independently');
+
   for (const name of Object.keys(routeActor)) routeActor[name] = async () => { throw Error('query rejected'); };
   walletActor.get_route_wallet_balances_v1 = async () => { throw Error('query rejected'); };
   await vm.runInContext('loadRouteData()', context);

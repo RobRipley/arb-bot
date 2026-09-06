@@ -120,3 +120,177 @@ fn volume_controls_remain_available_as_a_separate_engine() {
         assert!(DASHBOARD.contains(required), "volume UI regressed: {required}");
     }
 }
+
+#[test]
+fn dashboard_has_exactly_five_primary_views_with_one_mount_each() {
+    let nav = rendered_region("const VIEWS = [", "function renderNav()");
+    let expected = [
+        ("cockpit", "Cockpit"),
+        ("markets", "Markets"),
+        ("ops", "Ops"),
+        ("ledger", "Ledger"),
+        ("diagnostics", "Diagnostics"),
+    ];
+    assert_eq!(nav.matches("{ id:").count(), expected.len());
+    for (id, label) in expected {
+        assert!(nav.contains(&format!("id: '{id}'")), "missing primary view id: {id}");
+        assert!(nav.contains(&format!("label: '{label}'")), "missing primary view label: {label}");
+        assert_eq!(DASHBOARD.matches(&format!("id=\"view-{id}\"")).count(), 1, "view mount must be unique: {id}");
+    }
+    for retired in ["charts", "money"] {
+        assert!(!nav.contains(&format!("id: '{retired}'")), "retired primary view remains: {retired}");
+        assert_eq!(DASHBOARD.matches(&format!("id=\"view-{retired}\"")).count(), 0, "retired mount remains: {retired}");
+    }
+}
+
+#[test]
+fn dashboard_assigns_content_to_unique_owners() {
+    let markets = rendered_region("function renderMarkets()", "// ═══════ Force confirm");
+    let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
+    let diagnostics = rendered_region("function renderDiagnostics()", "// ═══════ Ledger");
+
+    assert!(markets.contains("renderCharts") || markets.contains("chart-tabs"), "Markets must own charts");
+    assert!(markets.contains("wallet") || markets.contains("Wallet") || markets.contains("route-wallet-grid"), "Markets must retain wallet readiness");
+    assert!(ops.contains("Automatic arbitrage"), "Ops must own automatic arbitrage");
+    assert!(ops.contains("Volume engine"), "Ops must own volume operations");
+    assert!(diagnostics.contains("Route lock") || diagnostics.contains("Diagnostics"), "Diagnostics must own runtime diagnostics");
+
+    assert!(!markets.contains("setRouteTrading("), "automatic arbitrage control must not render in Markets");
+    assert!(!markets.contains("trigger_volume_cycle"), "volume operation must not render in Markets");
+}
+
+#[test]
+fn cockpit_exposes_ordered_operational_state_sections_and_truthful_labels() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in [
+        "data-cockpit-state",
+        "data-cockpit-heartbeat",
+        "data-cockpit-phase",
+        "data-cockpit-realized-results",
+        "data-cockpit-latest-execution",
+        "data-cockpit-incidents",
+        "Stopped",
+        "Scanning",
+        "Executing",
+        "Confirming",
+        "Reconciling",
+        "Blocked",
+        "Unknown",
+    ] {
+        assert!(cockpit.contains(marker), "Cockpit missing truthful state marker: {marker}");
+    }
+    let state_pos = cockpit.find("data-cockpit-state").unwrap();
+    let phase_pos = cockpit.find("data-cockpit-phase").unwrap();
+    let results_pos = cockpit.find("data-cockpit-realized-results").unwrap();
+    let latest_pos = cockpit.find("data-cockpit-latest-execution").unwrap();
+    let incidents_pos = cockpit.find("data-cockpit-incidents").unwrap();
+    assert!(state_pos < phase_pos && phase_pos < results_pos && results_pos < latest_pos && latest_pos < incidents_pos);
+}
+
+#[test]
+fn cockpit_keeps_execution_and_terminal_failures_distinct_from_empty_success() {
+    let status = rendered_region("function cockpitStatus()", "function renderCockpit()");
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for source in ["currentExecution", "terminalExecutions"] {
+        assert!(status.contains(&format!("routeSourceState('{source}'")), "Cockpit status must inspect {source} source state");
+    }
+    for state in ["failed", "stale", "unavailable", "Unknown", "Unavailable", "Stale"] {
+        assert!(status.contains(state) || cockpit.contains(state), "Cockpit must render explicit {state} state");
+    }
+    assert!(cockpit.contains("data-cockpit-execution-state"));
+    assert!(cockpit.contains("data-cockpit-terminal-state"));
+    assert!(status.contains("cockpitSourceLabel"));
+    assert!(!cockpit.contains("latestRouteExecution ? `${esc(latestRouteExecution.execution_id)} · leg"), "raw current execution ternary bypasses source state");
+    assert!(cockpit.contains("cockpit.terminalSource.state === 'fresh'"), "terminal detail must be gated by fresh source state");
+}
+
+#[test]
+fn cockpit_reports_today_realized_result_and_terminal_counts() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in [
+        "data-cockpit-today-results",
+        "Today's realized result",
+        "Completed",
+        "Failed",
+        "terminalExecutions",
+        "realized_profit",
+    ] {
+        assert!(cockpit.contains(marker), "Cockpit missing today's terminal metric: {marker}");
+    }
+}
+
+#[test]
+fn cockpit_latest_terminal_card_preserves_non_completed_phases() {
+    let status = rendered_region("function cockpitStatus()", "function renderCockpit()");
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    assert!(cockpit.contains("Latest terminal execution"));
+    assert!(!cockpit.contains("Latest completed execution"));
+    assert!(status.contains("No terminal route execution"));
+    assert!(cockpit.contains("data-cockpit-terminal-phase"));
+    assert!(cockpit.contains("routePhaseLabel(latestTerminalExecutions[0].phase)"));
+}
+
+#[test]
+fn ops_volume_handlers_and_balance_loader_repaint_the_new_owners() {
+    let cycle = rendered_region("window.doRunVolumeCycle", "window.doVolumeRebalance");
+    let rebalance = rendered_region("window.doVolumeRebalance", "// ═══════ Charts");
+    assert!(cycle.contains("renderOps()"));
+    assert!(rebalance.contains("renderOps()"));
+    assert!(!cycle.contains("renderMarkets()"));
+    assert!(!rebalance.contains("renderMarkets()"));
+
+    let balances = rendered_region("async function loadMyBalances", "// ═══════ Market state computation");
+    assert!(balances.contains("renderMarkets()"), "balance refresh must repaint Markets after its ownership move");
+}
+
+#[test]
+fn primary_navigation_and_cockpit_status_chips_are_keyboard_operable() {
+    let nav = rendered_region("function renderNav()", "window.goTo");
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    assert!(nav.contains("<button"));
+    assert!(nav.contains("type=\"button\""));
+    assert!(!nav.contains("<div class=\"nav-item"));
+    assert!(cockpit.contains("<button type=\"button\" class=\"status-chip"));
+    assert!(!cockpit.contains("<div class=\"status-chip\" onclick"), "clickable status chips should use native controls");
+}
+
+#[test]
+fn realized_profit_totals_preserve_candidate_units() {
+    let results = rendered_region("function cockpitTodayResults", "function cockpitStatus");
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    assert!(results.contains("StablePar") || results.contains("StableSettledCrossAsset"));
+    assert!(results.contains("IcpReturning"));
+    assert!(results.contains("stableRealized"));
+    assert!(results.contains("icpRealized"));
+    assert!(results.contains("stableResult"));
+    assert!(results.contains("icpResult"));
+    assert!(cockpit.contains("Stable profit") || cockpit.contains("USD realized"));
+    assert!(cockpit.contains("ICP profit") || cockpit.contains("ICP realized"));
+}
+
+#[test]
+fn terminal_loader_is_bounded_and_covers_today_beyond_one_page() {
+    let loader = rendered_region("function loadTerminalExecutionsForToday", "async function loadRouteData");
+    assert!(loader.contains("TERMINAL_EXECUTIONS_PAGE_SIZE"));
+    assert!(loader.contains("TERMINAL_EXECUTIONS_MAX"));
+    assert!(loader.contains("get_terminal_route_executions_v1"));
+    assert!(loader.contains("terminalExecutionsIncomplete"));
+    assert!(loader.contains("100") || loader.contains("20"));
+    assert!(loader.contains("nextOffset") || loader.contains("offset"));
+}
+
+#[test]
+fn execution_source_degradation_does_not_override_runtime_status() {
+    let status = rendered_region("function cockpitStatus()", "function renderCockpit()");
+    assert!(!status.contains("sourceBoundState"));
+    assert!(status.contains("runtimeState"));
+    assert!(status.contains("executionSource"));
+    assert!(status.contains("terminalSource"));
+}
+
+#[test]
+fn mobile_primary_tabs_size_to_content() {
+    let responsive = rendered_region("@media (max-width: 900px)", "@media (max-width: 480px)");
+    assert!(responsive.contains(".nav-item"));
+    assert!(responsive.contains("width: auto") || responsive.contains("width: max-content"));
+}

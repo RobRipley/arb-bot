@@ -117,6 +117,13 @@
     border-left: 2px solid transparent;
     transition: 0.15s;
     user-select: none;
+    width: 100%;
+    font-family: inherit;
+    text-align: left;
+    background: transparent;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 0;
   }
   .nav-item:hover { color: var(--text-primary); background: rgba(255,255,255,0.03); }
   .nav-item.active {
@@ -334,6 +341,7 @@
     background: var(--surface-1); border: 1px solid var(--border);
     border-radius: var(--radius-md); padding: 9px 14px; cursor: pointer;
     transition: border-color .15s;
+    font: inherit; color: inherit; text-align: left;
   }
   .status-chip:hover { border-color: var(--border-strong); }
   .status-chip-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-tertiary); }
@@ -559,7 +567,7 @@
     .sidebar-brand { padding: 0 var(--sp-3); white-space: nowrap; flex-shrink: 0; }
     .sidebar-brand small { display: none; }
     #nav-list { display: flex; align-items: center; overflow-x: auto; flex: 1; min-width: 0; }
-    .nav-item { border-left: none; border-bottom: 2px solid transparent; padding: var(--sp-3) 12px; white-space: nowrap; flex-shrink: 0; }
+    .nav-item { border-left: none; border-bottom: 2px solid transparent; padding: var(--sp-3) 12px; white-space: nowrap; flex-shrink: 0; width: auto; }
     .nav-item.active { border-bottom-color: var(--accent); }
     .sidebar-bottom { border-top: none; border-left: 1px solid var(--border); padding: var(--sp-2) var(--sp-3); flex-direction: row; align-items: center; flex-shrink: 0; }
     .sidebar-principal { display: none; }
@@ -693,10 +701,9 @@
     <main class="content" id="content">
       <section class="view active" id="view-cockpit"></section>
       <section class="view" id="view-markets"></section>
-      <section class="view" id="view-charts"></section>
-      <section class="view" id="view-money"></section>
       <section class="view" id="view-ops"></section>
       <section class="view" id="view-ledger"></section>
+      <section class="view" id="view-diagnostics"></section>
     </main>
   </div>
 </div>
@@ -1438,6 +1445,8 @@
     let latestHeldPositions = [];
     let latestRouteExecution = null;
     let latestTerminalExecutions = [];
+    let terminalExecutionsIncomplete = false;
+    let terminalExecutionsLoadedCount = 0;
     let routeDataRequestPromise = null;
     let healthRequestPromise = null;
     let publicHealthRequestPromise = null;
@@ -1451,6 +1460,8 @@
     // Route data is independently observable. A failed refresh must never be
     // turned into a healthy empty value by a query fallback.
     const ROUTE_RUNTIME_STALE_AFTER_MS = 30_000;
+    const TERMINAL_EXECUTIONS_PAGE_SIZE = 100n;
+    const TERMINAL_EXECUTIONS_MAX = 1000n;
     function createSourceState() {
       return { status: 'loading', value: null, error: null, lastSuccessMs: null, lastAttemptMs: null };
     }
@@ -1745,17 +1756,16 @@
     const VIEWS = [
       { id: 'cockpit', label: 'Cockpit' },
       { id: 'markets', label: 'Markets' },
-      { id: 'charts', label: 'Charts' },
-      { id: 'money', label: 'Money' },
       { id: 'ops', label: 'Ops' },
       { id: 'ledger', label: 'Ledger' },
+      { id: 'diagnostics', label: 'Diagnostics' },
     ];
 
     function renderNav() {
       const badgeOn = !!currentWedgeKey && wedgeDismissedKey !== currentWedgeKey;
       document.getElementById('nav-list').innerHTML = VIEWS.map(v => {
         const badge = (v.id === 'cockpit' && badgeOn) ? '<span class="nav-badge">!</span>' : '';
-        return `<div class="nav-item${v.id === state.activeView ? ' active' : ''}" data-view="${v.id}" onclick="goTo('${v.id}')">${v.label}${badge}</div>`;
+        return `<button type="button" class="nav-item${v.id === state.activeView ? ' active' : ''}" data-view="${v.id}" aria-current="${v.id === state.activeView ? 'page' : 'false'}" onclick="goTo('${v.id}')">${v.label}${badge}</button>`;
       }).join('');
     }
 
@@ -1772,20 +1782,19 @@
         state.ledgerFilter = opts.ledgerFilter;
       }
       renderCurrentView();
-      if (id === 'charts') {
+      if (id === 'markets') {
         chartsRefreshInterval = setInterval(async () => { await loadSnapshots(); renderCharts(); }, 60000);
       }
-      if (id === 'ops' || id === 'money') { if (isAdmin) loadVolumeData(); }
+      if (id === 'ops') { if (isAdmin) loadVolumeData(); }
     };
 
     function renderCurrentView() {
       switch (state.activeView) {
         case 'cockpit': renderCockpit(); break;
         case 'markets': renderMarkets(); break;
-        case 'charts': renderCharts(); break;
-        case 'money': renderMoney(); break;
         case 'ops': renderOps(); break;
         case 'ledger': renderLedger(); break;
+        case 'diagnostics': renderDiagnostics(); break;
       }
     }
 
@@ -2115,9 +2124,9 @@
         ]);
         const [b1, b2, b3, b4, b5, b6] = await Promise.all([a1, a2, a3, a4, a5, a6].map(a => a.icrc1_balance_of(acct)));
         window._operatorBals = { b3usd: bi(b1), bCkusdc: bi(b2), bCkusdt: bi(b3), bIcusd: bi(b4), bIcp: bi(b5), bBob: bi(b6) };
-        if (state.activeView === 'money') renderMoney();
+        if (state.activeView === 'markets') renderMarkets();
         return window._operatorBals;
-      } catch (e) { console.error('loadMyBalances:', e); return null; }
+      } catch (e) { console.error('loadMyBalances:', e); if (state.activeView === 'markets') renderMarkets(); return null; }
     }
 
     // ═══════ Market state computation — the registry's live layer ═══════
@@ -2611,6 +2620,29 @@
         <div class="card"><div class="card-header">Held positions</div><div id="route-held-positions" class="route-list">${heldRows}</div></div>
       </div>`;
     }
+    function renderDiagnostics() {
+      const el = document.getElementById('view-diagnostics');
+      if (!el) return;
+      const observationState = routeSourceState('observation');
+      const terminalState = routeSourceState('terminalExecutions');
+      const obs = latestRouteObservation;
+      const terminal = latestTerminalExecutions;
+      el.innerHTML = `
+        <div class="card-subtitle">Raw operational evidence stays here: locks, reservations, held positions, execution identifiers, observation counters, and legacy disclosures.</div>
+        ${routeOperationsHtml()}
+        <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
+          <div class="card" data-diagnostics-observation>
+            <div class="card-header">Observation counters</div>
+            ${observationState === 'loading' ? '<div class="route-empty">Loading…</div>' : observationState === 'failed' || observationState === 'unavailable' ? `<div class="route-empty negative">Unavailable${esc(routeSourceError(routeSources.observation))}</div>` : obs ? `<div class="route-list-row"><span>${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates</span><span>${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls</span><span>${obs.scan_complete ? 'complete' : 'in progress'}</span></div>` : '<div class="route-empty">No observation recorded.</div>'}
+          </div>
+          <div class="card" data-diagnostics-evidence>
+            <div class="card-header">Execution evidence</div>
+            ${terminalState === 'loading' ? '<div class="route-empty">Loading…</div>' : terminalState === 'failed' || terminalState === 'unavailable' ? `<div class="route-empty negative">Unavailable${esc(routeSourceError(routeSources.terminalExecutions))}</div>` : terminal.length ? `<div class="route-list">${terminal.map(e => `<div class="route-list-row"><span>${esc(e.execution_id)}</span><span>${esc(e.route_id)}</span><span>${esc(routePhaseLabel(e.phase))}</span></div>`).join('')}</div>` : '<div class="route-empty">No terminal route executions.</div>'}
+          </div>
+        </div>
+        <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Historical ledger rows remain available under Ledger; adjacent legacy rows do not establish a route identity.</div>
+      `;
+    }
     function routeTradingLabel() {
       const runtimeState = typeof routeSourceState === 'function' ? routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS) : latestRouteRuntime ? 'fresh' : 'loading';
       if (runtimeState === 'loading' && !latestRouteRuntime) return 'Status unavailable';
@@ -2690,10 +2722,47 @@
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
         </div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}${observationStamp}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${esc(statusText)}${statusStamp}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
-        ${routeRuntimeHtml()}
-        ${routeOperationsHtml()}
         <div class="route-disclosure" style="margin-top:var(--sp-4)">Legacy A-S/T activity is historical only. Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below.</div>
       </div>`;
+    }
+
+    async function loadTerminalExecutionsForToday() {
+      if (!anonymousActor || typeof anonymousActor.get_terminal_route_executions_v1 !== 'function') {
+        throw new Error('terminal executions is unavailable');
+      }
+      const startNs = BigInt(new Date().setHours(0, 0, 0, 0)) * 1000000n;
+      const rows = [];
+      let offset = 0n;
+      let coveredStartOfDay = false;
+      terminalExecutionsIncomplete = false;
+      while (offset < TERMINAL_EXECUTIONS_MAX) {
+        const result = await anonymousActor.get_terminal_route_executions_v1(offset, TERMINAL_EXECUTIONS_PAGE_SIZE);
+        if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) {
+          throw new Error(result && result.Err ? result.Err : 'terminal executions query failed');
+        }
+        const page = result.Ok || [];
+        rows.push(...page);
+        if (page.length < Number(TERMINAL_EXECUTIONS_PAGE_SIZE)) {
+          coveredStartOfDay = true;
+          break;
+        }
+        const oldestNs = page.reduce((oldest, record) => {
+          const timestamp = BigInt(record.updated_at_ns || 0);
+          return oldest == null || timestamp < oldest ? timestamp : oldest;
+        }, null);
+        if (oldestNs != null && oldestNs < startNs) {
+          coveredStartOfDay = true;
+          break;
+        }
+        offset += BigInt(page.length);
+      }
+      terminalExecutionsIncomplete = !coveredStartOfDay;
+      terminalExecutionsLoadedCount = rows.length;
+      return rows.sort((a, b) => {
+        const left = BigInt(a.updated_at_ns || 0);
+        const right = BigInt(b.updated_at_ns || 0);
+        return left === right ? 0 : left > right ? -1 : 1;
+      });
     }
 
     async function loadRouteData() {
@@ -2735,7 +2804,7 @@
           querySource('reservations', typeof anonymousActor.get_route_reservations_v1 === 'function' ? () => anonymousActor.get_route_reservations_v1(0n, 100n) : null, 'route reservations', true),
           querySource('heldPositions', typeof anonymousActor.get_held_positions_v1 === 'function' ? () => anonymousActor.get_held_positions_v1(0n, 100n) : null, 'held positions', true),
           querySource('currentExecution', typeof anonymousActor.get_current_route_execution_v1 === 'function' ? () => anonymousActor.get_current_route_execution_v1() : null, 'route execution'),
-          querySource('terminalExecutions', typeof anonymousActor.get_terminal_route_executions_v1 === 'function' ? () => anonymousActor.get_terminal_route_executions_v1(0n, 20n) : null, 'terminal executions', true),
+          querySource('terminalExecutions', loadTerminalExecutionsForToday, 'terminal executions'),
           querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true, routeRuntimePayloadTimestampMs),
         ]);
         latestRouteStatus = status;
@@ -2746,7 +2815,7 @@
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];
         latestRouteExecution = routeOpt(current);
-        latestTerminalExecutions = terminal && terminal.Ok ? terminal.Ok : [];
+        latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
         if (authenticatedActor) {
           await querySource('wallet', typeof authenticatedActor.get_route_wallet_balances_v1 === 'function' ? () => authenticatedActor.get_route_wallet_balances_v1() : null, 'route wallet');
           latestRouteWallet = routeSources.wallet.value || [];
@@ -2768,8 +2837,61 @@
       catch (e) { toast(e.message || String(e), 'error'); } finally { btnDone(btn); }
     };
 
+    function cockpitSourceLabel(sourceName, value, emptyLabel, sourceState = routeSourceState(sourceName)) {
+      const state = sourceState;
+      if (state === 'loading') return { state, label: 'Loading…' };
+      if (state === 'failed' || state === 'unavailable') return { state, label: `Unavailable${routeSourceError(routeSources[sourceName])}` };
+      if (state === 'stale') return { state, label: `Stale · ${sourceLastSuccessLabel(routeSources[sourceName])}` };
+      return { state, label: value ? value : emptyLabel };
+    }
+
+    function cockpitTodayResults(terminalState) {
+      if (terminalState !== 'fresh') {
+        return { state: terminalState, stableResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', icpResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', completed: 'Unknown', failed: 'Unknown', coverage: terminalState === 'stale' ? 'Stale terminal data' : terminalState === 'loading' ? 'Loading terminal data' : 'Terminal data unavailable' };
+      }
+      const startNs = BigInt(new Date().setHours(0, 0, 0, 0)) * 1000000n;
+      const today = latestTerminalExecutions.filter(record => BigInt(record.updated_at_ns || 0) >= startNs);
+      const completed = today.filter(record => variantKey(record.phase) === 'Completed').length;
+      const failed = today.filter(record => variantKey(record.phase) !== 'Completed').length;
+      const stableValues = today.filter(record => ['StablePar', 'StableSettledCrossAsset'].includes(variantKey(record.candidate_class))).map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      const icpValues = today.filter(record => variantKey(record.candidate_class) === 'IcpReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      const stableRealized = stableValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      const icpRealized = icpValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      return {
+        state: terminalState,
+        stableResult: stableValues.length ? fmt$(stableRealized) : '—',
+        icpResult: icpValues.length ? `${fmtTok(icpRealized, 8)} ICP` : '—',
+        completed: String(completed),
+        failed: String(failed),
+        coverage: terminalExecutionsIncomplete ? `Incomplete · bounded at ${terminalExecutionsLoadedCount} terminal records` : 'Complete through start of day',
+      };
+    }
+
+    function cockpitStatus() {
+      const runtimeState = routeSourceState('runtime', ROUTE_RUNTIME_STALE_AFTER_MS);
+      const executionState = routeSourceState('currentExecution');
+      const terminalState = routeSourceState('terminalExecutions');
+      // Failed and unavailable sources render Unavailable; cached failures render Stale;
+      // neither state is allowed to fall through to a healthy empty label.
+      const executionSource = cockpitSourceLabel('currentExecution', latestRouteExecution ? `${latestRouteExecution.execution_id} · leg ${bi(latestRouteExecution.current_leg_index) + 1}` : '', 'No active execution', executionState);
+      const terminalSource = cockpitSourceLabel('terminalExecutions', latestTerminalExecutions.length ? `${latestTerminalExecutions[0].execution_id} · ${routePhaseLabel(latestTerminalExecutions[0].phase)}` : '', 'No terminal route execution', terminalState);
+      if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) {
+        return { label: 'Unknown', heartbeat: 'Heartbeat unknown', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      }
+      if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (!latestRouteRuntime.compiled_support) return { label: 'Unknown', heartbeat: 'Unknown · runtime support unavailable', phase: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (!latestRouteRuntime.live_authorized || !latestRouteRuntime.enabled || latestRouteRuntime.dry_run) {
+        return { label: 'Stopped', heartbeat: latestRouteRuntime.last_tick_ns ? `Last heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago` : 'Heartbeat stopped', phase: 'Stopped', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      }
+      const phase = latestRouteExecution ? variantKey(latestRouteExecution.phase) : null;
+      const phaseLabel = phase === 'AwaitingSettlement' ? 'Confirming' : phase === 'ReconciliationRequired' ? 'Reconciling' : phase === 'HeldInventory' ? 'Blocked' : phase === 'Aborted' ? 'Stopped' : phase && phase !== 'Completed' ? 'Executing' : 'Scanning';
+      return { label: phaseLabel === 'Blocked' ? 'Blocked' : phaseLabel, heartbeat: `Heartbeat ${routeAge(latestRouteRuntime.last_tick_ns)} ago`, phase: phaseLabel, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+    }
+
     function renderCockpit() {
       const el = document.getElementById('view-cockpit');
+      const cockpit = cockpitStatus();
+      // Today's realized result is derived only from terminalExecutions.realized_profit.
       const c = currentConfig;
       // cf ("config facts") = real config once loaded, else the reduced
       // cold-cache subset (plain paused/rumi_amm_paused/bob_execution_enabled
@@ -2792,37 +2914,45 @@
 
       const s = window._lastSummary;
       const arbBal = window._rawBals, volBal = window._rawVolBals, opBal = window._operatorBals;
-      const equity = pocketUsd(arbBal) + pocketUsd(volBal) + pocketUsd(opBal);
+      const equityKnown = !!(arbBal || volBal || (isAdmin && opBal));
+      const equity = equityKnown ? pocketUsd(arbBal) + pocketUsd(volBal) + pocketUsd(opBal) : null;
       const stale = !c || latestSnapshot?.__cold;
 
       const attn = attentionItems();
 
       el.innerHTML = `
-        <div class="status-strip">
-          <div class="status-chip info" onclick="goTo('markets')">
-            <span class="status-chip-label">Route arbitrage</span>
-            <span class="status-chip-value">${esc(routeTradingLabel())}</span>
-          </div>
-          <div class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
+        <div class="status-strip" data-cockpit-state data-cockpit-states="Stopped Scanning Executing Confirming Reconciling Blocked Unknown">
+          <button type="button" class="status-chip info" onclick="goTo('markets')">
+            <span class="status-chip-label">Bot state</span>
+            <span class="status-chip-value">${esc(cockpit.label)}</span>
+          </button>
+          <div class="status-chip"><span class="status-chip-label">Heartbeat</span><span class="status-chip-value" data-cockpit-heartbeat>${esc(cockpit.heartbeat)}</span></div>
+          <button type="button" class="status-chip ${!latestVolumeStats ? '' : latestVolumeStats.volume_paused ? 'warn' : 'ok'}" onclick="goTo('markets')">
             <span class="status-chip-label">Volume engine</span>
             <span class="status-chip-value">${!latestVolumeStats ? '—' : latestVolumeStats.volume_paused ? 'Paused' : 'Running'}</span>
-          </div>
-          <div class="status-chip warn" onclick="goTo('ledger')">
+          </button>
+          <button type="button" class="status-chip warn" onclick="goTo('ledger')">
             <span class="status-chip-label">Legacy arb</span>
             <span class="status-chip-value">Retired</span>
-          </div>
-          <div class="status-chip ${stranded ? 'warn' : ''}" onclick="goTo('ops')">
+          </button>
+          <button type="button" class="status-chip ${stranded ? 'warn' : ''}" onclick="goTo('ops')">
             <span class="status-chip-label">Stranded funds</span>
             <span class="status-chip-value">${strandedText}</span>
-          </div>
-          <div class="status-chip${stuckSecs != null ? ' bad' : ''}" onclick="goTo('${stuckSecs != null ? 'ops' : 'ledger'}')">
+          </button>
+          <button type="button" class="status-chip${stuckSecs != null ? ' bad' : ''}" onclick="goTo('${stuckSecs != null ? 'ops' : 'ledger'}')">
             <span class="status-chip-label">${stuckSecs != null ? 'Cycle' : 'Next cycle'}</span>
             <span class="status-chip-value">${stuckSecs != null ? 'Stuck · ' + Math.floor(stuckSecs / 60) + 'm' : (nextCycleCountdown() || '—')}</span>
-          </div>
+          </button>
+        </div>
+
+        <div class="card" data-cockpit-phase style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Current phase</div>
+          <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phase)}</span></div>
+          <div class="stat-row" data-cockpit-execution-state><span>Execution</span><span>${esc(cockpit.executionSource.label)}</span></div>
         </div>
 
         <div class="grid cockpit-top" style="margin-bottom:var(--sp-4)">
-          <div class="card hero-card">
+          <div class="card hero-card" data-cockpit-realized-results>
             <div>
               <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
               <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
@@ -2830,18 +2960,18 @@
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
             </div>
             <div class="hero-pockets">
-              <div class="hero-pocket"><div class="hero-pocket-label">Arb main</div><div class="hero-pocket-value">$${pocketUsd(arbBal).toFixed(2)}</div></div>
-              <div class="hero-pocket"><div class="hero-pocket-label">Volume sub</div><div class="hero-pocket-value">$${pocketUsd(volBal).toFixed(2)}</div></div>
-              <div class="hero-pocket"><div class="hero-pocket-label">Operator</div><div class="hero-pocket-value">${isAdmin ? '$' + pocketUsd(opBal).toFixed(2) : '—'}</div></div>
+              <div class="hero-pocket"><div class="hero-pocket-label">Arb main</div><div class="hero-pocket-value">${arbBal ? '$' + pocketUsd(arbBal).toFixed(2) : 'Unknown'}</div></div>
+              <div class="hero-pocket"><div class="hero-pocket-label">Volume sub</div><div class="hero-pocket-value">${volBal ? '$' + pocketUsd(volBal).toFixed(2) : 'Unknown'}</div></div>
+              <div class="hero-pocket"><div class="hero-pocket-label">Operator</div><div class="hero-pocket-value">${isAdmin ? (opBal ? '$' + pocketUsd(opBal).toFixed(2) : 'Unknown') : '—'}</div></div>
             </div>
           </div>
           <div class="card">
             <div class="card-header">Equity, all pockets</div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Total equity</span><span class="num" style="font-size:15px;font-weight:600">$${equity.toFixed(2)}</span></div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Total equity</span><span class="num" style="font-size:15px;font-weight:600">${equity == null ? 'Unknown' : '$' + equity.toFixed(2)}</span></div>
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
             <div class="divider"></div>
-            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Markets; quote snapshots are separate from realized results.</div>
+            <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Ops; quote snapshots are separate from realized results.</div>
           </div>
           <div class="card">
             <div class="card-header">Bot balances — arb main</div>
@@ -2858,7 +2988,18 @@
 
         ${cockpitPriceBadgesHtml(c, cf, stale, bobConfigured)}
 
-        <div class="card">
+        <div class="card" data-cockpit-today-results style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Today’s realized result</div>
+          <div class="grid g-cols-4"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
+          <div class="footnote" data-cockpit-today-coverage>${esc(cockpit.today.coverage)}</div>
+        </div>
+
+        <div class="card" data-cockpit-latest-execution style="margin-bottom:var(--sp-4)">
+          <div class="card-header">Latest terminal execution</div>
+          <div data-cockpit-terminal-state>${esc(cockpit.terminalSource.label)}${cockpit.terminalSource.state === 'fresh' && latestTerminalExecutions.length ? `<div class="route-list-row"><span><strong>Execution</strong> ${esc(latestTerminalExecutions[0].execution_id)}</span><span data-cockpit-terminal-phase><strong>Phase</strong> ${esc(routePhaseLabel(latestTerminalExecutions[0].phase))}</span><span>${fmtTime(latestTerminalExecutions[0].updated_at_ns)}</span></div>` : ''}</div>
+        </div>
+
+        <div class="card" data-cockpit-incidents>
           <div class="card-header">Attention — needs you</div>
           ${attn.length === 0 ? `
             <div class="attn-empty">
@@ -3052,7 +3193,7 @@
 
     window.toggleRow = async function (id) {
       if (state.expandedRows.has(id)) state.expandedRows.delete(id); else state.expandedRows.add(id);
-      renderMarkets();
+      if (state.activeView === 'ops') renderOps(); else renderMarkets();
       if (!state.expandedRows.has(id)) return;
       if (!snapshotsLoaded) { await loadSnapshots(); if (!state.expandedRows.has(id)) return; }
       drawMiniSpreadChart(id);
@@ -3105,16 +3246,18 @@
 
     function renderMarkets() {
       const el = document.getElementById('view-markets');
-      const volumePaused = latestVolumeStats && latestVolumeStats.volume_paused;
       el.innerHTML = `
         ${routeArbitrageHtml()}
-        <div class="market-family" style="margin-top:var(--sp-6)">
-          <div class="family-head"><div class="family-title">Volume engine <span class="family-count">(${VOLUME_POOLS.length})</span>${volumePaused ? ' <span class="badge badge-paused">Kill-switch: Volume bot paused</span>' : ''}</div></div>
-          <div class="card-subtitle">Volume pools are retained as a separate cost-center system. Their controls and accounting are not part of route-arbitrage ranking.</div>
-          <div class="market-group">${VOLUME_POOLS.map(volumeRowHtml).join('')}</div>
+        <div class="card" id="markets-wallet-readiness" style="margin-top:var(--sp-4)"></div>
+        <div class="card" id="markets-charts" style="margin-top:var(--sp-4)">
+          <div class="card-header">Charts</div>
+          <div class="card-subtitle">Historical spreads, prices, realized P&amp;L, balances, and virtual price.</div>
+          <div id="view-markets-charts"></div>
         </div>
         <div class="footnote"><span class="mark">*</span> Legacy lettered strategy records remain available in the historical ledger, but no lettered strategy action is rendered here.</div>
       `;
+      renderMarketsWallet();
+      renderCharts();
     }
 
     // ═══════ Force confirm (amendment 4/9: live numbers, never generic yes/no) ═══════
@@ -3152,7 +3295,7 @@
         toast(report || 'Cycle complete', 'success');
         loadVolumeData(); fetchHealth();
       } catch (e) { toast('Cycle failed: ' + e.message, 'error'); }
-      finally { btnDone(btn); renderMarkets(); }
+      finally { btnDone(btn); renderOps(); }
     };
     window.doVolumeRebalance = async function (poolId, btn) {
       if (!requireAuth()) return;
@@ -3162,7 +3305,7 @@
         toast('Rebalance triggered', 'success');
         loadVolumeData(); fetchHealth();
       } catch (e) { toast('Rebalance failed: ' + e.message, 'error'); }
-      finally { btnDone(btn); renderMarkets(); }
+      finally { btnDone(btn); renderOps(); }
     };
 
     // ═══════ Charts ═══════
@@ -3339,7 +3482,8 @@
     const RANGES = [ [3600, '1H'], [21600, '6H'], [86400, '24H'], [604800, '7D'], [0, 'All'] ];
 
     async function renderCharts() {
-      const el = document.getElementById('view-charts');
+      const el = document.getElementById('view-markets-charts');
+      if (!el) return;
       destroyCharts();
       if (!snapshotsLoaded) await loadSnapshots();
       const rumiPaused = currentConfig && currentConfig.rumi_amm_paused;
@@ -3441,10 +3585,13 @@
         </div>`;
     }
 
-    function renderMoney() {
-      const el = document.getElementById('view-money');
+    function renderMarketsWallet() {
+      const el = document.getElementById('markets-wallet-readiness');
+      if (!el) return;
       const arb = window._rawBals, vol = window._rawVolBals, op = window._operatorBals;
       el.innerHTML = `
+        <div class="card-header">Wallet readiness</div>
+        <div class="card-subtitle">Balances and metadata required for route observation. Missing or failed reads remain visible as unavailable.</div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Balances by pocket</div>
           <div class="table-wrap">
@@ -3455,13 +3602,13 @@
                   const a = arb ? bi(arb[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec : null;
                   const v = (t.noVol || !vol) ? null : bi(vol[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
                   const o = (!isAdmin || !op) ? null : bi(op[MONEY_BAL_KEY[t.key]] || 0) / 10 ** t.dec;
-                  const total = (a || 0) + (v || 0) + (o || 0);
+                  const total = [a, v, o].some(value => value != null) ? (a || 0) + (v || 0) + (o || 0) : null;
                   return `<tr>
                     <td>${tokenLogo(t.sym)}${t.sym}${t.noVol ? ' <span class="mark">*</span>' : ''}</td>
                     <td>${a != null ? fmt(a, t.dec > 6 ? 4 : 2) : '<span class="dash">—</span>'}</td>
                     <td>${v != null ? fmt(v, t.dec > 6 ? 4 : 2) : '<span class="dash">—</span>'}</td>
                     <td>${o != null ? fmt(o, t.dec > 6 ? 4 : 2) : (isAdmin ? '<span class="dash">—</span>' : '<span class="dash">login</span>')}</td>
-                    <td>${fmt(total, t.dec > 6 ? 4 : 2)}</td>
+                    <td>${total == null ? '<span class="dash">—</span>' : fmt(total, t.dec > 6 ? 4 : 2)}</td>
                   </tr>`;
                 }).join('')}
               </tbody>
@@ -3469,8 +3616,6 @@
           </div>
           <div class="footnote"><span class="mark">*</span> 3USD has no subaccounts — balance lives in arb-main only.</div>
         </div>
-
-        ${volumeCostCardHtml()}
 
         <div class="grid g-cols-2" style="margin-bottom:var(--sp-4)">
           <div class="card">
@@ -3496,6 +3641,13 @@
           </div>
         </div>
 
+      `;
+    }
+
+    function renderVolumeFunding() {
+      const el = document.getElementById('ops-volume-funding');
+      if (!el) return;
+      el.innerHTML = `
         <div class="grid g-cols-2">
           <div class="card">
             <div class="card-header">Fund / withdraw — volume subaccount</div>
@@ -3531,6 +3683,13 @@
         </div>
       `;
       volSwapTokenChanged();
+    }
+
+    // Compatibility name retained for older tests and call sites; Money is now
+    // split between Markets wallet readiness and Ops volume operations.
+    function renderMoney() {
+      // volSwapTokenChanged() remains reachable through Ops' renderVolumeFunding().
+      return renderMarketsWallet();
     }
 
     // ═══════ Swap panel logic (real routes) ═══════
@@ -4202,6 +4361,7 @@
         : 'Loading route policy…';
 
       el.innerHTML = `
+        <div data-ops-automatic-control aria-label="Automatic arbitrage">${routeRuntimeHtml()}</div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Route arbitrage policy</div>
           <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
@@ -4210,6 +4370,13 @@
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>
+        <div class="card" style="margin-bottom:var(--sp-4)" data-ops-volume-actions>
+          <div class="card-header">Volume engine</div>
+          <div class="card-subtitle">Operational volume actions and cost-center accounting live here. They are separate from route-arbitrage ranking.</div>
+          <div class="market-group">${VOLUME_POOLS.map(volumeRowHtml).join('')}</div>
+          ${volumeCostCardHtml()}
+        </div>
+        <div id="ops-volume-funding" data-ops-volume-funding></div>
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Levers <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">— touched weekly</span></div>
           <div class="lever-grid">
@@ -4253,6 +4420,7 @@
       `;
       hydrateConfigForm(c);
       if (stats) hydrateVolumeForms(stats);
+      renderVolumeFunding();
     }
 
     // ═══════ Ledger ═══════
