@@ -1469,6 +1469,28 @@ pub struct ExecutionSlotV1 {
     pub execution: Option<ExecutionRecordV1>,
 }
 
+/// Durable, all-time totals folded from every terminal route execution —
+/// the route-arbitrage equivalent of the legacy `get_summary()` ledger, kept
+/// separate because the two accounting systems never share records (see
+/// `state::fold_lifetime_route_summary`). `folded_through` is the number of
+/// `TERMINAL_ROUTE_EXECUTIONS` log entries already counted here; it is the
+/// sole idempotency guard, so folding can be triggered from any call site
+/// (lazily on read, eagerly after each new completion, or on upgrade) in any
+/// order without ever double-counting a record.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LifetimeRouteSummaryV1 {
+    pub completed_count: u64,
+    pub aborted_count: u64,
+    pub held_inventory_count: u64,
+    /// Sum of `realized_profit` (USD, 6-decimal) across terminal executions
+    /// whose `candidate_class` is `StablePar` or `StableSettledCrossAsset`.
+    pub stable_realized_profit_usd6: i128,
+    /// Sum of `realized_profit` (ICP, 8-decimal e8s) across terminal
+    /// executions whose `candidate_class` is `IcpReturning`.
+    pub icp_realized_profit_e8s: i128,
+    pub folded_through: u64,
+}
+
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct SettlementProofV1 {
     pub request_fingerprint: String,

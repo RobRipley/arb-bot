@@ -1169,6 +1169,7 @@ json_storable!(crate::route_arb::HeldPositionV1);
 json_storable!(crate::route_arb::ExecutionSlotV1);
 json_storable!(crate::route_arb::ExecutionRecordV1);
 json_storable!(crate::route_arb::RouteExecutionDetailV1);
+json_storable!(crate::route_arb::LifetimeRouteSummaryV1);
 
 // ─── Stable memory layout ───
 //
@@ -1189,6 +1190,7 @@ json_storable!(crate::route_arb::RouteExecutionDetailV1);
 // MemoryId 24:      OWNERSHIP_RESERVATION_MIGRATED marker
 // MemoryId 25:      LEGACY_BOB_ASSET_FROZEN marker
 // MemoryId 27:      ROUTE_EXECUTION_DETAILS (bounded detail index)
+// MemoryId 28:      LIFETIME_ROUTE_SUMMARY cell
 //
 // NEVER reuse or reorder these IDs — doing so corrupts existing data.
 
@@ -1327,6 +1329,15 @@ thread_local! {
         RefCell::new(StableBTreeMap::init(
             MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(27))),
         ));
+
+    // All-time route-execution totals, folded from TERMINAL_ROUTE_EXECUTIONS.
+    // See fold_lifetime_route_summary() for the idempotent folding logic.
+    static LIFETIME_ROUTE_SUMMARY: RefCell<StableCell<crate::route_arb::LifetimeRouteSummaryV1, Memory>> = RefCell::new(
+        StableCell::init(
+            MEMORY_MANAGER.with(|m| m.borrow().get(MemoryId::new(28))),
+            crate::route_arb::LifetimeRouteSummaryV1::default(),
+        ).expect("init LIFETIME_ROUTE_SUMMARY"),
+    );
 
     #[cfg(test)]
     static FAIL_NEXT_ROUTE_EXECUTION_DETAIL: Cell<bool> = const { Cell::new(false) };
@@ -1993,11 +2004,93 @@ pub fn complete_current_route_execution(record: crate::route_arb::ExecutionRecor
             .map_err(|error| format!("failed to append terminal execution: {error:?}"))?;
         Ok(())
     })?;
+    // Idempotent regardless of whether the line above appended a genuinely
+    // new record or the retry-safe early return above fired: folding is
+    // gated on `folded_through` vs. the log's current length, so re-entry
+    // after a retry (or any other order of calls) can never double-count.
+    fold_lifetime_route_summary();
     CURRENT_ROUTE_EXECUTION.with(|cell| {
         cell.borrow_mut().set(crate::route_arb::ExecutionSlotV1::default())
             .map(|_| ())
             .map_err(|error| format!("failed to clear current execution: {error:?}"))
     })
+}
+
+/// Folds every `TERMINAL_ROUTE_EXECUTIONS` entry not yet counted into the
+/// durable lifetime summary. `folded_through` is a strict watermark over the
+/// append-only terminal log, so calling this redundantly — from the eager
+/// hook in `complete_current_route_execution`, lazily on query/upgrade, or
+/// both — is always safe: a record already folded is never revisited.
+fn fold_lifetime_route_summary() {
+    let total = TERMINAL_ROUTE_EXECUTIONS.with(|log| log.borrow().len());
+    let already = LIFETIME_ROUTE_SUMMARY.with(|cell| cell.borrow().get().folded_through);
+    if already >= total {
+        return;
+    }
+    let mut summary = LIFETIME_ROUTE_SUMMARY.with(|cell| cell.borrow().get().clone());
+    TERMINAL_ROUTE_EXECUTIONS.with(|log| {
+        let log = log.borrow();
+        for index in already..total {
+            if let Some(record) = log.get(index) {
+                apply_terminal_record_to_lifetime_summary(&mut summary, &record);
+            }
+        }
+    });
+    summary.folded_through = total;
+    LIFETIME_ROUTE_SUMMARY.with(|cell| {
+        let _ = cell.borrow_mut().set(summary);
+    });
+}
+
+fn apply_terminal_record_to_lifetime_summary(
+    summary: &mut crate::route_arb::LifetimeRouteSummaryV1,
+    record: &crate::route_arb::ExecutionRecordV1,
+) {
+    use crate::route_arb::{CandidateClass, ExecutionPhaseV1};
+    match record.phase {
+        ExecutionPhaseV1::Completed => summary.completed_count += 1,
+        ExecutionPhaseV1::Aborted => summary.aborted_count += 1,
+        ExecutionPhaseV1::HeldInventory => summary.held_inventory_count += 1,
+        // The terminal log only ever holds terminal phases (enforced by
+        // complete_current_route_execution); any other value is unreachable
+        // and intentionally left uncounted rather than guessed at.
+        _ => {}
+    }
+    if let Some(profit) = record.realized_profit {
+        match record.candidate_class {
+            CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => {
+                summary.stable_realized_profit_usd6 += profit;
+            }
+            CandidateClass::IcpReturning => {
+                summary.icp_realized_profit_e8s += profit;
+            }
+        }
+    }
+}
+
+/// Public read of the all-time route summary. Folds first so a caller sees
+/// mainnet's full terminal history even if this is the very first touch
+/// since the upgrade that introduced the summary (no completion has run the
+/// eager hook yet), and so a canister that never trades again still reports
+/// correctly.
+pub fn get_lifetime_route_summary() -> crate::route_arb::LifetimeRouteSummaryV1 {
+    fold_lifetime_route_summary();
+    LIFETIME_ROUTE_SUMMARY.with(|cell| cell.borrow().get().clone())
+}
+
+/// Resets the lifetime summary cell to default (including `folded_through`
+/// back to 0) without touching TERMINAL_ROUTE_EXECUTIONS. Simulates the
+/// post-upgrade state this feature ships into on mainnet: a durable terminal
+/// log that already has records, paired with a summary that has never folded
+/// any of them — i.e. exactly the backfill case `fold_lifetime_route_summary`
+/// must handle on its first call after the upgrade that introduces it.
+#[doc(hidden)]
+pub fn reset_lifetime_route_summary_for_test() {
+    LIFETIME_ROUTE_SUMMARY.with(|cell| {
+        let _ = cell
+            .borrow_mut()
+            .set(crate::route_arb::LifetimeRouteSummaryV1::default());
+    });
 }
 
 pub fn get_terminal_route_executions_page(

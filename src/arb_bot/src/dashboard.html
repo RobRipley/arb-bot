@@ -985,6 +985,13 @@
         reconciliation_query_count: I.Nat8, incident: I.Opt(I.Text), updated_at_ns: I.Nat64,
         realized_profit: I.Opt(I.Int), start_asset: I.Opt(RouteAsset),
       });
+      // All-time totals folded from every terminal route execution. Route-arb
+      // counterpart to the legacy, now-frozen TradeSummary — see get_summary.
+      const LifetimeRouteSummaryV1 = I.Record({
+        completed_count: I.Nat64, aborted_count: I.Nat64, held_inventory_count: I.Nat64,
+        stable_realized_profit_usd6: I.Int, icp_realized_profit_e8s: I.Int,
+        folded_through: I.Nat64,
+      });
       const RouteExecutionLegStatusV1 = I.Variant({
         Quoted: I.Null, Refunded: I.Null, Prepared: I.Null, Submitted: I.Null,
         ReconciliationRequired: I.Null, Aborted: I.Null, HeldInventory: I.Null,
@@ -1067,6 +1074,7 @@
         get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
         get_current_route_execution_v1: I.Func([], [I.Opt(ExecutionRecordV1)], ['query']),
         get_terminal_route_executions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ExecutionRecordV1), Err: I.Text })], ['query']),
+        get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query']),
         get_route_execution_detail_v1: I.Func([I.Text], [I.Variant({ Ok: RouteExecutionDetailV1, Err: I.Text })], ['query']),
         prepare_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
         advance_route_execution_v1: I.Func([I.Text], [I.Variant({ Ok: ExecutionRecordV1, Err: I.Text })], []),
@@ -1559,6 +1567,7 @@
     let latestHeldPositions = [];
     let latestRouteExecution = null;
     let latestTerminalExecutions = [];
+    let latestLifetimeRouteSummary = null;
     let terminalExecutionsIncomplete = false;
     let terminalExecutionsLoadedCount = 0;
     let routeLedgerPage = 0;
@@ -1663,6 +1672,7 @@
       currentExecution: createSourceState(),
       currentExecutionDetail: createSourceState(),
       terminalExecutions: createSourceState(),
+      lifetimeRouteSummary: createSourceState(),
       routeLedgerExecutions: createSourceState(),
       runtime: createSourceState(),
       wallet: createSourceState(),
@@ -1674,7 +1684,6 @@
       volumeBalances: createSourceState(),
       operatorBalances: createSourceState(),
       volumeStats: createSourceState(),
-      prices: createSourceState(),
       activePrices: createSourceState(),
       snapshots: createSourceState(),
       activity: createSourceState(),
@@ -1818,7 +1827,6 @@
           [routeSources.summary, cache.summary],
           [routeSources.legacyBalances, cache.balances],
           [routeSources.volumeBalances, cache.volBalances],
-          [routeSources.prices, cache.prices],
         ];
         for (const [source, value] of cachedSources) {
           if (value != null) {
@@ -2311,16 +2319,6 @@
       } catch (e) { markSourceFailed(source, e); console.error('loadVolumeBalances:', e); }
       if (state.activeView === 'markets') renderMarkets();
       if (state.activeView === 'cockpit') renderCockpit();
-    }
-
-    async function loadPrices() {
-      if (!authenticatedActor) { markSourceUnavailable(routeSources.prices, 'authenticated price query is unavailable'); return; }
-      try {
-        if (typeof authenticatedActor.get_prices !== 'function') { markSourceUnavailable(routeSources.prices, 'price query is unavailable'); return; }
-        const p = await authenticatedActor.get_prices();
-        window._latestPrices = { vp: bi(p.virtual_price) / 1e18, icpswap: bi(p.icpswap_icp_price_ckusdc) / 1e6 };
-        markSourceFresh(routeSources.prices, window._latestPrices);
-      } catch (e) { markSourceFailed(routeSources.prices, e); console.error('loadPrices:', e); }
     }
 
     function activeRoutePriceError(result) {
@@ -2962,7 +2960,7 @@
     }
     function routeAggregateState() {
       const quoteStaleAfterMs = routeQuoteStaleAfterMs();
-      const names = ['status', 'observation', 'candidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'prices', 'snapshots'];
+      const names = ['status', 'observation', 'candidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'lifetimeRouteSummary', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'snapshots'];
       if (authenticatedActor) names.push('wallet');
       const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates') ? quoteStaleAfterMs : null));
       const candidates = routeSources.candidates.value;
@@ -3543,7 +3541,7 @@
             return source.value;
           }
         };
-        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime, routeConfig] = await Promise.all([
+        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime, routeConfig, lifetime] = await Promise.all([
           querySource('status', typeof anonymousActor.get_route_arb_status_v1 === 'function' ? () => anonymousActor.get_route_arb_status_v1() : null, 'route status'),
           querySource('observation', typeof anonymousActor.get_route_observation_v1 === 'function' ? () => anonymousActor.get_route_observation_v1() : null, 'route observation'),
           querySource('candidates', typeof anonymousActor.get_best_route_candidates_v1 === 'function' ? () => anonymousActor.get_best_route_candidates_v1() : null, 'route candidates'),
@@ -3554,6 +3552,7 @@
           querySource('terminalExecutions', loadTerminalExecutionsForToday, 'terminal executions'),
           querySource('runtime', typeof anonymousActor.get_route_runtime_status_v1 === 'function' ? () => anonymousActor.get_route_runtime_status_v1() : null, 'runtime status', true, routeRuntimePayloadTimestampMs),
           querySource('routeArbConfig', typeof anonymousActor.get_route_arb_config_v1 === 'function' ? () => anonymousActor.get_route_arb_config_v1() : null, 'route arbitrage configuration'),
+          querySource('lifetimeRouteSummary', typeof anonymousActor.get_lifetime_route_summary_v1 === 'function' ? () => anonymousActor.get_lifetime_route_summary_v1() : null, 'lifetime route summary'),
         ]);
         latestRouteStatus = status;
         if (requestGeneration == null || requestGeneration === routeRuntimeQueryGeneration) {
@@ -3568,6 +3567,7 @@
         void loadCurrentExecutionDetail(latestRouteExecution, requestGeneration, true);
         latestTerminalExecutions = Array.isArray(terminal) ? terminal : terminal && terminal.Ok ? terminal.Ok : [];
         routeArbConfig = routeConfig || null;
+        latestLifetimeRouteSummary = lifetime || null;
         if (authenticatedActor && isAdmin) {
           let walletActor = authenticatedActor;
           let walletLoaded = false;
@@ -3806,14 +3806,13 @@
       // configured) until `c` is real, self-corrects once get_config() resolves.
       const bobConfigured = c ? (c.icpswap_icusd_bob_pool.toText() !== '2vxsx-fae' && c.icpswap_bob_icp_pool.toText() !== '2vxsx-fae') : true;
 
-      const summaryState = routeSourceState('summary');
       const s = sourceHasValue('summary') ? window._lastSummary : null;
+      const lifetime = sourceHasValue('lifetimeRouteSummary') ? latestLifetimeRouteSummary : null;
       const arbBal = sourceHasValue('legacyBalances') ? window._rawBals : null;
       const volBal = sourceHasValue('volumeBalances') ? window._rawVolBals : null;
       const opBal = sourceHasValue('operatorBalances') ? window._operatorBals : null;
       const equityKnown = !!(arbBal || volBal || (isAdmin && opBal));
       const equity = equityKnown ? pocketUsd(arbBal) + pocketUsd(volBal) + pocketUsd(opBal) : null;
-      const stale = !c || latestSnapshot?.__cold || summaryState === 'stale';
 
       const attn = attentionItems();
 
@@ -3826,22 +3825,24 @@
           <div class="status-chip"><span class="status-chip-label">Heartbeat</span><span class="status-chip-value" data-cockpit-heartbeat>${esc(cockpit.heartbeat)}</span></div>
         </div>
 
-        <div class="card" data-cockpit-phase style="margin-bottom:var(--sp-4)">
-          <div class="card-header">Current phase</div>
-          <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phaseCopy || cockpit.phase)}</span></div>
-          <div class="stat-row" data-cockpit-execution-state><span>Execution</span><span>${esc(cockpit.executionSource.label)}</span></div>
-          <div class="stat-row"><span>Leg</span><span>${esc(latestRouteExecution ? cockpitExecutionLegLabel(latestRouteExecution) : 'Unavailable')}</span></div>
-        </div>
+        <div class="grid g-cols-3" style="margin-bottom:var(--sp-4)">
+          <div class="card" data-cockpit-phase>
+            <div class="card-header">Current phase</div>
+            <div class="stat-row"><span>Phase</span><span>${esc(cockpit.phaseCopy || cockpit.phase)}</span></div>
+            <div class="stat-row" data-cockpit-execution-state><span>Execution</span><span>${esc(cockpit.executionSource.label)}</span></div>
+            <div class="stat-row"><span>Leg</span><span>${esc(latestRouteExecution ? cockpitExecutionLegLabel(latestRouteExecution) : 'Unavailable')}</span></div>
+          </div>
 
-        <div class="card" data-cockpit-today-results data-cockpit-realized-results style="margin-bottom:var(--sp-4)">
-          <div class="card-header">Today’s realized result</div>
-          <div class="grid g-cols-4"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
-          <div class="footnote" data-cockpit-today-coverage>${esc(cockpit.today.coverage)}</div>
-        </div>
+          <div class="card" data-cockpit-today-results data-cockpit-realized-results>
+            <div class="card-header">Today’s realized result</div>
+            <div class="grid g-cols-2"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
+            <div class="footnote" data-cockpit-today-coverage>${esc(cockpit.today.coverage)}</div>
+          </div>
 
-        <div class="card" data-cockpit-latest-execution style="margin-bottom:var(--sp-4)">
-          <div class="card-header">Latest terminal execution</div>
-          <div data-cockpit-terminal-state>${esc(cockpit.terminalSource.label)}${cockpit.terminalSource.state === 'fresh' && latestTerminalExecutions.length ? `<div class="route-list-row"><span><strong>Execution</strong> ${esc(latestTerminalExecutions[0].execution_id)}</span><span data-cockpit-terminal-phase><strong>Phase</strong> ${esc(routePhaseLabel(latestTerminalExecutions[0].phase))}</span><span>${fmtTime(latestTerminalExecutions[0].updated_at_ns)}</span></div>` : ''}</div>
+          <div class="card" data-cockpit-latest-execution>
+            <div class="card-header">Latest terminal execution</div>
+            <div data-cockpit-terminal-state>${esc(cockpit.terminalSource.label)}${cockpit.terminalSource.state === 'fresh' && latestTerminalExecutions.length ? `<div class="route-list-row"><span><strong>Execution</strong> ${esc(latestTerminalExecutions[0].execution_id)}</span><span data-cockpit-terminal-phase><strong>Phase</strong> ${esc(routePhaseLabel(latestTerminalExecutions[0].phase))}</span><span>${fmtTime(latestTerminalExecutions[0].updated_at_ns)}</span></div>` : ''}</div>
+          </div>
         </div>
 
         <div class="card" data-cockpit-incidents>
@@ -3870,9 +3871,12 @@
         <div class="grid cockpit-top" style="margin-bottom:var(--sp-4)">
           <div class="card hero-card">
             <div>
-              <div class="card-header" style="margin-bottom:6px">Net P&amp;L · all-time ${sourceStampHtml('summary')}${stale ? ' <span class="ts-stale">as of ' + new Date().toLocaleTimeString() + '</span>' : ''}</div>
-              <div class="hero-number ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</div>
-              <div class="hero-delta text-ter">${s ? (bi(s.leg1_count) + bi(s.leg2_count)) + ' legs · ' + fmt$(s.total_usd_in) + ' volume' : ''}</div>
+              <div class="card-header" style="margin-bottom:6px">Net P&amp;L · route arbitrage, all-time (live) ${sourceStampHtml('lifetimeRouteSummary')}</div>
+              <div class="hero-number ${lifetime ? pClass(lifetime.stable_realized_profit_usd6) : ''}">${lifetime ? fmt$(lifetime.stable_realized_profit_usd6) : '—'}</div>
+              <div class="hero-delta text-ter">stable-book P&amp;L above · terminal totals, all classes: ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
+              <div class="stat-row"><span>ICP-returning, all-time (live)</span><span class="num ${lifetime ? pClass(lifetime.icp_realized_profit_e8s) : ''}">${lifetime ? fmtTok(lifetime.icp_realized_profit_e8s, 8) + ' ICP' : '—'}</span></div>
+              <div class="divider"></div>
+              <div class="hero-split">Legacy net P&amp;L · frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
             </div>
             <div class="hero-pockets">
@@ -3884,8 +3888,8 @@
           <div class="card">
             <div class="card-header">Equity, all pockets ${sourceStampHtml('legacyBalances')} · ${sourceStampHtml('volumeBalances')}</div>
             <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Total equity</span><span class="num" style="font-size:15px;font-weight:600">${equity == null ? 'Unknown' : '$' + equity.toFixed(2)}</span></div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
-            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Legacy trade legs</span><span class="num" style="font-size:13px">${s ? bi(s.total_legs) : '—'}</span></div>
+            <div class="stat-row" style="display:flex;justify-content:space-between;padding:5px 0"><span class="text-sec" style="font-size:12px">Legacy volume moved</span><span class="num" style="font-size:13px">${s ? fmt$(s.total_usd_in) : '—'}</span></div>
             <div class="divider"></div>
             <div style="font-size:11.5px;color:var(--text-tertiary)">Legacy lettered arbitrage is retired. Automatic route trading is controlled from Ops; quote snapshots are separate from realized results.</div>
           </div>
@@ -4139,8 +4143,8 @@
         ${routeArbitrageHtml()}
         <div class="card" id="markets-wallet-readiness" style="margin-top:var(--sp-4)"></div>
         <div class="card" id="markets-charts" style="margin-top:var(--sp-4)">
-          <div class="card-header">Charts <span class="diagnostics-source-status">Snapshots ${sourceStampHtml('snapshots')} · Prices ${sourceStampHtml('prices')}</span></div>
-          <div class="card-subtitle">Historical spreads, prices, realized P&amp;L, balances, and virtual price.</div>
+          <div class="card-header">Charts · legacy history <span class="diagnostics-source-status">Snapshots ${sourceStampHtml('snapshots')}</span></div>
+          <div class="card-subtitle">Historical spreads, prices, realized P&amp;L, balances, and virtual price, sourced from the legacy cycle-snapshot log. Not live route-arbitrage data.</div>
           <div id="view-markets-charts"></div>
         </div>
         <div class="footnote"><span class="mark">*</span> Legacy lettered strategy records remain available in the historical ledger, but no lettered strategy action is rendered here.</div>
@@ -6034,12 +6038,10 @@
       await loadRouteData();
       await loadActiveRoutePrices();
       refreshLegAttribution();
-      if (authenticatedActor) await loadPrices();
       if (authenticatedActor && currentConfig) await loadMyBalances(currentConfig);
       else if (authenticatedActor) markSourceUnavailable(routeSources.operatorBalances, 'operator balance configuration is unavailable');
       if (!authenticatedActor) {
         markSourceUnavailable(routeSources.operatorBalances, 'operator balance requires authentication');
-        markSourceUnavailable(routeSources.prices, 'authenticated price query requires authentication');
       }
       loadAllTickCount++;
       if (authenticatedActor && loadAllTickCount % 2 === 0) fetchHealth();
