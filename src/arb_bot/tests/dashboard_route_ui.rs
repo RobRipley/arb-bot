@@ -715,6 +715,32 @@ fn dashboard_idl_declares_ckbtc_and_cketh_returning_books() {
 }
 
 #[test]
+fn route_aggregate_state_watches_ckbtc_and_cketh_candidate_freshness() {
+    let aggregate = rendered_region("function routeAggregateState()", "function updateFreshnessIndicator()");
+    for marker in [
+        "routeOpt(candidates.stable)",
+        "routeOpt(candidates.icp)",
+        "routeOpt(candidates.ckbtc)",
+        "routeOpt(candidates.cketh)",
+    ] {
+        assert!(aggregate.contains(marker), "top-level freshness must watch every enabled return book's candidate: {marker}");
+    }
+}
+
+#[test]
+fn route_execution_leg_count_fallback_covers_ckbtc_and_cketh_candidates() {
+    let leg_count_fn = rendered_region("function routeExecutionLegCount(execution)", "function cockpitExecutionLegLabel");
+    for marker in [
+        "routeOpt(candidates.stable)",
+        "routeOpt(candidates.icp)",
+        "routeOpt(candidates.ckbtc)",
+        "routeOpt(candidates.cketh)",
+    ] {
+        assert!(leg_count_fn.contains(marker), "leg-count fallback must search every return book's candidate: {marker}");
+    }
+}
+
+#[test]
 fn markets_shows_four_candidate_books() {
     let route_panel = rendered_region("function routeArbitrageHtml()", "async function loadTerminalExecutionsForToday");
     for marker in [

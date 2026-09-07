@@ -352,9 +352,15 @@ compare3 "CycleSnapshot fields" \
   "$(did_record_fields CycleSnapshot "$DID")" \
   "$(dash_record_fields CycleSnapshot "$DASH")"
 
-# ckBTC/ckETH-returning route books — the canister and arb_bot.did do not
-# yet carry these types/fields, so a DRIFT report below is expected until
-# they do; that is the mechanism by which this reconciliation gets tracked.
+# The following checks cover the ckBTC/ckETH-returning route book types in
+# the dashboard's IDL: CandidateClass's CkBtcReturning/CkEthReturning
+# variants, HeldBasisV1's CkBtcNative/CkEthNative variants,
+# AssetReturnBookConfigV1, RouteArbConfigV1's ckbtc_book/cketh_book fields,
+# and LifetimeRouteSummaryV1's ckbtc_realized_profit_sats/
+# cketh_realized_profit_wei fields. A DRIFT result on any of them means the
+# Rust backend and/or arb_bot.did have not (yet) been extended to match the
+# dashboard for that type; reconcile it the same way as any other 3-way
+# mismatch above.
 compare3 "CandidateClass variants" \
   "$(rust_enum_variants CandidateClass "$RUST_ROUTE_ARB")" \
   "$(did_variant_names CandidateClass "$DID")" \

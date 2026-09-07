@@ -3003,7 +3003,7 @@
       if (authenticatedActor) names.push('wallet');
       const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates') ? quoteStaleAfterMs : null));
       const candidates = routeSources.candidates.value;
-      const candidateQuotes = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean).map(routeCandidateQuoteState) : [];
+      const candidateQuotes = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp), routeOpt(candidates.ckbtc), routeOpt(candidates.cketh)].filter(Boolean).map(routeCandidateQuoteState) : [];
       if (candidateQuotes.includes('stale')) states.push('stale');
       else if (candidateQuotes.includes('unknown')) states.push('unknown');
       if (states.includes('failed') || states.includes('unavailable')) return 'unavailable';
@@ -3808,7 +3808,7 @@
         return detail.value.legs.length;
       }
       const candidates = routeSources.candidates && routeSources.candidates.value;
-      const candidateList = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp)].filter(Boolean) : [];
+      const candidateList = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp), routeOpt(candidates.ckbtc), routeOpt(candidates.cketh)].filter(Boolean) : [];
       const candidate = candidateList.find(item => item.route_id === execution.route_id);
       if (!candidate) return null;
       if (Array.isArray(candidate.legs) && candidate.legs.length) return candidate.legs.length;
