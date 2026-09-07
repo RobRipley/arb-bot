@@ -696,6 +696,8 @@
   .route-wallet-meta { font-size:10px; color:var(--text-muted); margin-top:4px; word-break:break-word; }
   .route-candidate { background:var(--surface-input); border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:var(--radius-md); padding:var(--sp-4); min-height:168px; }
   .route-candidate.icp { border-left-color:var(--info); }
+  .route-candidate.ckbtc { border-left-color:var(--warning); }
+  .route-candidate.cketh { border-left-color:var(--v-partydex); }
   .route-path { font-family:var(--font-data); font-size:13px; line-height:1.6; word-break:break-word; }
   .route-venues { font-size:11px; color:var(--text-tertiary); margin-top:3px; line-height:1.5; }
   .route-profit { font-family:var(--font-data); font-size:20px; font-weight:600; margin-top:var(--sp-3); }
@@ -900,6 +902,16 @@
         reconciliation_queries_per_cycle: I.Nat8, max_open_held_positions: I.Nat16,
         max_open_non_route_reservations: I.Nat16, max_terminal_execution_records: I.Nat32,
         max_execution_record_bytes: I.Nat32, max_reconciliation_evidence_items: I.Nat8,
+        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
+        // canister. Mirrors the stable/icp book fields above field-for-field
+        // (book_enabled / size_ladder / max_..._principal_native /
+        // min_..._profit_native / min_..._profit_bps). See the "backend
+        // field mismatch" note in the commit this block was added in.
+        ckbtc_book_enabled: I.Bool, cketh_book_enabled: I.Bool,
+        ckbtc_size_ladder: I.Vec(I.Nat64), cketh_size_ladder: I.Vec(I.Nat64),
+        max_ckbtc_principal_native: I.Nat64, max_cketh_principal_native: I.Nat64,
+        min_ckbtc_profit_native: I.Nat64, min_ckbtc_profit_bps: I.Nat32,
+        min_cketh_profit_native: I.Nat64, min_cketh_profit_bps: I.Nat32,
       });
       const RouteArbStatusV1 = I.Record({
         config_valid: I.Bool, config_incident: I.Opt(I.Text), execution_compiled_in: I.Bool,
@@ -910,7 +922,11 @@
         observed_decimals: I.Opt(I.Nat8), ledger_fee_native: I.Opt(I.Nat),
         balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
       });
-      const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null });
+      // CkBtcReturning / CkEthReturning: anticipated, not yet backed by the
+      // canister (see docs/superpowers/plans — ckBTC/ckETH route books).
+      // Never returned on the wire today; added ahead of the backend so the
+      // dashboard has a fixed place to decode them once it does.
+      const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null, CkBtcReturning: I.Null, CkEthReturning: I.Null });
       const RuntimeStatus = I.Record({ compiled_support: I.Bool, live_authorized: I.Bool,
         enabled: I.Bool, dry_run: I.Bool, last_error: I.Opt(I.Text), last_tick_ns: I.Nat64,
         scheduler_in_flight_since_ns: I.Opt(I.Nat64),
@@ -939,6 +955,11 @@
         route_count: I.Nat32, full_fill_rejections: I.Nat64,
         best_stable_candidate: I.Opt(RouteCandidateReportV1), required_quote_calls: I.Nat64,
         provisional_best_icp_candidate: I.Opt(RouteCandidateReportV1), scan_complete: I.Bool,
+        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+        best_ckbtc_candidate: I.Opt(RouteCandidateReportV1),
+        provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1),
+        best_cketh_candidate: I.Opt(RouteCandidateReportV1),
+        provisional_best_cketh_candidate: I.Opt(RouteCandidateReportV1),
       });
       const ObservationStartV1 = I.Record({
         quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
@@ -948,6 +969,8 @@
       const ObservationBatchResultV1 = I.Record({ observation: ObservationAccumulatorV1, candidates: I.Vec(RouteCandidateReportV1) });
       const BestRouteCandidatesV1 = I.Record({
         icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
+        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+        ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1),
         observation_id: I.Opt(I.Text), scan_complete: I.Bool,
       });
       const MutationOwnerV1 = I.Variant({ RouteExecution: I.Null, VolumeOperation: I.Null, GenericWithdrawal: I.Null, RetiredVenueRecovery: I.Null, LegacyMigration: I.Null });
@@ -962,6 +985,9 @@
         StablePar: I.Record({ start_asset: RouteAsset, principal_native: I.Nat64, principal_usd_6dec: I.Nat64 }),
         IcpNative: I.Record({ principal_icp_e8s: I.Nat64 }),
         LegacyUnknown: I.Record({ preserved_pending_fields: I.Text }),
+        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+        CkBtcNative: I.Record({ principal_ckbtc_native: I.Nat64 }),
+        CkEthNative: I.Record({ principal_cketh_native: I.Nat64 }),
       });
       const HeldLotV1 = I.Record({ asset: RouteAsset, native_amount: I.Nat64, attributable_fees_native: I.Nat64, reserved_native: I.Nat64 });
       const HeldPositionV1 = I.Record({
@@ -990,6 +1016,8 @@
       const LifetimeRouteSummaryV1 = I.Record({
         completed_count: I.Nat64, aborted_count: I.Nat64, held_inventory_count: I.Nat64,
         stable_realized_profit_usd6: I.Int, icp_realized_profit_e8s: I.Int,
+        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+        ckbtc_realized_profit_native: I.Int, cketh_realized_profit_native: I.Int,
         folded_through: I.Nat64,
       });
       const RouteExecutionLegStatusV1 = I.Variant({
@@ -1314,6 +1342,12 @@
     ckusdt: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB2ZXJzaW9uPSIxLjEiIHZpZXdCb3g9IjAgMCAxODAgMTgwIj4gPGRlZnM+IDxzdHlsZT4gLmNscy0xIHsgZmlsbDogdXJsKCNsaW5lYXItZ3JhZGllbnQtMik7IH0gLmNscy0xLCAuY2xzLTIsIC5jbHMtMywgLmNscy00IHsgZmlsbC1ydWxlOiBldmVub2RkOyB9IC5jbHMtMiB7IGZpbGw6ICNmZmY7IH0gLmNscy01IHsgZmlsbDogIzNiMDBiOTsgfSAuY2xzLTMgeyBmaWxsOiAjMjlhYmUyOyB9IC5jbHMtNCB7IGZpbGw6IHVybCgjbGluZWFyLWdyYWRpZW50KTsgfSA8L3N0eWxlPiA8bGluZWFyR3JhZGllbnQgaWQ9ImxpbmVhci1ncmFkaWVudCIgeDE9IjY1LjQiIHkxPSI3NjIuMSIgeDI9IjE2LjciIHkyPSI3MjEuMSIgZ3JhZGllbnRUcmFuc2Zvcm09InRyYW5zbGF0ZSgwIC02MTApIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+IDxzdG9wIG9mZnNldD0iLjIiIHN0b3AtY29sb3I9IiNlZDFlNzkiLz4gPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjNTIyNzg1Ii8+IDwvbGluZWFyR3JhZGllbnQ+IDxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50LTIiIHgxPSIxNTQuNyIgeTE9IjY3MS41IiB4Mj0iMTA2IiB5Mj0iNjMwLjYiIGdyYWRpZW50VHJhbnNmb3JtPSJ0cmFuc2xhdGUoMCAtNjEwKSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPiA8c3RvcCBvZmZzZXQ9Ii4yIiBzdG9wLWNvbG9yPSIjZjE1YTI0Ii8+IDxzdG9wIG9mZnNldD0iLjciIHN0b3AtY29sb3I9IiNmYmIwM2IiLz4gPC9saW5lYXJHcmFkaWVudD4gPC9kZWZzPiA8Zz4gPGcgaWQ9ImNrQlRDX1Rva2VuIj4gPHBhdGggaWQ9IkJhY2tncm91bmQiIGNsYXNzPSJjbHMtNSIgZD0iTTkwLDBoMGM0OS43LDAsOTAsNDAuMyw5MCw5MGgwYzAsNDkuNy00MC4zLDkwLTkwLDkwaDBDNDAuMywxODAsMCwxMzkuNywwLDkwaDBDMCw0MC4zLDQwLjMsMCw5MCwwWiIvPiA8ZyBpZD0iQ29ybmVyX0VsZW1lbnRzIj4gPHBhdGggY2xhc3M9ImNscy00IiBkPSJNMjAuMiw5NS4yYzIuNSwzNC41LDMwLjEsNjIuMSw2NC42LDY0LjZ2Ny44Yy0zOC44LTIuNi02OS44LTMzLjYtNzIuNC03Mi40aDcuOFoiLz4gPHBhdGggY2xhc3M9ImNscy0zIiBkPSJNODQuOCwyMC4yYy0zNC41LDIuNS02Mi4xLDMwLjEtNjQuNiw2NC42aC03LjhDMTQuOSw0Niw0NiwxNC45LDg0LjgsMTIuNHY3LjhaIi8+IDxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTE1OS44LDg0LjdjLTIuNS0zNC41LTMwLjEtNjIuMS02NC42LTY0LjZ2LTcuOGMzOC44LDIuNiw2OS45LDMzLjYsNzIuNCw3Mi40aC03LjhaIi8+IDxwYXRoIGNsYXNzPSJjbHMtMyIgZD0iTTk1LjIsMTU5LjhjMzQuNS0yLjUsNjIuMS0zMC4xLDY0LjYtNjQuNmg3LjhjLTIuNSwzOC44LTMzLjYsNjkuOC03Mi40LDcyLjR2LTcuOFoiLz4gPHBhdGggY2xhc3M9ImNscy0yIiBkPSJNOTcuOSw5Mi43Yy0uNCwwLTIuNy4yLTcuOC4ycy02LjktLjEtOC0uMmMtMTUuNy0uNy0yNy40LTMuNC0yNy40LTYuN3MxMS43LTYsMjcuNC02Ljd2MTAuN2MxLDAsNCwuMiw4LC4yczcuMy0uMiw3LjgtLjJ2LTEwLjdjMTUuNy43LDI3LjQsMy40LDI3LjQsNi43cy0xMS43LDYtMjcuNCw2LjdoMFpNOTcuOSw3OC4ydi05LjZoMjEuOXYtMTQuNmgtNTkuNXYxNC42aDIxLjl2OS42Yy0xNy44LjgtMzEuMSw0LjMtMzEuMSw4LjZzMTMuNCw3LjgsMzEuMSw4LjZ2MzAuN2gxNS44di0zMC43YzE3LjctLjgsMzEuMS00LjMsMzEuMS04LjZzLTEzLjMtNy43LTMxLjEtOC42aDBaIi8+IDwvZz4gPC9nPiA8L2c+IDwvc3ZnPg==',
     icp: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbDpzcGFjZT0icHJlc2VydmUiIHZpZXdCb3g9IjAgMCAzNjAgMzYwIj4gPHN0eWxlPiAuc3Q0e2ZpbGw6dXJsKCNTVkdJRF8wMDAwMDA3Mjk3NzgyNjU3MzkyMDE1ODEwMDAwMDAwMzg0NjY5MTYwODY4ODAyMjkyM18pfSA8L3N0eWxlPiA8ZyBpZD0iVG9rZW5fQmFja2dyb3VuZCI+IDxjaXJjbGUgY3g9IjE4MCIgY3k9IjE4MCIgcj0iMTc5IiBmaWxsPSIjZmZmIiB0cmFuc2Zvcm09InJvdGF0ZSgtNDUuMDAxIDE3OS45OTkgMTgwLjAwMykiLz4gPHBhdGggZmlsbD0iI2RkZGRkZSIgZD0iTTE4MCAyYzI0IDAgNDcuMyA0LjcgNjkuMyAxNCAyMS4yIDkgNDAuMiAyMS44IDU2LjYgMzguMSAxNi4zIDE2LjMgMjkuMiAzNS40IDM4LjEgNTYuNiA5LjMgMjEuOSAxNCA0NS4zIDE0IDY5LjNzLTQuNyA0Ny4zLTE0IDY5LjNjLTkgMjEuMi0yMS44IDQwLjItMzguMSA1Ni42LTE2LjMgMTYuMy0zNS40IDI5LjItNTYuNiAzOC4xLTIxLjkgOS4zLTQ1LjMgMTQtNjkuMyAxNHMtNDcuMy00LjctNjkuMy0xNGMtMjEuMi05LTQwLjItMjEuOC01Ni42LTM4LjFDMzcuOCAyODkuNSAyNSAyNzAuNSAxNiAyNDkuMyA2LjcgMjI3LjMgMiAyMDQgMiAxODBzNC43LTQ3LjMgMTQtNjkuM2M5LTIxLjIgMjEuOC00MC4yIDM4LjEtNTYuNkM3MC41IDM3LjggODkuNSAyNSAxMTAuNyAxNiAxMzIuNyA2LjcgMTU2IDIgMTgwIDJtMC0yQzgwLjYgMCAwIDgwLjYgMCAxODBzODAuNiAxODAgMTgwIDE4MCAxODAtODAuNiAxODAtMTgwUzI3OS40IDAgMTgwIDB6Ii8+IDwvZz4gPGcgaWQ9IkluZmluaXR5X01hcmsiPiA8ZyBpZD0iSW5maW5pdHlfTWFya18wMDAwMDE4MzI0MTk3NzE1NzcyNjg2MzUwMDAwMDAwMzQzOTg1NTYyOTc5MTU5MDA2MF8iPiA8cGF0aCBmaWxsPSIjMjlhYmUyIiBkPSJNMjU0LjggMjE3LjRjLTE1LjkgMC0zMi43LTEwLjQtNDAuOS0xNy45LTktOC4zLTMzLjgtMzUuMS0zMy45LTM1LjItMTYuMi0xOC4xLTM4LjEtMzguMi01OS45LTM4LjItMjYuMiAwLTQ5LjEgMTguMi01NS4xIDQyLjIuNS0xLjYgOC44LTIzLjYgNDAuMS0yMy42IDE1LjkgMCAzMi43IDEwLjQgNDAuOSAxNy45IDkgOC4zIDMzLjggMzUuMSAzMy45IDM1LjIgMTYuMiAxOC4xIDM4LjEgMzguMiA1OS45IDM4LjIgMjYuMiAwIDQ5LjEtMTguMiA1NS4xLTQyLjItLjQgMS41LTguOCAyMy42LTQwLjEgMjMuNnoiLz4gPGxpbmVhckdyYWRpZW50IGlkPSJTVkdJRF8xXyIgeDE9IjE0OS40OTgiIHgyPSI3Mi44ODUiIHkxPSIyMjguODA1IiB5Mj0iMTQ5LjQ3IiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+IDxzdG9wIG9mZnNldD0iLjIyIiBzdG9wLWNvbG9yPSIjZWQxZTc5Ii8+IDxzdG9wIG9mZnNldD0iLjg5MiIgc3RvcC1jb2xvcj0iIzUyMjc4NSIvPiA8L2xpbmVhckdyYWRpZW50PiA8cGF0aCBmaWxsPSJ1cmwoI1NWR0lEXzFfKSIgZD0iTTE4MCAxOTcuOGMtLjEtLjEtNy4yLTcuOC0xNS4yLTE2LjItNC4zIDUuMS0xMC41IDEyLjEtMTcuNyAxOC40LTEzLjMgMTEuNy0yMiAxNC4xLTI3IDE0LjEtMTguNyAwLTM0LTE0LjgtMzQtMzMuMSAwLTE4LjEgMTUuMi0zMyAzNC0zMy4xLjcgMCAxLjUuMSAyLjUuMi01LjYtMi4yLTExLjYtMy42LTE3LjUtMy42LTMxLjMgMC0zOS42IDIyLTQwLjEgMjMuNi0xIDQuMS0xLjYgOC40LTEuNiAxMi44IDAgMzAuMyAyNSA1NSA1Ni4yIDU1IDEzIDAgMjcuNi02LjcgNDIuNi0xOS44IDcuMS02LjIgMTMuMi0xMi45IDE3LjktMTguMiAwIDAgMC0uMS0uMS0uMXoiLz4gPGxpbmVhckdyYWRpZW50IGlkPSJTVkdJRF8wMDAwMDEwNzU4ODM0Mzg5ODYzNzYyNzY3MDAwMDAxMzMyOTE4OTk3ODEwMzk1NTA4Ml8iIHgxPSI3NS4yNTciIHgyPSItMS4zNTYiIHkxPSItMjk2LjUwNiIgeTI9Ii0zNzUuODQxIiBncmFkaWVudFRyYW5zZm9ybT0icm90YXRlKDE4MCAxNDIuODU1IC04MS42MzIpIiBncmFkaWVudFVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+IDxzdG9wIG9mZnNldD0iLjIxIiBzdG9wLWNvbG9yPSIjZjE1YTI0Ii8+IDxzdG9wIG9mZnNldD0iLjY4NCIgc3RvcC1jb2xvcj0iI2ZiYjAzYiIvPiA8L2xpbmVhckdyYWRpZW50PiA8cGF0aCBmaWxsPSJ1cmwoI1NWR0lEXzAwMDAwMTA3NTg4MzQzODk4NjM3NjI3NjcwMDAwMDEzMzI5MTg5OTc4MTAzOTU1MDgyXykiIGQ9Ik0xODAgMTY0LjJjLjEuMSA3LjIgNy44IDE1LjIgMTYuMiA0LjMtNS4xIDEwLjUtMTIuMSAxNy43LTE4LjQgMTMuMy0xMS43IDIyLTE0LjEgMjctMTQuMSAxOC43IDAgMzQgMTQuOCAzNCAzMy4xIDAgMTguMS0xNS4yIDMzLTM0IDMzLjEtLjcgMC0xLjUtLjEtMi41LS4yIDUuNiAyLjIgMTEuNiAzLjYgMTcuNSAzLjYgMzEuMyAwIDM5LjYtMjIgNDAuMS0yMy42IDEtNC4xIDEuNi04LjQgMS42LTEyLjggMC0zMC4zLTI1LjQtNTUtNTYuNi01NS0xMyAwLTI3LjIgNi43LTQyLjIgMTkuOC03LjEgNi4yLTEzLjIgMTIuOS0xNy45IDE4LjIgMCAwIDAgLjEuMS4xeiIvPiA8L2c+IDwvZz4gPC9zdmc+',
     bob: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAMAAAD04JH5AAAATlBMVEVHcEwmIh0jHxshHRkfGxYaFxMTEQ4RDwwPDQsLCQgHBgUEAwILCwr////09PPk4+LNzMu6urmmpaSOjYx5eXhiYmFLSkk1NDMgHx8AAACPjrPaAAAADXRSTlMAECI1S2GAnLfO3+z85y7WAAAABFBJREFUeNrFm8tirCAMQEFRHjI+Ac3//+id9nbTwXaSgPYsuyiHV0wYECwa1fXaWDd84qzRfadacQtS9cbBKc7orhGX0vbWw+9YraS4BqUdoBi0EtVpegsEXN/UHXrtgYpR9cbeQMaNCm3W/K0KjYYiTCuK6D2U0gs+rYUKOMXuPlRC82bfQDVsK8goDzXpSof/7rWooTpGEDBwAVYKJNLCJbgG2b6DixgaRvv3G1i4ECdp7dfHEvdffUyN+OOfXPNhUIBiHcdxmqZ5+c/6ZEs1orL0gGJ55GyApkEsQLpAADQOsQDoArF8GbSAZS4UACXOcPcJDIgJYArwJ0FCmUACEk1RCjCVC1jECuQI8NehKRXYgYYjDcAen6QP9g/GR84BRBRlANbHW5Yt7p49BA0wBHLGeUu8ITBcgZxpO+gbQQJCAM/mqbGgRwhQmBIxHDrE549GIn0RWkTspbIDgg6diO7pSQz5QMwhfvw5Z6IkqANgCa/tJw/gEztBkeTPwHLeSBrzscGHgh7wxB+i7zGyYrMm10Lxp5W+s+bAZVGIILC8CRUBG4sUT2Da4RvHwikUeuppUPj5/weOgKamIuHnKY6cKbBZHL5ZAKRogCcQ3gnsyKRAMQUWD9/ZXpITbKncsQTyIYgjq1ru0Zsg7yZ84zUUemyJpDkCebRfmJWaEYYhkMfClXtcYYXlCzzGCJ/EiV2pOlIYyHu6nCUkK6k6GIgCCOawA5aBLIBjTkyBeunxeo/AuKbD+z2eiM0eEPgygdXDF/uSG1w/AjHboeRgMBC34fxL+bNx8lInLFtge1s/BYyA4QpM8MrBWAVWaK5AgIyFPgdG9MA7npoPyEj0ElWLjikQIOegV+m9UEyBWEegIyalY20BJUiRyI+0KdgxBbrhCSweMvZsF2AKE00SyLKh32LhiCrNOo7AeZTJTk9RxamkCPy6wjZ6KG7xBxR5E+ORhSHqEhiwv9b6LYQQw0tCNh1Z+8QZMNhDqvQ4ZUxZ0UbbhJ34xGMPRnLm6OHJESZWViixB5XrL4fjMcawjidu+INKhfgKk5k84WfsAfEJILLAe7zEHtfv5O5H2nG9RBxLEJgjoGjRP9lshL6v6MLQ4n+1Oz7ZP0gphdNeL8u6xXRwf7ezQOBMwAOVAXF5hLAkfekFP1smMB7sAfiiLRTwxTcczb0CVrzSFAlMQKQtuMKRKggYccJwo4AUJ7T3CXTiFM0XmOkTwL9JFB85IysEMHfCEULYtm39Ynkyr/wdwI3IfHrmhcqbbrobuBj7x5daB0m5Vlwf34i3NMOF7bdC/KlBK1A07o7+33+93jV/+8DAyr994qEFka52/CXTOsi4+a2ThkoYKXgoBxUYOsFGaihGy9LXhkVYJUpRFtjYTtSgYyq4rvarU37vy2n1AAS8bkVtZGc84DCdFJcgEY+vnbn4/XnbaevhHKv7VtyB/Hr974ZP3Nf7f1bP/wF/hG2iM81NVQAAAABJRU5ErkJggg==',
+    // ckBTC/ckETH: no source logo asset exists yet (unlike the other
+    // amendment-11 logos above), so these are minimal local SVG badges
+    // rather than a downscaled prototype asset. Swap for real brand
+    // marks if/when one is added to the repo.
+    ckbtc: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9IiNmNzkzMWEiLz48dGV4dCB4PSIxNiIgeT0iMjIiIGZvbnQtZmFtaWx5PSJIZWx2ZXRpY2EsIEFyaWFsLCBzYW5zLXNlcmlmIiBmb250LXNpemU9IjE4IiBmb250LXdlaWdodD0iNzAwIiBmaWxsPSIjZmZmZmZmIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5CPC90ZXh0Pjwvc3ZnPg==',
+    cketh: 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9IiM2MjdlZWEiLz48cGF0aCBkPSJNMTYgNmwtNyAxMSA3IDQgNy00eiIgZmlsbD0iI2ZmZmZmZiIgb3BhY2l0eT0iMC44NSIvPjxwYXRoIGQ9Ik0xNiAyMi42bC03LTQuMUwxNiAyNmw3LTcuNXoiIGZpbGw9IiNmZmZmZmYiLz48L3N2Zz4=',
     icpswap: 'data:image/png;base64,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',
     partydex: 'data:image/png;base64,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',
   };
@@ -2882,6 +2916,19 @@
 
     function routeAssetKey(asset) { return variantKey(asset); }
     function routeAssetLabel(asset) { return ROUTE_ASSET_LABELS[routeAssetKey(asset)] || routeAssetKey(asset); }
+    // Single source of truth for "what unit and decimals does this
+    // candidate_class's realized_profit carry" — used by the Ops runtime
+    // strip, the Cockpit hero/today totals, and the Ledger P&L cell, so all
+    // three agree and none of them silently fall back to the wrong unit for
+    // a class they don't recognize yet.
+    const ROUTE_PROFIT_UNITS = {
+      IcpReturning: { label: 'ICP', decimals: 8 },
+      StablePar: { label: 'USD', decimals: 6 },
+      StableSettledCrossAsset: { label: 'USD', decimals: 6 },
+      CkBtcReturning: { label: 'ckBTC', decimals: 8 },
+      CkEthReturning: { label: 'ckETH', decimals: 18 },
+    };
+    function routeProfitUnit(candidateClass) { return ROUTE_PROFIT_UNITS[variantKey(candidateClass)] || null; }
     function routePhaseLabel(phase) { return String(variantKey(phase)).replace(/([a-z])([A-Z])/g, '$1 $2'); }
     function unwrapResult(result) {
       if (!result || typeof result !== 'object') throw new Error('Malformed canister result');
@@ -2989,6 +3036,7 @@
       const frac = (raw % base).toString().padStart(decimals, '0').slice(0, Math.min(decimals, 6)).replace(/0+$/, '');
       return `${whole.toString()}${frac ? '.' + frac : ''}`;
     }
+    const ROUTE_CANDIDATE_KIND_CLASS = { 'ICP-returning': 'icp', 'ckBTC-returning': 'ckbtc', 'ckETH-returning': 'cketh' };
     function routeCandidateHtml(candidate, kind) {
       if (!candidate) return `<div class="route-empty">No completed eligible ${kind} candidate yet. Run or continue a quote-only observation.</div>`;
       const quoteState = routeCandidateQuoteState(candidate);
@@ -3002,7 +3050,8 @@
       const profitBps = Number(candidate.net_profit_bps);
       const profitNative = candidate.net_profit_native >= 0n ? '+' + candidate.net_profit_native.toString() : candidate.net_profit_native.toString();
       const collision = routeOpt(candidate.canonical_cycle_id) || 'unique open route';
-      return `<div class="route-candidate ${kind === 'ICP-returning' ? 'icp' : ''}">
+      const kindClass = ROUTE_CANDIDATE_KIND_CLASS[kind] || '';
+      return `<div class="route-candidate ${kindClass}">
         <div class="route-path">${esc(path)}</div>
         <div class="route-venues">${esc(venues)}</div>
         <div class="route-profit ${candidate.eligible ? 'positive' : 'negative'}"><span class="text-ter" style="font-size:10px;text-transform:uppercase;letter-spacing:.04em">Estimated spread</span> ${profitBps >= 0 ? '+' : ''}${profitBps} bps</div>
@@ -3258,8 +3307,7 @@
       const pressed = automation.state === 'On' || (automation.state === 'Applying' && automation.targetOn) || (automation.state === 'Blocked' && automation.gatesOn);
       const profit = runtime ? routeOpt(runtime.last_realized_profit) : null;
       const cls = runtime ? routeOpt(runtime.last_profit_class) : null;
-      const unit = cls && variantKey(cls) === 'IcpReturning' ? 'ICP' : 'USD at stablecoin par';
-      const decimals = unit === 'ICP' ? 8 : 6;
+      const profitUnit = cls ? routeProfitUnit(cls) : null;
       const toggle = isAdmin ? `<button type="button" class="lever-toggle${pressed ? ' on' : ''}${automation.state === 'Applying' ? ' applying' : ''}" aria-pressed="${pressed}" aria-label="Automatic arbitrage ${automation.label.toLowerCase()}" title="${automation.state === 'Off' ? 'Start arbitrage' : automation.state === 'On' ? 'Stop new trades' : automation.reason}" ${canToggle ? `onclick="setRouteTrading(${!pressed})"` : 'disabled'}><span>${esc(automation.label)}</span></button>` : '';
       const reason = automation.reason ? `<div class="route-wallet-meta">${esc(automation.reason)}${runtimeState === 'stale' ? ` · ${esc(sourceLastSuccessLabel(routeSources.runtime))}` : ''}</div>` : '';
       return `<div class="card" style="margin-top:var(--sp-4)" data-route-automation-state="${automation.state}"><div class="card-header">Automatic arbitrage</div>
@@ -3267,7 +3315,7 @@
         ${reason}
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
-        <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls ? '—' : `${(Number(profit) / 10 ** decimals).toFixed(decimals === 8 ? 8 : 6)} ${unit}`}</div></div>`;
+        <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls || !profitUnit ? '—' : `${(Number(profit) / 10 ** profitUnit.decimals).toFixed(Math.min(profitUnit.decimals, 8))} ${profitUnit.label}`}</div></div>`;
     }
     async function refreshRouteRuntimeAuthoritative() {
       if (routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
@@ -3383,6 +3431,62 @@
         renderOps();
       }
     };
+    // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note
+    // above. There is no dedicated setter for these fields yet (unlike
+    // set_wrapped_stable_to_icusd_allowed_v1 above), so this round-trips
+    // the whole config through set_route_arb_config_v1 with one field
+    // flipped, same as the "Start automatic arbitrage" flow.
+    window.leverRouteBookEnabled = async function (key, fieldKey, label) {
+      if (state.levers[key] === 'applying' || !requireAuth()) return;
+      if (routeSourceState('routeArbConfig') !== 'fresh' || !routeArbConfig) {
+        toast(`Route policy ${sourceStateText('routeArbConfig')}; refresh before changing it`, 'error');
+        return;
+      }
+      const currentlyEnabled = routeArbConfig[fieldKey] === true;
+      state.levers[key] = 'applying';
+      renderOps();
+      try {
+        const refreshed = unwrapResult(
+          await authenticatedActor.set_route_arb_config_v1({ ...routeArbConfig, [fieldKey]: !currentlyEnabled })
+        );
+        routeArbConfig = refreshed;
+        markSourceFresh(routeSources.routeArbConfig, refreshed);
+        const drain = routeDataRequestPromise;
+        if (drain) await drain;
+        latestRouteObservation = null;
+        latestRouteCandidates = null;
+        markSourceUnavailable(routeSources.observation, 'Route policy changed; refreshing quotes');
+        markSourceUnavailable(routeSources.candidates, 'Route policy changed; refreshing quotes');
+        renderRouteAutomationViews();
+        await loadRouteData();
+        toast(`${label}: ${refreshed[fieldKey] === true ? 'on' : 'off'} · confirmed by canister`, 'success');
+      } catch (e) {
+        markSourceFailed(routeSources.routeArbConfig, e);
+        toast(`${label} failed: ` + (e.message || e), 'error');
+      } finally {
+        delete state.levers[key];
+        renderOps();
+      }
+    };
+    window.leverCkBtcBookEnabled = function () { return leverRouteBookEnabled('ckbtc-book-enabled', 'ckbtc_book_enabled', 'ckBTC-returning book'); };
+    window.leverCkEthBookEnabled = function () { return leverRouteBookEnabled('cketh-book-enabled', 'cketh_book_enabled', 'ckETH-returning book'); };
+    // Read-only summary of a book's size ladder / principal cap / profit
+    // floor for the Ops policy card. Tolerates an undefined field (the
+    // live canister does not send ckbtc_*/cketh_* config yet) by falling
+    // back to "unavailable" rather than rendering NaN.
+    function routeBookSettingsHtml(prefix, label, decimals) {
+      const cfg = routeArbConfig;
+      const ladder = cfg ? cfg[`${prefix}_size_ladder`] : null;
+      const maxPrincipal = cfg ? cfg[`max_${prefix}_principal_native`] : null;
+      const minProfitNative = cfg ? cfg[`min_${prefix}_profit_native`] : null;
+      const minProfitBps = cfg ? cfg[`min_${prefix}_profit_bps`] : null;
+      const ladderText = Array.isArray(ladder) && ladder.length ? ladder.map(v => fmtTok(v, decimals)).join(', ') : 'unavailable';
+      const maxText = maxPrincipal != null ? `${fmtTok(maxPrincipal, decimals)} ${label}` : 'unavailable';
+      const minText = minProfitNative != null && minProfitBps != null
+        ? `${fmtTok(minProfitNative, decimals)} ${label} or ${(Number(minProfitBps) / 100).toFixed(2)}%`
+        : 'unavailable';
+      return `${esc(label)} size ladder: ${esc(ladderText)} · max principal: ${esc(maxText)} · min profit: ${esc(minText)}`;
+    }
     function routeArbitrageHtml() {
       const status = latestRouteStatus;
       const obs = latestRouteObservation;
@@ -3392,6 +3496,9 @@
       const candidatesState = routeSourceState('candidates', quoteStaleAfterMs);
       const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
       const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
+      // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+      const ckbtc = latestRouteCandidates ? routeOpt(latestRouteCandidates.ckbtc) : null;
+      const cketh = latestRouteCandidates ? routeOpt(latestRouteCandidates.cketh) : null;
       const scanText = observationState === 'loading' ? 'Loading observation…'
         : observationState === 'failed' || observationState === 'unavailable' ? 'Observation unavailable'
         : observationState === 'stale' ? `Stale · ${!obs ? 'no cached observation' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`}`
@@ -3402,6 +3509,8 @@
         : candidatesState === 'stale' && !stable ? `<div class="route-empty ts-stale">Stale · ${sourceLastSuccessLabel(routeSources.candidates)} · no cached stable-returning candidate.</div>` : null;
       const stableHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(stable, 'stable-returning');
       const icpHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(icp, 'ICP-returning');
+      const ckbtcHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(ckbtc, 'ckBTC-returning');
+      const ckethHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(cketh, 'ckETH-returning');
       const statusText = statusState === 'loading' ? 'Loading route status…'
         : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
         : status ? `${bi(status.route_count)} graph routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
@@ -3413,9 +3522,11 @@
           <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
         <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
-        <div class="grid g-cols-2" style="margin-top:var(--sp-4)">
+        <div class="grid g-cols-4" style="margin-top:var(--sp-4)">
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
+          <div class="card"><div class="card-header">Best ckBTC-returning route</div><div id="route-ckbtc-candidate">${ckbtcHtml}</div></div>
+          <div class="card"><div class="card-header">Best ckETH-returning route</div><div id="route-cketh-candidate">${ckethHtml}</div></div>
         </div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Observation</div><div id="route-observation-metrics" class="route-list-row"><span>${esc(scanText)}${observationStamp}</span><span>${obs ? `${bi(obs.quote_calls_made)} / ${bi(obs.required_quote_calls)} quote calls` : '—'}</span><span>${obs ? `${bi(obs.full_fill_rejections)} Full fill rejections` : '—'}</span></div><div class="route-wallet-meta">${esc(statusText)}${statusStamp}</div>${obs && routeOpt(obs.incident) ? `<div class="negative" style="margin-top:8px">${esc(routeOpt(obs.incident))}</div>` : ''}</div>
         <div class="route-disclosure" style="margin-top:var(--sp-4)">Rumi AMM, PartyDEX, and BOB arbitrage are retired; their historical ledger records remain visible under Ledger. The volume engine remains a separate operational system below. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('diagnostics')">View legacy diagnostics →</button></div>
@@ -3740,7 +3851,8 @@
 
     function cockpitTodayResults(terminalState) {
       if (terminalState !== 'fresh') {
-        return { state: terminalState, stableResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', icpResult: terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable', completed: 'Unknown', failed: 'Unknown', coverage: terminalState === 'stale' ? 'Stale terminal data' : terminalState === 'loading' ? 'Loading terminal data' : 'Terminal data unavailable' };
+        const placeholder = terminalState === 'stale' ? 'Stale' : terminalState === 'loading' ? 'Loading…' : 'Unavailable';
+        return { state: terminalState, stableResult: placeholder, icpResult: placeholder, ckbtcResult: placeholder, ckethResult: placeholder, completed: 'Unknown', failed: 'Unknown', coverage: terminalState === 'stale' ? 'Stale terminal data' : terminalState === 'loading' ? 'Loading terminal data' : 'Terminal data unavailable' };
       }
       const startNs = BigInt(new Date().setHours(0, 0, 0, 0)) * 1000000n;
       const today = latestTerminalExecutions.filter(record => BigInt(record.updated_at_ns || 0) >= startNs);
@@ -3748,12 +3860,19 @@
       const failed = today.filter(record => variantKey(record.phase) !== 'Completed').length;
       const stableValues = today.filter(record => ['StablePar', 'StableSettledCrossAsset'].includes(variantKey(record.candidate_class))).map(record => routeOpt(record.realized_profit)).filter(value => value != null);
       const icpValues = today.filter(record => variantKey(record.candidate_class) === 'IcpReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
+      const ckbtcValues = today.filter(record => variantKey(record.candidate_class) === 'CkBtcReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
+      const ckethValues = today.filter(record => variantKey(record.candidate_class) === 'CkEthReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
       const stableRealized = stableValues.reduce((sum, value) => sum + BigInt(value), 0n);
       const icpRealized = icpValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      const ckbtcRealized = ckbtcValues.reduce((sum, value) => sum + BigInt(value), 0n);
+      const ckethRealized = ckethValues.reduce((sum, value) => sum + BigInt(value), 0n);
       return {
         state: terminalState,
         stableResult: stableValues.length ? fmt$(stableRealized) : '—',
         icpResult: icpValues.length ? `${fmtTok(icpRealized, 8)} ICP` : '—',
+        ckbtcResult: ckbtcValues.length ? `${fmtTok(ckbtcRealized, 8)} ckBTC` : '—',
+        ckethResult: ckethValues.length ? `${fmtTok(ckethRealized, 18)} ckETH` : '—',
         completed: String(completed),
         failed: String(failed),
         coverage: terminalExecutionsIncomplete ? `Incomplete · bounded at ${terminalExecutionsLoadedCount} terminal records` : 'Complete through start of day',
@@ -3847,7 +3966,7 @@
 
           <div class="card" data-cockpit-today-results data-cockpit-realized-results>
             <div class="card-header">Today’s realized result</div>
-            <div class="grid g-cols-2"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
+            <div class="grid g-cols-2"><div class="stat-row"><span>Stable profit (USD)</span><span>${esc(cockpit.today.stableResult)}</span></div><div class="stat-row"><span>ICP profit (ICP)</span><span>${esc(cockpit.today.icpResult)}</span></div><div class="stat-row"><span>ckBTC profit (ckBTC)</span><span>${esc(cockpit.today.ckbtcResult)}</span></div><div class="stat-row"><span>ckETH profit (ckETH)</span><span>${esc(cockpit.today.ckethResult)}</span></div><div class="stat-row"><span>Completed</span><span>${esc(cockpit.today.completed)}</span></div><div class="stat-row"><span>Failed</span><span>${esc(cockpit.today.failed)}</span></div></div>
             <div class="footnote" data-cockpit-today-coverage>${esc(cockpit.today.coverage)}</div>
           </div>
 
@@ -3887,6 +4006,8 @@
               <div class="hero-number ${lifetime ? pClass(lifetime.stable_realized_profit_usd6) : ''}">${lifetime ? fmt$(lifetime.stable_realized_profit_usd6) : '—'}</div>
               <div class="hero-delta text-ter">stable-book P&amp;L above · terminal totals, all classes: ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
               <div class="stat-row"><span>ICP-returning, all-time (live)</span><span class="num ${lifetime ? pClass(lifetime.icp_realized_profit_e8s) : ''}">${lifetime ? fmtTok(lifetime.icp_realized_profit_e8s, 8) + ' ICP' : '—'}</span></div>
+              <div class="stat-row"><span>ckBTC-returning, all-time (live)</span><span class="num ${lifetime && lifetime.ckbtc_realized_profit_native != null ? pClass(lifetime.ckbtc_realized_profit_native) : ''}">${lifetime && lifetime.ckbtc_realized_profit_native != null ? fmtTok(lifetime.ckbtc_realized_profit_native, 8) + ' ckBTC' : '—'}</span></div>
+              <div class="stat-row"><span>ckETH-returning, all-time (live)</span><span class="num ${lifetime && lifetime.cketh_realized_profit_native != null ? pClass(lifetime.cketh_realized_profit_native) : ''}">${lifetime && lifetime.cketh_realized_profit_native != null ? fmtTok(lifetime.cketh_realized_profit_native, 18) + ' ckETH' : '—'}</span></div>
               <div class="divider"></div>
               <div class="hero-split">Legacy net P&amp;L · frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
@@ -5310,11 +5431,15 @@
         <div class="card" style="margin-bottom:var(--sp-4)">
           <div class="card-header">Route arbitrage policy <span class="diagnostics-source-status">${sourceStampHtml('routeArbConfig')}</span></div>
           <div class="stat-row"><span>Policy</span><span class="${routeStatus && routeStatus.config_valid ? 'positive' : 'text-sec'}">${esc(routeConfigState)}</span></div>
-          <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning</span></div>
+          <div class="stat-row"><span>Books</span><span>stable-returning + ICP-returning + ckBTC-returning + ckETH-returning</span></div>
           <div class="stat-row"><span>Execution</span><span class="badge ${routeAutomation.state === 'On' ? 'badge-live' : routeAutomation.state === 'Unknown' ? 'badge-stuck' : 'badge-dryrun'}">${esc(executionCopy)}</span></div>
           <div class="lever-grid" style="margin-top:var(--sp-3)">
             ${leverHtml('stable-exit-protection', 'Protect ck stables', 'Blocks ckUSDC/ckUSDT-funded routes from settling into icUSD', routeArbConfig?.allow_wrapped_stable_to_icusd?.[0] !== true, 'leverStableExitProtection()', 'routeArbConfig')}
+            ${leverHtml('ckbtc-book-enabled', 'ckBTC-returning book', 'Routes that begin and end in ckBTC', routeArbConfig?.ckbtc_book_enabled === true, 'leverCkBtcBookEnabled()', 'routeArbConfig')}
+            ${leverHtml('cketh-book-enabled', 'ckETH-returning book', 'Routes that begin and end in ckETH', routeArbConfig?.cketh_book_enabled === true, 'leverCkEthBookEnabled()', 'routeArbConfig')}
           </div>
+          <div class="route-wallet-meta">${routeBookSettingsHtml('ckbtc', 'ckBTC', 8)}</div>
+          <div class="route-wallet-meta">${routeBookSettingsHtml('cketh', 'ckETH', 18)}</div>
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>
@@ -5467,10 +5592,9 @@
     function routeLedgerPnlHtml(record) {
       const realized = routeLedgerTextOption(record.realized_profit, null);
       if (realized == null) return '<span class="text-muted">Unavailable</span>';
-      const klass = variantKey(record.candidate_class);
-      if (klass === 'IcpReturning') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 8)} ICP</span>`;
-      if (klass === 'StablePar' || klass === 'StableSettledCrossAsset') return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, 6)} USD</span>`;
-      return '<span class="text-muted">Unavailable · profit unit unknown</span>';
+      const unit = routeProfitUnit(record.candidate_class);
+      if (!unit) return '<span class="text-muted">Unavailable · profit unit unknown</span>';
+      return `<span class="${pClass(realized)}">${Number(realized) >= 0 ? '+' : ''}${routeLedgerFormatAmount(realized, unit.decimals)} ${unit.label}</span>`;
     }
     function routeLedgerFlowStage(asset, amount) {
       const label = routeAssetLabel(asset);

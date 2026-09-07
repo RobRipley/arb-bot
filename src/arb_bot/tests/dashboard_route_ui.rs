@@ -369,6 +369,18 @@ fn realized_profit_totals_preserve_candidate_units() {
     assert!(results.contains("icpResult"));
     assert!(cockpit.contains("Stable profit") || cockpit.contains("USD realized"));
     assert!(cockpit.contains("ICP profit") || cockpit.contains("ICP realized"));
+    // ckBTC/ckETH-returning books — anticipated, not yet backed by the
+    // canister (see docs/superpowers plans). Today's realized-result bucket
+    // must recognize both new candidate classes rather than silently
+    // dropping their profit into no bucket at all.
+    assert!(results.contains("CkBtcReturning"));
+    assert!(results.contains("CkEthReturning"));
+    assert!(results.contains("ckbtcRealized"));
+    assert!(results.contains("ckethRealized"));
+    assert!(results.contains("ckbtcResult"));
+    assert!(results.contains("ckethResult"));
+    assert!(cockpit.contains("ckBTC profit"));
+    assert!(cockpit.contains("ckETH profit"));
 }
 
 #[test]
@@ -556,6 +568,13 @@ fn cockpit_hero_shows_live_route_pnl_and_frozen_legacy_breakdown_separately() {
         "Legacy net P&amp;L",
         "frozen at Stage-1 cutover",
         "inventory recovery",
+        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
+        // canister. The hero must report their all-time native totals
+        // alongside stable/ICP, not silently omit them.
+        "ckbtc_realized_profit_native",
+        "cketh_realized_profit_native",
+        "ckBTC-returning, all-time",
+        "ckETH-returning, all-time",
     ] {
         assert!(cockpit.contains(marker), "cockpit hero missing marker: {marker}");
     }
@@ -627,7 +646,94 @@ fn dashboard_declares_lifetime_route_summary_query_consistently() {
         "stable_realized_profit_usd6: I.Int",
         "icp_realized_profit_e8s: I.Int",
         "get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query'])",
+        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
+        // canister. Declared ahead of the backend so the dashboard has a
+        // fixed decode target once these fields ship on the wire.
+        "ckbtc_realized_profit_native: I.Int",
+        "cketh_realized_profit_native: I.Int",
     ] {
         assert!(DASHBOARD.contains(marker), "dashboard IDL missing marker: {marker}");
     }
+}
+
+#[test]
+fn dashboard_idl_anticipates_ckbtc_and_cketh_returning_books() {
+    for marker in [
+        // CandidateClass gains the two new book classes.
+        "CkBtcReturning: I.Null, CkEthReturning: I.Null",
+        // RouteArbConfigV1 mirrors the stable/icp book config fields.
+        "ckbtc_book_enabled: I.Bool, cketh_book_enabled: I.Bool",
+        "ckbtc_size_ladder: I.Vec(I.Nat64), cketh_size_ladder: I.Vec(I.Nat64)",
+        "max_ckbtc_principal_native: I.Nat64, max_cketh_principal_native: I.Nat64",
+        "min_ckbtc_profit_native: I.Nat64, min_ckbtc_profit_bps: I.Nat32",
+        "min_cketh_profit_native: I.Nat64, min_cketh_profit_bps: I.Nat32",
+        // ObservationAccumulatorV1 / BestRouteCandidatesV1 gain best/provisional candidates.
+        "best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
+        "provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
+        "best_cketh_candidate: I.Opt(RouteCandidateReportV1)",
+        "provisional_best_cketh_candidate: I.Opt(RouteCandidateReportV1)",
+        "ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1)",
+        // HeldBasisV1 gains native-basis variants for held ckBTC/ckETH inventory.
+        "CkBtcNative: I.Record({ principal_ckbtc_native: I.Nat64 })",
+        "CkEthNative: I.Record({ principal_cketh_native: I.Nat64 })",
+    ] {
+        assert!(DASHBOARD.contains(marker), "dashboard IDL missing ckBTC/ckETH marker: {marker}");
+    }
+}
+
+#[test]
+fn markets_shows_four_candidate_books() {
+    let route_panel = rendered_region("function routeArbitrageHtml()", "async function loadTerminalExecutionsForToday");
+    for marker in [
+        "g-cols-4",
+        "route-stable-candidate",
+        "route-icp-candidate",
+        "route-ckbtc-candidate",
+        "route-cketh-candidate",
+        "Best stable-returning route",
+        "Best ICP-returning route",
+        "Best ckBTC-returning route",
+        "Best ckETH-returning route",
+    ] {
+        assert!(route_panel.contains(marker), "Markets missing candidate-book marker: {marker}");
+    }
+}
+
+#[test]
+fn ops_exposes_ckbtc_and_cketh_book_toggles_and_settings() {
+    let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
+    for marker in [
+        "leverCkBtcBookEnabled()",
+        "leverCkEthBookEnabled()",
+        "ckbtc_book_enabled",
+        "cketh_book_enabled",
+        "ckBTC-returning book",
+        "ckETH-returning book",
+        "routeBookSettingsHtml('ckbtc'",
+        "routeBookSettingsHtml('cketh'",
+    ] {
+        assert!(ops.contains(marker), "Ops missing ckBTC/ckETH book marker: {marker}");
+    }
+    // The generic handler round-trips the whole config through
+    // set_route_arb_config_v1 (there is no dedicated setter yet) and must
+    // invalidate cached quotes the same way the ck-stable-exit lever does.
+    assert!(DASHBOARD.contains("window.leverRouteBookEnabled"));
+    assert!(DASHBOARD.contains("set_route_arb_config_v1({ ...routeArbConfig, [fieldKey]: !currentlyEnabled })"));
+}
+
+#[test]
+fn ledger_pnl_handles_ckbtc_and_cketh_returning_without_an_unknown_unit_fallback() {
+    let pnl = rendered_region("function routeLedgerPnlHtml", "function routeLedgerFlowStage");
+    assert!(pnl.contains("routeProfitUnit(record.candidate_class)"));
+    assert!(pnl.contains("profit unit unknown"), "a true-unknown fallback must still exist for future classes");
+    // routeProfitUnit is the single source of truth for candidate-class ->
+    // unit/decimals; confirm it actually names the two new classes rather
+    // than only being wired up for the pre-existing three.
+    let unit_map = rendered_region("const ROUTE_PROFIT_UNITS = {", "function routeProfitUnit");
+    assert!(unit_map.contains("CkBtcReturning"));
+    assert!(unit_map.contains("CkEthReturning"));
+    assert!(unit_map.contains("'ckBTC'"));
+    assert!(unit_map.contains("'ckETH'"));
+    assert!(unit_map.contains("decimals: 8"));
+    assert!(unit_map.contains("decimals: 18"));
 }
