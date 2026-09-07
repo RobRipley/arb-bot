@@ -10,11 +10,20 @@
 use crate::route_arb::{self, Asset, ReconciliationEvidenceV1, VenueKind};
 use crate::route_runtime::{RuntimeRequest, RuntimeSettlement};
 use candid::{CandidType, Deserialize, Int, Nat, Principal, Reserved};
+use icrc_ledger_types::icrc::generic_value::ICRC3Value;
 use num_traits::ToPrimitive;
 use serde::Serialize;
+use sha2::{Digest, Sha224};
 
 pub const MAX_RECEIPTS: usize = 256;
 pub const MAX_RESPONSE_BYTES: usize = 512 * 1024;
+// icUSD caps ICRC-3 page responses at 100 blocks even when a larger length is
+// requested. Requesting the cap from the actual tail, rather than a larger
+// page from an earlier offset, keeps recent submitted transfers visible.
+const MAX_ICRC3_BLOCKS: u64 = 100;
+const MAX_ICP_INDEX_TRANSACTIONS: u64 = 256;
+const ICP_LEDGER: &str = "ryjl3-tyaaa-aaaaa-aaaba-cai";
+const ICP_INDEX: &str = "qhbym-qaaaa-aaaaa-aaafq-cai";
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct Account {
     pub owner: Principal,
@@ -201,6 +210,101 @@ pub enum ReceiptVerdict {
     Pending(String),
 }
 
+/// ICRC-3 is the durable source of truth for transfers on the wrapped-token
+/// ledgers.  The pool cache is useful, but it is not retention-guaranteed.
+#[derive(CandidType, Deserialize)]
+struct Icrc3GetBlocksArgs {
+    start: Nat,
+    length: Nat,
+}
+#[derive(CandidType, Deserialize)]
+struct Icrc3BlockWithId {
+    id: Nat,
+    block: ICRC3Value,
+}
+#[derive(CandidType, Deserialize)]
+struct Icrc3GetBlocksResult {
+    log_length: Nat,
+    blocks: Vec<Icrc3BlockWithId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LedgerTransfer {
+    block: Nat,
+    timestamp_ns: u64,
+    from: Account,
+    to: Account,
+    spender: Option<Account>,
+    amount: u64,
+    fee: Option<u64>,
+    memo: Vec<u8>,
+}
+
+// ICP's legacy ledger does not export ICRC-3.  Its maintained index does;
+// this is the current public `get_account_transactions` wire shape.
+#[derive(CandidType, Deserialize, Serialize)]
+struct IcpIndexAccount {
+    owner: Principal,
+    subaccount: Option<Vec<u8>>,
+}
+#[derive(CandidType, Deserialize, Serialize)]
+struct IcpIndexRequest {
+    account: IcpIndexAccount,
+    start: Option<u64>,
+    max_results: Nat,
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTokens {
+    e8s: u64,
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTransfer {
+    to: String,
+    fee: IcpTokens,
+    from: String,
+    amount: IcpTokens,
+    spender: Option<String>,
+}
+#[derive(CandidType, Deserialize)]
+enum IcpOperation {
+    Burn(Reserved),
+    Mint(Reserved),
+    Transfer(IcpTransfer),
+    Approve(Reserved),
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTimestamp {
+    timestamp_nanos: u64,
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTransaction {
+    memo: u64,
+    icrc1_memo: Option<Vec<u8>>,
+    operation: IcpOperation,
+    timestamp: Option<IcpTimestamp>,
+    created_at_time: Option<u64>,
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTransactionWithId {
+    id: u64,
+    transaction: IcpTransaction,
+}
+#[derive(CandidType, Deserialize)]
+struct IcpTransactions {
+    balance: u64,
+    transactions: Vec<IcpTransactionWithId>,
+    oldest_tx_id: Option<u64>,
+}
+#[derive(CandidType, Deserialize)]
+enum IcpTransactionsResult {
+    Ok(IcpTransactions),
+    Err(IcpIndexError),
+}
+#[derive(CandidType, Deserialize)]
+struct IcpIndexError {
+    message: String,
+}
+
 pub fn pinned_request(
     edge_id: &str,
     token0: Asset,
@@ -268,6 +372,243 @@ async fn raw(pool: Principal, method: &str, args: Vec<u8>) -> Result<Vec<u8>, St
     ic_cdk::api::call::call_raw(pool, method, args, 0)
         .await
         .map_err(|e| format!("external call {method}: {e:?}"))
+}
+
+fn nat_u64(v: &Nat) -> Option<u64> {
+    v.0.to_u64()
+}
+
+fn map_field<'a>(map: &'a std::collections::BTreeMap<String, ICRC3Value>, name: &str) -> Option<&'a ICRC3Value> {
+    map.get(name)
+}
+
+fn value_nat(v: &ICRC3Value) -> Option<u64> {
+    match v {
+        ICRC3Value::Nat(n) => nat_u64(n),
+        _ => None,
+    }
+}
+
+fn value_blob(v: &ICRC3Value) -> Option<Vec<u8>> {
+    match v {
+        ICRC3Value::Blob(b) => Some(b.to_vec()),
+        _ => None,
+    }
+}
+
+fn value_account(v: &ICRC3Value) -> Option<Account> {
+    let ICRC3Value::Array(parts) = v else { return None };
+    if parts.is_empty() || parts.len() > 2 {
+        return None;
+    }
+    let owner = Principal::try_from_slice(&value_blob(parts.first()?)?).ok()?;
+    let subaccount = match parts.get(1) {
+        None => None,
+        Some(v) => {
+            let bytes: [u8; 32] = value_blob(v)?.try_into().ok()?;
+            Some(bytes.to_vec())
+        }
+    };
+    Some(Account { owner, subaccount })
+}
+
+fn decode_icrc3_transfer(block: &Icrc3BlockWithId) -> Option<LedgerTransfer> {
+    let ICRC3Value::Map(root) = &block.block else { return None };
+    let timestamp_ns = value_nat(map_field(root, "ts")?)?;
+    let ICRC3Value::Map(tx) = map_field(root, "tx")? else { return None };
+    if !matches!(map_field(tx, "op")?, ICRC3Value::Text(op) if op == "xfer") {
+        return None;
+    }
+    Some(LedgerTransfer {
+        block: block.id.clone(),
+        timestamp_ns,
+        from: value_account(map_field(tx, "from")?)?,
+        to: value_account(map_field(tx, "to")?)?,
+        spender: map_field(tx, "spender").and_then(value_account),
+        amount: value_nat(map_field(tx, "amt")?)?,
+        fee: map_field(tx, "fee").and_then(value_nat),
+        memo: map_field(tx, "memo").and_then(value_blob).unwrap_or_default(),
+    })
+}
+
+async fn read_icrc3_tail(ledger: Principal) -> Result<Vec<LedgerTransfer>, String> {
+    let empty = candid::encode_args((vec![Icrc3GetBlocksArgs {
+        start: Nat::from(0u8),
+        length: Nat::from(0u8),
+    }],))
+    .map_err(|e| e.to_string())?;
+    let bytes = raw(ledger, "icrc3_get_blocks", empty).await?;
+    let (head,): (Icrc3GetBlocksResult,) = decode_bounded(&bytes)?;
+    let Some(log_length) = nat_u64(&head.log_length) else {
+        return Err("ICRC-3 log length exceeds supported range".into());
+    };
+    let start = log_length.saturating_sub(MAX_ICRC3_BLOCKS);
+    let args = candid::encode_args((vec![Icrc3GetBlocksArgs {
+        start: Nat::from(start),
+        length: Nat::from(MAX_ICRC3_BLOCKS),
+    }],))
+    .map_err(|e| e.to_string())?;
+    let bytes = raw(ledger, "icrc3_get_blocks", args).await?;
+    let (tail,): (Icrc3GetBlocksResult,) = decode_bounded(&bytes)?;
+    if tail.blocks.len() > MAX_ICRC3_BLOCKS as usize {
+        return Err("ICRC-3 ledger tail exceeded cap".into());
+    }
+    Ok(tail.blocks.iter().filter_map(decode_icrc3_transfer).collect())
+}
+
+fn icp_account_identifier(owner: Principal) -> Vec<u8> {
+    let mut preimage = b"\x0Aaccount-id".to_vec();
+    preimage.extend_from_slice(owner.as_slice());
+    preimage.extend_from_slice(&[0u8; 32]);
+    let hash = Sha224::digest(&preimage);
+    let mut crc = !0u32;
+    for byte in hash {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    let mut account = (!crc).to_be_bytes().to_vec();
+    account.extend_from_slice(&hash);
+    account
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+async fn read_icp_account_transactions(owner: Principal) -> Result<Vec<LedgerTransfer>, String> {
+    let index = Principal::from_text(ICP_INDEX).expect("pinned ICP index principal");
+    let request = IcpIndexRequest {
+        account: IcpIndexAccount { owner, subaccount: None },
+        start: None,
+        max_results: Nat::from(MAX_ICP_INDEX_TRANSACTIONS),
+    };
+    let bytes = raw(
+        index,
+        "get_account_transactions",
+        candid::encode_args((request,)).map_err(|e| e.to_string())?,
+    )
+    .await?;
+    let (result,): (IcpTransactionsResult,) = decode_bounded(&bytes)?;
+    let txs = match result {
+        IcpTransactionsResult::Ok(txs) => txs,
+        IcpTransactionsResult::Err(e) => return Err(format!("ICP index refusal: {}", e.message)),
+    };
+    if txs.transactions.len() > MAX_ICP_INDEX_TRANSACTIONS as usize {
+        return Err("ICP index account response exceeded cap".into());
+    }
+    let account = hex_encode(&icp_account_identifier(owner));
+    let mut result = Vec::new();
+    for row in txs.transactions {
+        let IcpOperation::Transfer(transfer) = row.transaction.operation else { continue };
+        let Some(timestamp_ns) = row.transaction.timestamp.map(|v| v.timestamp_nanos) else { continue };
+        let Some(memo) = row.transaction.icrc1_memo else { continue };
+        // The index has already selected this account, but check its identifier
+        // explicitly so an outgoing bot transfer can never pass as a payout.
+        if transfer.from != account && transfer.to != account {
+            return Err("ICP index returned a transaction outside requested account".into());
+        }
+        result.push(LedgerTransfer {
+            block: Nat::from(row.id),
+            timestamp_ns,
+            from: Account { owner: Principal::anonymous(), subaccount: Some(transfer.from.into_bytes()) },
+            to: Account { owner: Principal::anonymous(), subaccount: Some(transfer.to.into_bytes()) },
+            spender: transfer.spender.map(|v| Account { owner: Principal::anonymous(), subaccount: Some(v.into_bytes()) }),
+            amount: transfer.amount.e8s,
+            fee: Some(transfer.fee.e8s),
+            memo,
+        });
+    }
+    Ok(result)
+}
+
+async fn ledger_transfers(ledger: Principal, owner: Principal) -> Result<Vec<LedgerTransfer>, String> {
+    if ledger == Principal::from_text(ICP_LEDGER).expect("pinned ICP ledger principal") {
+        read_icp_account_transactions(owner).await
+    } else {
+        read_icrc3_tail(ledger).await
+    }
+}
+
+fn is_default(a: &Account, owner: Principal) -> bool {
+    a.owner == owner && a.subaccount.is_none()
+}
+
+fn icp_side_is(a: &Account, owner: Principal) -> bool {
+    a.owner == Principal::anonymous()
+        && a.subaccount.as_ref().is_some_and(|v| *v == hex_encode(&icp_account_identifier(owner)).into_bytes())
+}
+
+fn side_is(a: &Account, ledger: Principal, owner: Principal) -> bool {
+    if ledger == Principal::from_text(ICP_LEDGER).expect("pinned ICP ledger principal") {
+        icp_side_is(a, owner)
+    } else {
+        is_default(a, owner)
+    }
+}
+
+/// Proves a one-step swap from two immutable ledger transfers when the pool's
+/// ephemeral receipt cache has already discarded the completed operation.
+async fn bind_ledger_receipt(intent: &Intent) -> Result<Option<ReceiptProof>, String> {
+    let r = &intent.request;
+    let input = ledger_transfers(r.token_in, r.owner).await?;
+    let inputs: Vec<_> = input
+        .iter()
+        .filter(|t| {
+            t.timestamp_ns >= intent.cutoff.submitted_after_ns
+                && side_is(&t.from, r.token_in, r.owner)
+                && side_is(&t.to, r.token_in, r.pool)
+                && t.spender.as_ref().is_some_and(|s| side_is(s, r.token_in, r.pool))
+                && t.amount == r.input
+                && t.fee == Some(r.input_fee)
+                && t.memo.len() == 8
+        })
+        .collect();
+    if inputs.len() != 1 {
+        return Err(format!(
+            "ledger reconciliation found {} matching input transfers; expected exactly one",
+            inputs.len()
+        ));
+    }
+    let input = inputs[0];
+    let output = ledger_transfers(r.token_out, r.owner).await?;
+    let outputs: Vec<_> = output
+        .iter()
+        .filter(|t| {
+            t.timestamp_ns >= input.timestamp_ns
+                && side_is(&t.from, r.token_out, r.pool)
+                && side_is(&t.to, r.token_out, r.owner)
+                && t.spender.is_none()
+                && t.fee == Some(r.output_fee)
+                && t.memo == input.memo
+                && t.amount >= r.min_gross_output.saturating_sub(r.output_fee)
+        })
+        .collect();
+    if outputs.len() != 1 {
+        return Err(format!(
+            "ledger reconciliation found {} matching output transfers; expected exactly one",
+            outputs.len()
+        ));
+    }
+    let output = outputs[0];
+    let Some(input_debit) = r.input.checked_add(r.input_fee) else {
+        return Err("input debit overflow".into());
+    };
+    let receipt_candid = candid::encode_one((input.block.clone(), output.block.clone(), input.memo.clone()))
+        .map_err(|e| format!("cannot encode ledger receipt: {e}"))?;
+    Ok(Some(ReceiptProof {
+        pool: r.pool,
+        receipt_id: Nat::from(u64::from_be_bytes(input.memo.clone().try_into().map_err(|_| "non-eight-byte receipt memo")?)),
+        input_block: input.block.clone(),
+        output_block: Some(output.block.clone()),
+        effective_input: r.input,
+        input_debit,
+        output_credit: output.amount,
+        refund_credit: 0,
+        refund_block: None,
+        receipt_candid,
+    }))
 }
 /// Two bounded responses; an overlarge non-paginated upstream cache fails closed.
 pub async fn read_snapshot(pool: Principal, owner: Principal) -> Result<Vec<Transaction>, String> {
@@ -556,31 +897,74 @@ pub async fn submit_once(intent: &Intent) -> Result<(), String> {
         )),
     }
 }
+fn runtime_settlement(p: ReceiptProof, evidence_kind: &str) -> RuntimeSettlement {
+    let encoded = p
+        .receipt_candid
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    RuntimeSettlement {
+        input_debit_native: p.input_debit,
+        effective_input_native: p.effective_input,
+        output_credit_native: p.output_credit,
+        refund_credit_native: p.refund_credit,
+        evidence: vec![ReconciliationEvidenceV1 {
+            evidence_kind: evidence_kind.into(),
+            source_reference: format!(
+                "pool={};receipt={};input_block={};output_block={:?};refund_block={:?};receipt_candid_hex={encoded}",
+                p.pool, p.receipt_id, p.input_block, p.output_block, p.refund_block
+            ),
+            amount_native: p.output_credit,
+            observed_at_ns: ic_cdk::api::time(),
+        }],
+    }
+}
 pub async fn reconcile(intent: &Intent) -> Result<Option<RuntimeSettlement>, String> {
     let txs = read_snapshot(intent.request.pool, intent.request.owner).await?;
     match bind_receipt(&intent.request, &intent.cutoff, &txs) {
-        ReceiptVerdict::Pending(_) => Ok(None),
-        ReceiptVerdict::Settled(p) => {
-            let encoded = p
-                .receipt_candid
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>();
-            Ok(Some(RuntimeSettlement {
-                input_debit_native: p.input_debit,
-                effective_input_native: p.effective_input,
-                output_credit_native: p.output_credit,
-                refund_credit_native: p.refund_credit,
-                evidence: vec![ReconciliationEvidenceV1 {
-                    evidence_kind: "icpswap_source_bound_terminal_transfers_v1".into(),
-                    source_reference: format!(
-                        "pool={};receipt={};input_block={};output_block=absent;refund_block={:?};source=94eeb92;receipt_candid_hex={encoded}",
-                        p.pool, p.receipt_id, p.input_block, p.refund_block
-                    ),
-                    amount_native: p.output_credit,
-                    observed_at_ns: ic_cdk::api::time(),
-                }],
-            }))
-        }
+        ReceiptVerdict::Settled(p) => Ok(Some(runtime_settlement(
+            p,
+            "icpswap_source_bound_terminal_transfers_v1",
+        ))),
+        ReceiptVerdict::Pending(_) => bind_ledger_receipt(intent)
+            .await
+            .map(|proof| proof.map(|p| runtime_settlement(p, "icpswap_ledger_bound_terminal_transfers_v1"))),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn icp_default_account_identifier_matches_the_live_bot_account() {
+        let owner = Principal::from_text("ucjxv-nqaaa-aaaaj-qrsaq-cai").unwrap();
+        assert_eq!(
+            icp_account_identifier(owner),
+            vec![
+                0x4a, 0x3e, 0x49, 0x4f, 0xec, 0xd3, 0x1e, 0xc0, 0x20, 0x9a, 0x3d, 0xe7,
+                0x0f, 0x49, 0x21, 0xa8, 0x56, 0xd7, 0x15, 0x45, 0x09, 0xf4, 0x53, 0x6f,
+                0x4d, 0x6a, 0x9c, 0x68, 0x0a, 0x96, 0x39, 0x2f,
+            ]
+        );
+        let pool = Principal::from_text("nqxwe-hiaaa-aaaar-qb5yq-cai").unwrap();
+        assert_eq!(
+            hex_encode(&icp_account_identifier(pool)),
+            "18b8fa8253916c2f3306e0f608e27c23899021045fb8be232a54dcc062ac732b"
+        );
+    }
+
+
+
+    #[test]
+    fn ledger_side_checks_do_not_confuse_an_outgoing_icp_transfer_for_a_payout() {
+        let owner = Principal::self_authenticating([9; 32]);
+        let pool = Principal::self_authenticating([7; 32]);
+        let bot_account = Account { owner: Principal::anonymous(), subaccount: Some(hex_encode(&icp_account_identifier(owner)).into_bytes()) };
+        let pool_account = Account { owner: Principal::anonymous(), subaccount: Some(hex_encode(&icp_account_identifier(pool)).into_bytes()) };
+        let ledger = Principal::from_text(ICP_LEDGER).unwrap();
+        assert!(side_is(&bot_account, ledger, owner));
+        assert!(!side_is(&pool_account, ledger, owner));
+    }
+
 }
