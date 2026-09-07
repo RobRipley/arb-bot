@@ -79,14 +79,17 @@ assert.doesNotMatch(html, /realized_profit:\s*I\.Opt\(I\.Int64\)/);
 const wireTest = readFileSync('src/arb_bot/tests/dashboard_candid_wire.rs', 'utf8');
 assert.match(wireTest, /encode_one[\s\S]*decode_one/);
 
-// Cockpit hierarchy and phase precedence are contractual.
+// Cockpit hierarchy and phase precedence are contractual: the equal-width
+// phase/today/terminal row comes first, Attention follows it, and the live
+// route P&L/equity row comes after Attention.
 const cockpit = section('    function renderCockpit()', '    // ═══════ Markets');
+const phase = cockpit.indexOf('data-cockpit-phase');
 const today = cockpit.indexOf('data-cockpit-today-results');
 const latest = cockpit.indexOf('data-cockpit-latest-execution');
 const incidents = cockpit.indexOf('data-cockpit-incidents');
-const allTime = cockpit.indexOf('Net P&amp;L · all-time');
-assert(today > -1 && latest > today && incidents > latest, 'Cockpit must put today, terminal, then incidents in order');
-assert(incidents < allTime, 'legacy all-time P&L/equity must follow incidents');
+const pnlEquityRow = cockpit.indexOf('class="grid cockpit-top"');
+assert(phase > -1 && today > phase && latest > today && incidents > latest, 'Cockpit must put phase, today, then terminal execution in order, before incidents');
+assert(pnlEquityRow > incidents, 'the live route P&L/equity row must follow incidents');
 assert.match(html, /settlement|reconciliation/i);
 assert.match(html, /Leg .*of/);
 assert.match(html, /data-diagnostics-manual-scan/);

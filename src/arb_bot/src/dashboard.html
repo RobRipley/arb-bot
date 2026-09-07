@@ -3873,10 +3873,10 @@
             <div>
               <div class="card-header" style="margin-bottom:6px">Net P&amp;L · route arbitrage, all-time (live) ${sourceStampHtml('lifetimeRouteSummary')}</div>
               <div class="hero-number ${lifetime ? pClass(lifetime.stable_realized_profit_usd6) : ''}">${lifetime ? fmt$(lifetime.stable_realized_profit_usd6) : '—'}</div>
-              <div class="hero-delta text-ter">stable-book · ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
+              <div class="hero-delta text-ter">stable-book P&amp;L above · terminal totals, all classes: ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
               <div class="stat-row"><span>ICP-returning, all-time (live)</span><span class="num ${lifetime ? pClass(lifetime.icp_realized_profit_e8s) : ''}">${lifetime ? fmtTok(lifetime.icp_realized_profit_e8s, 8) + ' ICP' : '—'}</span></div>
               <div class="divider"></div>
-              <div class="hero-split">Legacy net P&amp;L — frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
+              <div class="hero-split">Legacy net P&amp;L · frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
             </div>
             <div class="hero-pockets">
@@ -4143,7 +4143,7 @@
         ${routeArbitrageHtml()}
         <div class="card" id="markets-wallet-readiness" style="margin-top:var(--sp-4)"></div>
         <div class="card" id="markets-charts" style="margin-top:var(--sp-4)">
-          <div class="card-header">Charts — legacy history <span class="diagnostics-source-status">Snapshots ${sourceStampHtml('snapshots')}</span></div>
+          <div class="card-header">Charts · legacy history <span class="diagnostics-source-status">Snapshots ${sourceStampHtml('snapshots')}</span></div>
           <div class="card-subtitle">Historical spreads, prices, realized P&amp;L, balances, and virtual price, sourced from the legacy cycle-snapshot log. Not live route-arbitrage data.</div>
           <div id="view-markets-charts"></div>
         </div>
