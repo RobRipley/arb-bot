@@ -4,8 +4,9 @@
 //! `set_route_arb_config_v1`, and execution-endpoint validation.
 
 use arb_bot::route_arb::{
-    build_work_universe, evaluate_candidate, prepare_execution, resolve_incoming_book_fields,
-    validate_route_config, AssetAmounts, AssetReturnBookConfigV1, CandidateClass, InventoryBands,
+    accumulate_observation_batch, build_work_universe, evaluate_candidate, prepare_execution,
+    resolve_incoming_book_fields, validate_route_config, Asset, AssetAmounts,
+    AssetReturnBookConfigV1, CandidateClass, InventoryBands, ObservationAccumulatorV1,
     ProfitDomain, QuoteLeg, ReservationTotals, RouteArbConfigV1, RouteCandidateReportV1, RouteQuote,
 };
 
@@ -219,6 +220,138 @@ fn ckbtc_returning_profit_is_a_native_satoshi_diff_gated_by_absolute_and_bps_thr
     );
     assert!(!below_bps.eligible);
     assert_eq!(below_bps.rejection_reason.as_deref(), Some("below ckBTC bps threshold"));
+}
+
+fn cketh_quote(principal: u128, final_amount: u128) -> RouteQuote {
+    RouteQuote {
+        route_id: "cketh-ckusdc-cketh".into(),
+        canonical_cycle_id: Some("cycle".into()),
+        start_asset: Asset::CkEth,
+        end_asset: Asset::CkEth,
+        asset_path: vec![Asset::CkEth, Asset::CkUsdc, Asset::CkEth],
+        principal_native: principal,
+        legs: vec![
+            QuoteLeg {
+                edge_id: "icpswap-cketh-ckusdc:CkEth>CkUsdc".into(),
+                from: Asset::CkEth,
+                to: Asset::CkUsdc,
+                wallet_before: principal,
+                entry_ledger_fee: 10,
+                venue_input: principal - 10,
+                gross_output: (principal - 10) / 1_000_000_000_000 + 1_000,
+                output_ledger_fee: 10,
+                wallet_after: (principal - 10) / 1_000_000_000_000 + 990,
+                dex_fee_native: 1,
+                full_fill: true,
+            },
+            QuoteLeg {
+                edge_id: "icpswap-cketh-ckusdc:CkUsdc>CkEth".into(),
+                from: Asset::CkUsdc,
+                to: Asset::CkEth,
+                wallet_before: (principal - 10) / 1_000_000_000_000 + 990,
+                entry_ledger_fee: 10,
+                venue_input: (principal - 10) / 1_000_000_000_000 + 980,
+                gross_output: final_amount + 10,
+                output_ledger_fee: 10,
+                wallet_after: final_amount,
+                dex_fee_native: 1,
+                full_fill: true,
+            },
+        ],
+        allowance_sufficient: Some(true),
+        quoted_at_ns: 1,
+        size_ladder_index: 0,
+    }
+}
+
+/// Zero starting balance must make a CkBtcReturning/CkEthReturning candidate
+/// ineligible, not error out of the evaluation entirely. For any same-asset
+/// returning route the terminal leg always credits back into the start
+/// asset, so `evaluate_candidate`'s leg-loop simulates the eventual starting
+/// debit against the *current* balance of that same asset before ever
+/// reaching the separate post-loop `available_native` check — with a known
+/// zero balance and a nonzero principal that subtraction always underflows
+/// first, yielding "starting debit exceeds ledger balance". This exact
+/// mechanism is shared, asset-agnostic code already exercised by
+/// `same_asset_terminal_ceiling_uses_post_debit_balance` in
+/// route_accounting.rs (for its success path); this is the zero-balance
+/// regression proof that CkBtcReturning/CkEthReturning inherit it correctly.
+#[test]
+fn ckbtc_and_cketh_returning_zero_balance_is_ineligible_with_expected_reason() {
+    let (_, reservations, bands) = permissive_context();
+
+    let mut zero_ckbtc = AssetAmounts::zero();
+    zero_ckbtc.set(Asset::CkUsdc, Some(u128::MAX / 2));
+    // Asset::CkBtc is left at its AssetAmounts::zero() value: Some(0), a
+    // *known* zero balance, not an unknown/unread one.
+    let ckbtc_eval = evaluate_candidate(
+        &ckbtc_quote(100_000, 101_000),
+        &zero_ckbtc,
+        &reservations,
+        &bands,
+        0, 0, 0, 0,
+        500, 50,
+        0, 0,
+    );
+    assert!(!ckbtc_eval.eligible);
+    assert_eq!(ckbtc_eval.rejection_reason.as_deref(), Some("starting debit exceeds ledger balance"));
+    assert_eq!(ckbtc_eval.profit_domain, ProfitDomain::CkBtcSats);
+
+    let mut zero_cketh = AssetAmounts::zero();
+    zero_cketh.set(Asset::CkUsdc, Some(u128::MAX / 2));
+    let cketh_eval = evaluate_candidate(
+        &cketh_quote(1_000_000_000_000_000, 1_010_000_000_000_000),
+        &zero_cketh,
+        &reservations,
+        &bands,
+        0, 0, 0, 0,
+        0, 0,
+        500, 50,
+    );
+    assert!(!cketh_eval.eligible);
+    assert_eq!(cketh_eval.rejection_reason.as_deref(), Some("starting debit exceeds ledger balance"));
+    assert_eq!(cketh_eval.profit_domain, ProfitDomain::CkEthWei);
+}
+
+fn ineligible_zero_balance_report(route_id: &str, class: CandidateClass, start: Asset) -> RouteCandidateReportV1 {
+    let mut report = RouteCandidateReportV1::fixture(route_id, class, 0, true);
+    report.start_asset = start;
+    report.end_asset = start;
+    report.eligible = false;
+    report.rejection_reason = Some("starting debit exceeds ledger balance".to_string());
+    report
+}
+
+/// A zero-balance-ineligible candidate must not abort the observation
+/// batch it arrives in: `accumulate_observation_batch` must still return
+/// `Ok`, still advance every counter for the whole batch, and must not let
+/// the ineligible report occupy the book's best-candidate slot — while an
+/// eligible sibling candidate in the same batch is still recorded normally.
+#[test]
+fn zero_balance_ineligible_candidates_do_not_abort_the_observation_batch() {
+    let mut state = ObservationAccumulatorV1::new("obs-zero-balance".into(), 0, 0, 4, 4, true);
+
+    let ckbtc_ineligible = ineligible_zero_balance_report("ckbtc-zero", CandidateClass::CkBtcReturning, Asset::CkBtc);
+    let cketh_ineligible = ineligible_zero_balance_report("cketh-zero", CandidateClass::CkEthReturning, Asset::CkEth);
+    let ckbtc_eligible = RouteCandidateReportV1::fixture("ckbtc-funded", CandidateClass::CkBtcReturning, 500, true);
+    let cketh_eligible = RouteCandidateReportV1::fixture("cketh-funded", CandidateClass::CkEthReturning, 500, true);
+
+    let result = accumulate_observation_batch(
+        &mut state,
+        0,
+        vec![ckbtc_ineligible.clone(), cketh_ineligible.clone(), ckbtc_eligible.clone(), cketh_eligible.clone()],
+        4,
+        0,
+    );
+    assert!(result.is_ok(), "an ineligible zero-balance report must not abort batch accumulation: {result:?}");
+    assert_eq!(state.candidates_evaluated, 4);
+    assert!(state.scan_complete, "the batch must still reach completion");
+
+    // The ineligible zero-balance candidates never occupy a best slot...
+    let best_ckbtc = state.best_ckbtc_candidate.expect("an eligible ckBTC candidate was in this batch");
+    let best_cketh = state.best_cketh_candidate.expect("an eligible ckETH candidate was in this batch");
+    assert_eq!(best_ckbtc.route_id, "ckbtc-funded", "the zero-balance candidate must never win the best slot");
+    assert_eq!(best_cketh.route_id, "cketh-funded", "the zero-balance candidate must never win the best slot");
 }
 
 #[test]
