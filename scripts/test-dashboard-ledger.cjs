@@ -96,6 +96,7 @@ function makeContext(actor, details = new Map()) {
     esc: value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])),
     fmtTime: value => `time-${String(value)}`,
     fmtTokAmt: (value, symbol) => `${String(value)} ${symbol}`,
+    tokenLogo: sym => `<span class="token-logo">${sym}</span>`,
     bi: value => typeof value === 'bigint' ? Number(value) : value,
     pClass: value => Number(value) > 0 ? 'positive' : Number(value) < 0 ? 'negative' : '',
     fmt$: value => `$${String(value)}`,
@@ -174,10 +175,39 @@ assert.deepEqual(
   'five-leg details must retain canonical leg order',
 );
 
+// The realized P&L label is synchronous (candidate_class alone decides
+// stable-book USD vs ICP-returning ICP), but the requested-input cell and
+// the route-execution-flow row intentionally wait on the async
+// get_route_execution_detail_v1 lookup: they render Loading… until
+// routeExecutionDetails resolves, not raw atoms synchronously.
 context.entry = { ...record('stable-pnl'), candidate_class: { StablePar: null }, realized_profit: option(1_234_567n) };
-const stablePnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
-assert.match(stablePnl, /USD/);
-assert.match(stablePnl, /raw atoms \(asset unavailable\)/);
+context.routeExecutionDetails.delete('stable-pnl');
+const stablePnlUnresolved = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(stablePnlUnresolved, /USD/, 'stable-book realized P&L must be labeled USD');
+assert.match(stablePnlUnresolved, /class="text-ter">Loading/, 'requested-input cell must wait for the async detail lookup');
+assert.match(stablePnlUnresolved, /Loading realized route amounts/, 'route-execution-flow row must wait for the async detail lookup');
+assert.doesNotMatch(stablePnlUnresolved, /raw atoms/, 'raw-atom evidence belongs to the resolved leg detail, not the unresolved summary row');
+
+// Once get_route_execution_detail_v1 resolves (routeExecutionDetails is set
+// the same way loadTerminalExecutionDetail sets it), the flow row and
+// requested-input cell must switch to the real, resolved amounts even
+// while the row stays collapsed.
+context.routeExecutionDetails.set('stable-pnl', { status: 'fresh', value: detail('stable-pnl', 2), final: true });
+const stablePnlResolvedCollapsed = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(stablePnlResolvedCollapsed, /USD/);
+assert.doesNotMatch(stablePnlResolvedCollapsed, /Loading realized route amounts/, 'a resolved detail must replace the flow-row loading state');
+assert.match(stablePnlResolvedCollapsed, /route-execution-flow-inner/, 'a resolved detail must render the actual realized route amounts');
+assert.doesNotMatch(stablePnlResolvedCollapsed, /raw atoms/, 'collapsed row must not embed leg-by-leg evidence even once resolved');
+
+// Expanding the row embeds the leg-by-leg detail inline; once resolved,
+// that detailed-flow rendering is where the raw-atom evidence fallback
+// eventually appears.
+context.state = { expandedRows: new Set(['stable-pnl']) };
+const stablePnlExpanded = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(stablePnlExpanded, /raw atoms \(asset association unavailable\)/, 'expanded + resolved detail must surface the raw-atom evidence fallback');
+context.state = { expandedRows: new Set() };
+context.routeExecutionDetails.delete('stable-pnl');
+
 context.entry = { ...record('icp-pnl'), candidate_class: { IcpReturning: null }, realized_profit: option(123_456_789n) };
 const icpPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
 assert.match(icpPnl, /ICP/);
@@ -344,6 +374,11 @@ for (const marker of ['routeLedgerRequestGeneration', 'routeLedgerRequestedPage'
     markSourceUnavailable: (source, reason) => Object.assign(source, { status: 'unavailable', error: String(reason) }),
     routeLedgerEntryHtml: row => `<tr>${row.execution_id}</tr>`,
     bindRouteLedgerDisclosureHandlers() {},
+    // loadRouteLedgerPage fires preloadRouteLedgerDetails(rows) unawaited on
+    // every successful page load; without this stub it throws a
+    // ReferenceError as an unhandled rejection that crashes the process
+    // after this section's own assertions already passed.
+    loadTerminalExecutionDetail: async () => null,
     esc: value => String(value),
     document: {
       getElementById(id) {
