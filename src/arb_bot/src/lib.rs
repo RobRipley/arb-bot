@@ -294,6 +294,7 @@ fn set_route_arb_config_v1(mut config: route_arb::RouteArbConfigV1) -> Result<()
         // This field has a dedicated setter so a stale full-record client
         // cannot silently undo the inventory-protection policy.
         config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd;
+        config = route_arb::resolve_incoming_book_fields(config, &s.route_arb);
         route_arb::validate_route_config(&config)?;
         s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
             .ok_or_else(|| "route config generation exhausted".to_string())?;
@@ -472,9 +473,11 @@ fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
             scan_complete: observation.scan_complete,
             stable: observation.best_stable_candidate.clone(),
             icp: observation.best_icp_candidate.clone(),
+            ckbtc: observation.best_ckbtc_candidate.clone(),
+            cketh: observation.best_cketh_candidate.clone(),
         },
         None => route_arb::BestRouteCandidatesV1 {
-            observation_id: None, scan_complete: false, stable: None, icp: None,
+            observation_id: None, scan_complete: false, stable: None, icp: None, ckbtc: None, cketh: None,
         },
     })
 }

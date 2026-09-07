@@ -278,3 +278,42 @@ fn old_route_policy_without_stable_exit_field_defaults_to_protected() {
     let decoded: BotState = serde_json::from_value(value).expect("decode old route policy");
     assert_eq!(decoded.route_arb.allow_wrapped_stable_to_icusd, None);
 }
+
+/// A blob saved before ckBTC/ckETH-returning books existed must decode with
+/// `ckbtc_book`/`cketh_book` absent (`None`) — and, critically, the
+/// resulting config must still pass `validate_route_config` so the entire
+/// route-arb engine (not just the two new books) keeps working immediately
+/// after the upgrade, before any admin ever calls set_route_arb_config_v1.
+/// Both new books resolve to their disabled default, keeping the upgrade
+/// inert until explicit post-deploy activation.
+#[test]
+fn old_route_policy_without_ckbtc_cketh_book_fields_decodes_inert_but_valid() {
+    let mut value = serde_json::to_value(BotState::default()).expect("serialize");
+    let route = value
+        .get_mut("route_arb")
+        .and_then(|r| r.as_object_mut())
+        .expect("route policy object");
+    assert!(route.remove("ckbtc_book").is_some());
+    assert!(route.remove("cketh_book").is_some());
+    let decoded: BotState = serde_json::from_value(value).expect("decode pre-ckBTC/ckETH route policy");
+    assert_eq!(decoded.route_arb.ckbtc_book, None);
+    assert_eq!(decoded.route_arb.cketh_book, None);
+
+    arb_bot::route_arb::validate_route_config(&decoded.route_arb)
+        .expect("an un-migrated config must still validate; the whole engine must not break");
+
+    let resolved_ckbtc = decoded.route_arb.ckbtc_book_resolved();
+    let resolved_cketh = decoded.route_arb.cketh_book_resolved();
+    assert!(!resolved_ckbtc.enabled, "ckBTC book must stay disabled until explicitly activated");
+    assert!(!resolved_cketh.enabled, "ckETH book must stay disabled until explicitly activated");
+
+    let universe = arb_bot::route_arb::build_work_universe(&decoded.route_arb)
+        .expect("build_work_universe must still succeed for an un-migrated config");
+    assert!(
+        universe.items.iter().all(|item| !matches!(
+            item.route.candidate_class,
+            arb_bot::route_arb::CandidateClass::CkBtcReturning | arb_bot::route_arb::CandidateClass::CkEthReturning
+        )),
+        "disabled-by-default books must contribute no work items"
+    );
+}

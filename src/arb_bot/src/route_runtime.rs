@@ -104,8 +104,13 @@ struct DurableRuntime {
     last_terminal: Option<RuntimeExecution>,
     last_error: Option<String>,
     last_tick_ns: u64,
+    /// Fairness rotation cursor across the four profit-book lanes. `None`
+    /// (fresh state, or upgraded from a pre-N-way blob) starts at the fixed
+    /// default order. Replaces the old two-way `last_served_icp: bool`; the
+    /// old field is simply dropped on decode (a purely operational
+    /// scheduling cursor, not durable financial state).
     #[serde(default)]
-    last_served_icp: bool,
+    last_served_book: Option<RouteBookKind>,
 }
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct RuntimeStatus {
@@ -450,19 +455,26 @@ fn native(v: u128) -> Result<u64, String> {
 }
 fn final_floor(c: &RouteArbConfigV1, original: &RouteCandidateReportV1) -> Result<u64, String> {
     let p = original.principal_native;
-    let (basis, absolute, bps) = if original.start_asset == Asset::Icp {
-        (
+    let (basis, absolute, bps) = match original.start_asset {
+        Asset::Icp => (
             p,
             u128::from(c.min_icp_profit_e8s),
             u128::from(c.min_icp_profit_bps),
-        )
-    } else {
-        (
+        ),
+        Asset::CkBtc => {
+            let book = c.ckbtc_book_resolved();
+            (p, u128::from(book.min_profit_native), u128::from(book.min_profit_bps))
+        }
+        Asset::CkEth => {
+            let book = c.cketh_book_resolved();
+            (p, u128::from(book.min_profit_native), u128::from(book.min_profit_bps))
+        }
+        _ => (
             u128::try_from(par_usd_6dec_checked(p, original.start_asset.decimals())?)
                 .map_err(|_| "invalid basis")?,
             u128::from(c.min_stable_profit_usd_6dec),
             u128::from(c.min_stable_profit_bps),
-        )
+        ),
     };
     let relative = basis
         .checked_mul(bps)
@@ -473,7 +485,7 @@ fn final_floor(c: &RouteArbConfigV1, original: &RouteCandidateReportV1) -> Resul
     let end = basis
         .checked_add(absolute.max(relative))
         .ok_or("final floor overflow")?;
-    if original.end_asset == Asset::Icp {
+    if matches!(original.end_asset, Asset::Icp | Asset::CkBtc | Asset::CkEth) {
         native(end)
     } else {
         native(
@@ -809,6 +821,8 @@ pub async fn prepare_with<I: RuntimeIo>(
                 [
                     o.best_stable_candidate.as_ref(),
                     o.best_icp_candidate.as_ref(),
+                    o.best_ckbtc_candidate.as_ref(),
+                    o.best_cketh_candidate.as_ref(),
                 ]
                 .into_iter()
                 .flatten()
@@ -887,12 +901,17 @@ pub async fn prepare_with<I: RuntimeIo>(
     Ok(ex.record)
 }
 fn held_basis(ex: &RuntimeExecution) -> Result<HeldBasisV1, String> {
-    if ex.original.start_asset == Asset::Icp {
-        Ok(HeldBasisV1::IcpNative {
+    match ex.original.start_asset {
+        Asset::Icp => Ok(HeldBasisV1::IcpNative {
             principal_icp_e8s: native(ex.original.principal_native)?,
-        })
-    } else {
-        Ok(HeldBasisV1::StablePar {
+        }),
+        Asset::CkBtc => Ok(HeldBasisV1::CkBtcNative {
+            principal_ckbtc_sats: native(ex.original.principal_native)?,
+        }),
+        Asset::CkEth => Ok(HeldBasisV1::CkEthNative {
+            principal_cketh_wei: native(ex.original.principal_native)?,
+        }),
+        _ => Ok(HeldBasisV1::StablePar {
             start_asset: ex.original.start_asset,
             principal_native: native(ex.original.principal_native)?,
             principal_usd_6dec: u64::try_from(par_usd_6dec_checked(
@@ -900,7 +919,7 @@ fn held_basis(ex: &RuntimeExecution) -> Result<HeldBasisV1, String> {
                 ex.original.start_asset.decimals(),
             )?)
             .map_err(|_| "basis overflow")?,
-        })
+        }),
     }
 }
 fn hold(
@@ -966,7 +985,7 @@ fn finish(ex: &mut RuntimeExecution, now: u64) -> Result<(), String> {
     }
     let mut s = load()?;
     s.current = None;
-    s.last_served_icp = ex.original.candidate_class == CandidateClass::IcpReturning;
+    s.last_served_book = Some(book_for_class(ex.original.candidate_class));
     s.last_terminal = Some(runtime_snapshot(ex));
     save(&s)?;
     state::mutate_state(|s| s.route_observation = None);
@@ -998,7 +1017,10 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
             let next = usize::from(ex.record.current_leg_index) + 1;
             if next == ex.original.legs.len() {
                 ex.record.phase = ExecutionPhaseV1::Completed;
-                ex.realized_profit = Some(if ex.original.start_asset == Asset::Icp {
+                ex.realized_profit = Some(if matches!(
+                    ex.original.start_asset,
+                    Asset::Icp | Asset::CkBtc | Asset::CkEth
+                ) {
                     i128::from(ex.current_wallet_native)
                         - i128::try_from(ex.original.principal_native)
                             .map_err(|_| "basis overflow")?
@@ -1261,7 +1283,7 @@ async fn reconcile_inner<I: RuntimeIo>(
             ex.record.phase = ExecutionPhaseV1::Aborted;
             let trace = trace_mut(&mut ex, leg_index)?;
             trace.status = RouteExecutionLegStatusV1::Aborted;
-            ex.realized_profit = Some(if r.edge.from == Asset::Icp {
+            ex.realized_profit = Some(if matches!(r.edge.from, Asset::Icp | Asset::CkBtc | Asset::CkEth) {
                 i128::from(returned)
                     - i128::try_from(ex.original.principal_native).map_err(|_| "basis overflow")?
             } else {
@@ -1315,6 +1337,41 @@ async fn reconcile_inner<I: RuntimeIo>(
     }
     Ok(ex.record)
 }
+const BOOK_ROTATION_ORDER: [RouteBookKind; 4] = [
+    RouteBookKind::Stable,
+    RouteBookKind::Icp,
+    RouteBookKind::CkBtc,
+    RouteBookKind::CkEth,
+];
+
+/// Fair N-way rotation: the book right after `last_served` (fixed cyclic
+/// order) is tried first, then the rest of the cycle in order. A book with
+/// no eligible candidate this tick is skipped in favor of the next one —
+/// generalizes the prior two-way `last_served_icp` alternation ("the
+/// least-recently-served book wins; if only one book is eligible, it may
+/// run") to four lanes.
+fn rotated_book_order(last_served: Option<RouteBookKind>) -> [RouteBookKind; 4] {
+    let start = last_served
+        .and_then(|book| BOOK_ROTATION_ORDER.iter().position(|candidate| *candidate == book))
+        .map(|index| (index + 1) % BOOK_ROTATION_ORDER.len())
+        .unwrap_or(0);
+    let mut order = BOOK_ROTATION_ORDER;
+    order.rotate_left(start);
+    order
+}
+
+fn best_candidate_for_book(
+    o: &ObservationAccumulatorV1,
+    book: RouteBookKind,
+) -> Option<&RouteCandidateReportV1> {
+    match book {
+        RouteBookKind::Stable => o.best_stable_candidate.as_ref(),
+        RouteBookKind::Icp => o.best_icp_candidate.as_ref(),
+        RouteBookKind::CkBtc => o.best_ckbtc_candidate.as_ref(),
+        RouteBookKind::CkEth => o.best_cketh_candidate.as_ref(),
+    }
+}
+
 /// One scheduler dispatch: reconcile/advance existing execution before selection.
 pub async fn service_tick() -> Result<(), String> {
     let mut s = load()?;
@@ -1323,22 +1380,12 @@ pub async fn service_tick() -> Result<(), String> {
     let result = if let Some(ex) = s.current {
         advance(&ex.record.execution_id).await.map(|_| ())
     } else if authorized().is_ok() {
-        let prefer_stable = s.last_served_icp;
+        let order = rotated_book_order(s.last_served_book);
         let selected = state::read_state(|s| {
             s.route_observation
                 .as_ref()
                 .filter(|o| o.scan_complete)
-                .and_then(|o| {
-                    if prefer_stable {
-                        o.best_stable_candidate
-                            .as_ref()
-                            .or(o.best_icp_candidate.as_ref())
-                    } else {
-                        o.best_icp_candidate
-                            .as_ref()
-                            .or(o.best_stable_candidate.as_ref())
-                    }
-                })
+                .and_then(|o| order.iter().find_map(|book| best_candidate_for_book(o, *book)))
                 .map(|q| q.route_id.clone())
         });
         match selected {
@@ -1384,6 +1431,38 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
     use std::cell::RefCell;
+
+    #[test]
+    fn book_rotation_starts_after_last_served_and_wraps_through_all_four_lanes() {
+        use RouteBookKind::*;
+        assert_eq!(rotated_book_order(None), [Stable, Icp, CkBtc, CkEth]);
+        assert_eq!(rotated_book_order(Some(Stable)), [Icp, CkBtc, CkEth, Stable]);
+        assert_eq!(rotated_book_order(Some(Icp)), [CkBtc, CkEth, Stable, Icp]);
+        assert_eq!(rotated_book_order(Some(CkBtc)), [CkEth, Stable, Icp, CkBtc]);
+        assert_eq!(rotated_book_order(Some(CkEth)), [Stable, Icp, CkBtc, CkEth]);
+    }
+
+    #[test]
+    fn book_rotation_skips_lanes_with_no_eligible_candidate() {
+        let mut observation = ObservationAccumulatorV1::new("obs".into(), 0, 0, 1, 1, true);
+        // Only the ckETH lane has a candidate this tick.
+        observation.best_cketh_candidate =
+            Some(RouteCandidateReportV1::fixture("cketh-route", CandidateClass::CkEthReturning, 5, true));
+        for last_served in [None, Some(RouteBookKind::Stable), Some(RouteBookKind::CkBtc)] {
+            let order = rotated_book_order(last_served);
+            let selected = order.iter().find_map(|book| best_candidate_for_book(&observation, *book));
+            assert_eq!(selected.map(|c| c.route_id.as_str()), Some("cketh-route"));
+        }
+    }
+
+    #[test]
+    fn book_for_class_groups_stable_variants_and_separates_native_returning_books() {
+        assert_eq!(book_for_class(CandidateClass::StablePar), RouteBookKind::Stable);
+        assert_eq!(book_for_class(CandidateClass::StableSettledCrossAsset), RouteBookKind::Stable);
+        assert_eq!(book_for_class(CandidateClass::IcpReturning), RouteBookKind::Icp);
+        assert_eq!(book_for_class(CandidateClass::CkBtcReturning), RouteBookKind::CkBtc);
+        assert_eq!(book_for_class(CandidateClass::CkEthReturning), RouteBookKind::CkEth);
+    }
     #[derive(Default)]
     struct Double {
         now: Cell<u64>,
