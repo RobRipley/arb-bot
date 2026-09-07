@@ -1,7 +1,15 @@
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const html=fs.readFileSync('src/arb_bot/src/dashboard.html','utf8');
 const helperCode=html.slice(html.indexOf('    function routeRuntimeInFlightState('),html.indexOf('    function routeCandidateQuoteState('));
-const code=helperCode+html.slice(html.indexOf('    function routeTradingLabel()'),html.indexOf('    function routeArbitrageHtml()'));
+// routeRuntimeHtml (loaded below) resolves the "Latest realized result"
+// unit/decimals through routeProfitUnit and formats the amount through
+// routeLedgerFormatAmount — both defined elsewhere in the file. Load their
+// real source rather than hand-stubbing equivalents, so this harness can't
+// silently drift from the dashboard's actual candidate_class -> unit table
+// or its exact (BigInt-safe) amount formatting.
+const routeProfitUnitCode=html.slice(html.indexOf('    const ROUTE_PROFIT_UNITS = {'),html.indexOf('\n',html.indexOf('    function routeProfitUnit(candidateClass)')));
+const routeLedgerFormatAmountCode=html.slice(html.indexOf('    function routeLedgerFormatAmount('),html.indexOf('    function routeLedgerPrincipalLabel('));
+const code=routeProfitUnitCode+'\n'+routeLedgerFormatAmountCode+helperCode+html.slice(html.indexOf('    function routeTradingLabel()'),html.indexOf('    function routeArbitrageHtml()'));
 const freshnessCode=html.slice(html.indexOf('    function routeTimestampMs('),html.indexOf('    function routeQuoteStaleAfterMs('));
 let modal; const calls=[]; const events=[]; const toasts=[]; let resolveConfig; let drainResolve;
 const status={compiled_support:true,live_authorized:false,enabled:true,dry_run:true,last_error:[],last_realized_profit:[],last_profit_class:[],scheduler_in_flight_since_ns:[]};
@@ -66,5 +74,16 @@ vm.runInContext(code,ctx);
   assert.match(vm.runInContext('routeAutomationState().reason',ctx),/Quote batch in progress/);
   ctx.latestRouteRuntime={...status,live_authorized:true,dry_run:false,scheduler_in_flight_since_ns:[BigInt(Date.now()-700000)*1000000n]};
   assert.equal(vm.runInContext('routeAutomationState().state',ctx),'Blocked','a stale cache with an in-flight marker past the no-progress ceiling must still block');
-  console.log('PASS: runtime UI distinguishes unknown/off/applying/on/stopping/blocked; configuration failure cannot authorize; stop disables new trades; stale cache preserves active quote batches while a genuinely stalled marker still blocks');
+
+  // "Latest realized result" must format a ckETH (18-decimal, wei-scale)
+  // profit exactly. A Number(...) conversion silently rounds/truncates
+  // anything past ~2^53 — this value's low digits would be lost by the old
+  // `(Number(profit) / 10 ** decimals).toFixed(...)` approach.
+  ctx.routeSources.runtime.state='fresh';
+  ctx.latestRouteRuntime={...status,live_authorized:true,dry_run:false,last_realized_profit:[123456789012345678n],last_profit_class:[{CkEthReturning:null}]};
+  const ckEthRuntimeHtml=vm.runInContext('routeRuntimeHtml()',ctx);
+  assert.match(ckEthRuntimeHtml,/Latest realized result: 0\.123456789012345678 ckETH/,'ckETH latest realized result must render the exact native value, not a Number-rounded one');
+  assert.doesNotMatch(ckEthRuntimeHtml,/0\.12345679 ckETH/,'must not regress to the lossy Number(...) formatting');
+
+  console.log('PASS: runtime UI distinguishes unknown/off/applying/on/stopping/blocked; configuration failure cannot authorize; stop disables new trades; stale cache preserves active quote batches while a genuinely stalled marker still blocks; ckETH latest realized result keeps full wei precision');
 })().catch(e=>{console.error(e);process.exitCode=1});

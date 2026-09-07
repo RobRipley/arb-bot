@@ -644,11 +644,30 @@ fn dashboard_declares_lifetime_route_summary_query_consistently() {
         "stable_realized_profit_usd6: I.Int",
         "icp_realized_profit_e8s: I.Int",
         "get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query'])",
-        "ckbtc_realized_profit_sats: I.Int",
-        "cketh_realized_profit_wei: I.Int",
+        // Unlike the always-present stable/icp totals, the ckBTC/ckETH
+        // native totals are opt int on the wire — a book with no completed
+        // executions yet reports None, not zero.
+        "ckbtc_realized_profit_sats: I.Opt(I.Int)",
+        "cketh_realized_profit_wei: I.Opt(I.Int)",
     ] {
         assert!(DASHBOARD.contains(marker), "dashboard IDL missing marker: {marker}");
     }
+}
+
+#[test]
+fn cockpit_hero_unwraps_ckbtc_and_cketh_lifetime_profit_through_route_opt() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in [
+        "routeOpt(lifetime.ckbtc_realized_profit_sats)",
+        "routeOpt(lifetime.cketh_realized_profit_wei)",
+    ] {
+        assert!(cockpit.contains(marker), "cockpit hero must unwrap the opt-int lifetime field through routeOpt: {marker}");
+    }
+    // A raw `!= null` check on the un-unwrapped opt (an array) is always
+    // true, silently defeating the None/zero distinction the backend added
+    // opt int specifically to express.
+    assert!(!cockpit.contains("lifetime.ckbtc_realized_profit_sats != null"));
+    assert!(!cockpit.contains("lifetime.cketh_realized_profit_wei != null"));
 }
 
 #[test]
@@ -711,6 +730,49 @@ fn markets_shows_four_candidate_books() {
     ] {
         assert!(route_panel.contains(marker), "Markets missing candidate-book marker: {marker}");
     }
+}
+
+#[test]
+fn route_arbitrage_subtitle_names_all_four_return_books() {
+    let route_panel = rendered_region("function routeArbitrageHtml()", "async function loadTerminalExecutionsForToday");
+    for marker in ["stablecoin", "ICP", "ckBTC", "ckETH", "return book"] {
+        assert!(route_panel.contains(marker), "route arbitrage subtitle missing book: {marker}");
+    }
+    assert!(
+        !route_panel.contains("begin and end in a stablecoin or begin and end in ICP"),
+        "the stale two-book subtitle must not survive alongside the four-book Markets grid"
+    );
+}
+
+#[test]
+fn ckbtc_and_cketh_native_values_avoid_number_precision_loss() {
+    // The configured ckETH size ladder / principal cap and any wei-scale
+    // P&L routinely exceed 2^53 (0.01 ckETH is already ~1e16 wei); fmtTok
+    // and a bare Number(...) both round-trip through a JS double and
+    // silently corrupt values above that threshold. Every ckBTC/ckETH
+    // native-amount call site below must use the exact, BigInt-safe
+    // routeLedgerFormatAmount instead.
+    let settings_fn = rendered_region("function routeBookSettingsHtml", "function routeArbitrageHtml()");
+    assert!(settings_fn.contains("routeLedgerFormatAmount"));
+    assert!(!settings_fn.contains("fmtTok("), "Ops book settings must not round-trip ckBTC/ckETH native amounts through Number");
+
+    let today_results = rendered_region("function cockpitTodayResults", "function cockpitStatus");
+    for marker in ["routeLedgerFormatAmount(ckbtcRealized, 8)", "routeLedgerFormatAmount(ckethRealized, 18)"] {
+        assert!(today_results.contains(marker), "cockpitTodayResults missing exact ckBTC/ckETH formatting: {marker}");
+    }
+    assert!(!today_results.contains("fmtTok(ckbtcRealized"));
+    assert!(!today_results.contains("fmtTok(ckethRealized"));
+
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in ["routeLedgerFormatAmount(ckbtcLifetimeProfit, 8)", "routeLedgerFormatAmount(ckethLifetimeProfit, 18)"] {
+        assert!(cockpit.contains(marker), "cockpit hero missing exact ckBTC/ckETH formatting: {marker}");
+    }
+    assert!(!cockpit.contains("fmtTok(lifetime.ckbtc_realized_profit_sats"));
+    assert!(!cockpit.contains("fmtTok(lifetime.cketh_realized_profit_wei"));
+
+    let runtime = rendered_region("function routeRuntimeHtml()", "window.setRouteTrading");
+    assert!(runtime.contains("routeLedgerFormatAmount(profit, profitUnit.decimals)"));
+    assert!(!runtime.contains("Number(profit)"), "latest realized result must not convert an arbitrary-precision profit through Number");
 }
 
 #[test]

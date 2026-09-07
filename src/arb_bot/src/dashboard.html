@@ -1009,7 +1009,7 @@
       const LifetimeRouteSummaryV1 = I.Record({
         completed_count: I.Nat64, aborted_count: I.Nat64, held_inventory_count: I.Nat64,
         stable_realized_profit_usd6: I.Int, icp_realized_profit_e8s: I.Int,
-        ckbtc_realized_profit_sats: I.Int, cketh_realized_profit_wei: I.Int,
+        ckbtc_realized_profit_sats: I.Opt(I.Int), cketh_realized_profit_wei: I.Opt(I.Int),
         folded_through: I.Nat64,
       });
       const RouteExecutionLegStatusV1 = I.Variant({
@@ -3307,7 +3307,7 @@
         ${reason}
         <div class="route-wallet-meta">When started, the bot scans routes, submits qualifying swaps, and confirms each settlement before continuing. Stopping prevents new swaps; pending settlements continue to be checked.</div>
         ${runtime && routeOpt(runtime.last_error) ? `<div class="negative">${esc(routeOpt(runtime.last_error))}</div>` : ''}
-        <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls || !profitUnit ? '—' : `${(Number(profit) / 10 ** profitUnit.decimals).toFixed(Math.min(profitUnit.decimals, 8))} ${profitUnit.label}`}</div></div>`;
+        <div class="route-wallet-meta">Latest realized result: ${profit == null || !cls || !profitUnit ? '—' : `${routeLedgerFormatAmount(profit, profitUnit.decimals)} ${profitUnit.label}`}</div></div>`;
     }
     async function refreshRouteRuntimeAuthoritative() {
       if (routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
@@ -3479,10 +3479,10 @@
       const book = routeReturnBook(bookKey);
       if (!book) return `${esc(label)}: not configured server-side yet`;
       const ladderText = Array.isArray(book.size_ladder) && book.size_ladder.length
-        ? book.size_ladder.map(v => fmtTok(v, decimals)).join(', ') : 'unavailable';
-      const maxText = book.max_principal_native != null ? `${fmtTok(book.max_principal_native, decimals)} ${label}` : 'unavailable';
+        ? book.size_ladder.map(v => routeLedgerFormatAmount(v, decimals)).join(', ') : 'unavailable';
+      const maxText = book.max_principal_native != null ? `${routeLedgerFormatAmount(book.max_principal_native, decimals)} ${label}` : 'unavailable';
       const minText = book.min_profit_native != null && book.min_profit_bps != null
-        ? `${fmtTok(book.min_profit_native, decimals)} ${label} or ${(Number(book.min_profit_bps) / 100).toFixed(2)}%`
+        ? `${routeLedgerFormatAmount(book.min_profit_native, decimals)} ${label} or ${(Number(book.min_profit_bps) / 100).toFixed(2)}%`
         : 'unavailable';
       return `${esc(label)} size ladder: ${esc(ladderText)} · max principal: ${esc(maxText)} · min profit: ${esc(minText)}`;
     }
@@ -3516,7 +3516,7 @@
       const statusStamp = statusState === 'stale' ? ` · Stale · ${sourceLastSuccessLabel(routeSources.status)}` : '';
       const observationStamp = observationState === 'stale' ? ` · ${sourceLastSuccessLabel(routeSources.observation)}` : '';
       return `<div id="route-arb-panel">
-        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in a stablecoin or begin and end in ICP. Start observation runs bounded quote batches automatically.</div></div>
+        <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in the same asset — a stablecoin, ICP, ckBTC, or ckETH return book. Start observation runs bounded quote batches automatically.</div></div>
           <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
         <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
@@ -3868,8 +3868,8 @@
         state: terminalState,
         stableResult: stableValues.length ? fmt$(stableRealized) : '—',
         icpResult: icpValues.length ? `${fmtTok(icpRealized, 8)} ICP` : '—',
-        ckbtcResult: ckbtcValues.length ? `${fmtTok(ckbtcRealized, 8)} ckBTC` : '—',
-        ckethResult: ckethValues.length ? `${fmtTok(ckethRealized, 18)} ckETH` : '—',
+        ckbtcResult: ckbtcValues.length ? `${routeLedgerFormatAmount(ckbtcRealized, 8)} ckBTC` : '—',
+        ckethResult: ckethValues.length ? `${routeLedgerFormatAmount(ckethRealized, 18)} ckETH` : '—',
         completed: String(completed),
         failed: String(failed),
         coverage: terminalExecutionsIncomplete ? `Incomplete · bounded at ${terminalExecutionsLoadedCount} terminal records` : 'Complete through start of day',
@@ -3936,6 +3936,11 @@
 
       const s = sourceHasValue('summary') ? window._lastSummary : null;
       const lifetime = sourceHasValue('lifetimeRouteSummary') ? latestLifetimeRouteSummary : null;
+      // ckbtc_realized_profit_sats/cketh_realized_profit_wei are opt int on
+      // the wire (unlike the always-present stable/icp totals) — a book
+      // with no completed executions yet reports None, not zero.
+      const ckbtcLifetimeProfit = lifetime ? routeOpt(lifetime.ckbtc_realized_profit_sats) : null;
+      const ckethLifetimeProfit = lifetime ? routeOpt(lifetime.cketh_realized_profit_wei) : null;
       const arbBal = sourceHasValue('legacyBalances') ? window._rawBals : null;
       const volBal = sourceHasValue('volumeBalances') ? window._rawVolBals : null;
       const opBal = sourceHasValue('operatorBalances') ? window._operatorBals : null;
@@ -4003,8 +4008,8 @@
               <div class="hero-number ${lifetime ? pClass(lifetime.stable_realized_profit_usd6) : ''}">${lifetime ? fmt$(lifetime.stable_realized_profit_usd6) : '—'}</div>
               <div class="hero-delta text-ter">stable-book P&amp;L above · terminal totals, all classes: ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
               <div class="stat-row"><span>ICP-returning, all-time (live)</span><span class="num ${lifetime ? pClass(lifetime.icp_realized_profit_e8s) : ''}">${lifetime ? fmtTok(lifetime.icp_realized_profit_e8s, 8) + ' ICP' : '—'}</span></div>
-              <div class="stat-row"><span>ckBTC-returning, all-time (live)</span><span class="num ${lifetime && lifetime.ckbtc_realized_profit_sats != null ? pClass(lifetime.ckbtc_realized_profit_sats) : ''}">${lifetime && lifetime.ckbtc_realized_profit_sats != null ? fmtTok(lifetime.ckbtc_realized_profit_sats, 8) + ' ckBTC' : '—'}</span></div>
-              <div class="stat-row"><span>ckETH-returning, all-time (live)</span><span class="num ${lifetime && lifetime.cketh_realized_profit_wei != null ? pClass(lifetime.cketh_realized_profit_wei) : ''}">${lifetime && lifetime.cketh_realized_profit_wei != null ? fmtTok(lifetime.cketh_realized_profit_wei, 18) + ' ckETH' : '—'}</span></div>
+              <div class="stat-row"><span>ckBTC-returning, all-time (live)</span><span class="num ${ckbtcLifetimeProfit != null ? pClass(ckbtcLifetimeProfit) : ''}">${ckbtcLifetimeProfit != null ? routeLedgerFormatAmount(ckbtcLifetimeProfit, 8) + ' ckBTC' : '—'}</span></div>
+              <div class="stat-row"><span>ckETH-returning, all-time (live)</span><span class="num ${ckethLifetimeProfit != null ? pClass(ckethLifetimeProfit) : ''}">${ckethLifetimeProfit != null ? routeLedgerFormatAmount(ckethLifetimeProfit, 18) + ' ckETH' : '—'}</span></div>
               <div class="divider"></div>
               <div class="hero-split">Legacy net P&amp;L · frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}

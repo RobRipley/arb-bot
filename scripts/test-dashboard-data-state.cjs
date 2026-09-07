@@ -181,7 +181,12 @@ async function main() {
   }
   assert.equal(vm.runInContext('routeSources.runtime.lastSuccessMs', context), 1000);
 
-  const cockpitSection = html.slice(html.indexOf('    function cockpitSourceLabel'), html.indexOf('    function renderCockpit'));
+  // cockpitTodayResults formats ckBTC/ckETH totals through the real
+  // routeLedgerFormatAmount (exact, BigInt-safe) rather than the fmtTok
+  // stub above, which round-trips through Number and loses precision past
+  // 2^53 — load its real source rather than stubbing an equivalent.
+  const routeLedgerFormatAmountCode = html.slice(html.indexOf('    function routeLedgerFormatAmount('), html.indexOf('    function routeLedgerPrincipalLabel('));
+  const cockpitSection = routeLedgerFormatAmountCode + html.slice(html.indexOf('    function cockpitSourceLabel'), html.indexOf('    function renderCockpit'));
   const todayNs = BigInt(Date.now()) * 1000000n;
   Object.assign(context, {
     cockpitStates: { currentExecution: 'fresh', terminalExecutions: 'fresh', runtime: 'fresh' },
@@ -198,15 +203,22 @@ async function main() {
     latestTerminalExecutions: [
       { execution_id: 'stable-1', updated_at_ns: todayNs - 1000000n, candidate_class: { StablePar: null }, phase: { Completed: null }, realized_profit: [1250000n] },
       { execution_id: 'icp-1', updated_at_ns: todayNs - 2000000n, candidate_class: { IcpReturning: null }, phase: { Aborted: null }, realized_profit: [123456789n] },
+      // ckETH's realized_profit is wei-scale and exceeds 2^53 — this must
+      // reach the today's-result string with full precision, not a
+      // Number(...)-rounded approximation.
+      { execution_id: 'ckbtc-1', updated_at_ns: todayNs - 3000000n, candidate_class: { CkBtcReturning: null }, phase: { Completed: null }, realized_profit: [250000000n] },
+      { execution_id: 'cketh-1', updated_at_ns: todayNs - 4000000n, candidate_class: { CkEthReturning: null }, phase: { Completed: null }, realized_profit: [123456789012345678n] },
     ],
     terminalExecutionsIncomplete: false,
-    terminalExecutionsLoadedCount: 2,
+    terminalExecutionsLoadedCount: 4,
   });
   vm.runInContext(cockpitSection, context);
   const todayMetrics = vm.runInContext('cockpitTodayResults("fresh")', context);
   assert.equal(todayMetrics.stableResult, '$1.2500', 'stable terminal profit must stay USD6');
   assert.equal(todayMetrics.icpResult, '1.2346 ICP', 'ICP terminal profit must stay ICP e8s');
-  assert.equal(todayMetrics.completed, '1');
+  assert.equal(todayMetrics.ckbtcResult, '2.5 ckBTC', 'ckBTC terminal profit must stay exact native sats');
+  assert.equal(todayMetrics.ckethResult, '0.123456789012345678 ckETH', 'ckETH terminal profit must keep full wei precision, not round through Number');
+  assert.equal(todayMetrics.completed, '3');
   assert.equal(todayMetrics.failed, '1');
   context.cockpitStates.currentExecution = 'stale';
   const staleCurrent = vm.runInContext('cockpitStatus()', context);
