@@ -369,10 +369,9 @@ fn realized_profit_totals_preserve_candidate_units() {
     assert!(results.contains("icpResult"));
     assert!(cockpit.contains("Stable profit") || cockpit.contains("USD realized"));
     assert!(cockpit.contains("ICP profit") || cockpit.contains("ICP realized"));
-    // ckBTC/ckETH-returning books — anticipated, not yet backed by the
-    // canister (see docs/superpowers plans). Today's realized-result bucket
-    // must recognize both new candidate classes rather than silently
-    // dropping their profit into no bucket at all.
+    // ckBTC/ckETH-returning books: today's realized-result bucket must
+    // recognize both candidate classes rather than silently dropping their
+    // profit into no bucket at all.
     assert!(results.contains("CkBtcReturning"));
     assert!(results.contains("CkEthReturning"));
     assert!(results.contains("ckbtcRealized"));
@@ -568,11 +567,10 @@ fn cockpit_hero_shows_live_route_pnl_and_frozen_legacy_breakdown_separately() {
         "Legacy net P&amp;L",
         "frozen at Stage-1 cutover",
         "inventory recovery",
-        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
-        // canister. The hero must report their all-time native totals
-        // alongside stable/ICP, not silently omit them.
-        "ckbtc_realized_profit_native",
-        "cketh_realized_profit_native",
+        // ckBTC/ckETH-returning books. The hero must report their all-time
+        // totals (native ckBTC sats / ckETH wei) alongside stable/ICP.
+        "ckbtc_realized_profit_sats",
+        "cketh_realized_profit_wei",
         "ckBTC-returning, all-time",
         "ckETH-returning, all-time",
     ] {
@@ -646,27 +644,25 @@ fn dashboard_declares_lifetime_route_summary_query_consistently() {
         "stable_realized_profit_usd6: I.Int",
         "icp_realized_profit_e8s: I.Int",
         "get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query'])",
-        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
-        // canister. Declared ahead of the backend so the dashboard has a
-        // fixed decode target once these fields ship on the wire.
-        "ckbtc_realized_profit_native: I.Int",
-        "cketh_realized_profit_native: I.Int",
+        "ckbtc_realized_profit_sats: I.Int",
+        "cketh_realized_profit_wei: I.Int",
     ] {
         assert!(DASHBOARD.contains(marker), "dashboard IDL missing marker: {marker}");
     }
 }
 
 #[test]
-fn dashboard_idl_anticipates_ckbtc_and_cketh_returning_books() {
+fn dashboard_idl_declares_ckbtc_and_cketh_returning_books() {
     for marker in [
         // CandidateClass gains the two new book classes.
         "CkBtcReturning: I.Null, CkEthReturning: I.Null",
-        // RouteArbConfigV1 mirrors the stable/icp book config fields.
-        "ckbtc_book_enabled: I.Bool, cketh_book_enabled: I.Bool",
-        "ckbtc_size_ladder: I.Vec(I.Nat64), cketh_size_ladder: I.Vec(I.Nat64)",
-        "max_ckbtc_principal_native: I.Nat64, max_cketh_principal_native: I.Nat64",
-        "min_ckbtc_profit_native: I.Nat64, min_ckbtc_profit_bps: I.Nat32",
-        "min_cketh_profit_native: I.Nat64, min_cketh_profit_bps: I.Nat32",
+        // RouteArbConfigV1 carries each book as an opt nested record — not
+        // a flat book_enabled/size_ladder/max_principal/min_profit field
+        // set — since a book with no config yet is absent, not zeroed.
+        "const AssetReturnBookConfigV1 = I.Record({",
+        "enabled: I.Bool, size_ladder: I.Vec(I.Nat64)",
+        "max_principal_native: I.Nat64, min_profit_native: I.Nat64, min_profit_bps: I.Nat32",
+        "ckbtc_book: I.Opt(AssetReturnBookConfigV1), cketh_book: I.Opt(AssetReturnBookConfigV1)",
         // ObservationAccumulatorV1 / BestRouteCandidatesV1 gain best/provisional candidates.
         "best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
         "provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
@@ -674,10 +670,28 @@ fn dashboard_idl_anticipates_ckbtc_and_cketh_returning_books() {
         "provisional_best_cketh_candidate: I.Opt(RouteCandidateReportV1)",
         "ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1)",
         // HeldBasisV1 gains native-basis variants for held ckBTC/ckETH inventory.
-        "CkBtcNative: I.Record({ principal_ckbtc_native: I.Nat64 })",
-        "CkEthNative: I.Record({ principal_cketh_native: I.Nat64 })",
+        "CkBtcNative: I.Record({ principal_ckbtc_sats: I.Nat64 })",
+        "CkEthNative: I.Record({ principal_cketh_wei: I.Nat64 })",
     ] {
         assert!(DASHBOARD.contains(marker), "dashboard IDL missing ckBTC/ckETH marker: {marker}");
+    }
+    // The old flat per-book config fields must be fully gone, not just
+    // superseded — a leftover flat field would mean stale dead IDL.
+    for retired in [
+        "ckbtc_book_enabled",
+        "cketh_book_enabled",
+        "ckbtc_size_ladder",
+        "cketh_size_ladder",
+        "max_ckbtc_principal_native",
+        "max_cketh_principal_native",
+        "min_ckbtc_profit_native",
+        "min_cketh_profit_native",
+        "principal_ckbtc_native",
+        "principal_cketh_native",
+        "ckbtc_realized_profit_native",
+        "cketh_realized_profit_native",
+    ] {
+        assert!(!DASHBOARD.contains(retired), "retired flat ckBTC/ckETH field still present: {retired}");
     }
 }
 
@@ -705,20 +719,25 @@ fn ops_exposes_ckbtc_and_cketh_book_toggles_and_settings() {
     for marker in [
         "leverCkBtcBookEnabled()",
         "leverCkEthBookEnabled()",
-        "ckbtc_book_enabled",
-        "cketh_book_enabled",
+        "ckbtc_book",
+        "cketh_book",
         "ckBTC-returning book",
         "ckETH-returning book",
-        "routeBookSettingsHtml('ckbtc'",
-        "routeBookSettingsHtml('cketh'",
+        "routeBookSettingsHtml('ckbtc_book'",
+        "routeBookSettingsHtml('cketh_book'",
+        "Not configured server-side yet",
     ] {
         assert!(ops.contains(marker), "Ops missing ckBTC/ckETH book marker: {marker}");
     }
     // The generic handler round-trips the whole config through
-    // set_route_arb_config_v1 (there is no dedicated setter yet) and must
-    // invalidate cached quotes the same way the ck-stable-exit lever does.
+    // set_route_arb_config_v1 (there is no dedicated setter yet), flipping
+    // only the nested book's `enabled` field, and must invalidate cached
+    // quotes the same way the ck-stable-exit lever does. A book that is
+    // still `None` server-side has no size ladder/principal/profit floor to
+    // preserve, so toggling it must refuse rather than fabricate one.
     assert!(DASHBOARD.contains("window.leverRouteBookEnabled"));
-    assert!(DASHBOARD.contains("set_route_arb_config_v1({ ...routeArbConfig, [fieldKey]: !currentlyEnabled })"));
+    assert!(DASHBOARD.contains("[bookKey]: [{ ...book, enabled: !book.enabled }]"));
+    assert!(DASHBOARD.contains("has no server-side configuration yet"));
 }
 
 #[test]

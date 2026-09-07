@@ -352,11 +352,9 @@ compare3 "CycleSnapshot fields" \
   "$(did_record_fields CycleSnapshot "$DID")" \
   "$(dash_record_fields CycleSnapshot "$DASH")"
 
-# ckBTC/ckETH-returning route books — anticipated on the dashboard ahead of
-# the backend (see the dashboard.html comments at each of these types). A
-# DRIFT report here is EXPECTED until the canister and arb_bot.did gain the
-# matching fields; it is the mechanism by which that reconciliation gets
-# tracked, not a bug in this script.
+# ckBTC/ckETH-returning route books — the canister and arb_bot.did do not
+# yet carry these types/fields, so a DRIFT report below is expected until
+# they do; that is the mechanism by which this reconciliation gets tracked.
 compare3 "CandidateClass variants" \
   "$(rust_enum_variants CandidateClass "$RUST_ROUTE_ARB")" \
   "$(did_variant_names CandidateClass "$DID")" \
@@ -366,6 +364,11 @@ compare3 "HeldBasisV1 variants" \
   "$(rust_enum_variants HeldBasisV1 "$RUST_ROUTE_ARB")" \
   "$(did_variant_names HeldBasisV1 "$DID")" \
   "$(dash_variant_names_lines_i HeldBasisV1 "$DASH")"
+
+compare3 "AssetReturnBookConfigV1 fields" \
+  "$(rust_struct_fields AssetReturnBookConfigV1 "$RUST_ROUTE_ARB")" \
+  "$(did_record_fields AssetReturnBookConfigV1 "$DID")" \
+  "$(dash_record_fields_i AssetReturnBookConfigV1 "$DASH")"
 
 compare3 "RouteArbConfigV1 fields" \
   "$(rust_struct_fields RouteArbConfigV1 "$RUST_ROUTE_ARB")" \

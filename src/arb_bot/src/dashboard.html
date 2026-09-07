@@ -888,6 +888,13 @@
       const AssetControlV1 = I.Record({ asset: RouteAsset, enabled: I.Bool });
       const PoolControlV1 = I.Record({ pool_id: I.Text, enabled: I.Bool });
       const AssetInventoryBandV1 = I.Record({ asset: RouteAsset, floor_native: I.Nat64, ceiling_native: I.Nat64 });
+      // Config for a single-asset return book (ckBTC-returning,
+      // ckETH-returning). `opt` on RouteArbConfigV1 — a book with no
+      // config yet is simply absent, not a struct of zeros.
+      const AssetReturnBookConfigV1 = I.Record({
+        enabled: I.Bool, size_ladder: I.Vec(I.Nat64),
+        max_principal_native: I.Nat64, min_profit_native: I.Nat64, min_profit_bps: I.Nat32,
+      });
       const RouteArbConfigV1 = I.Record({
         enabled: I.Bool, dry_run: I.Bool, stable_book_enabled: I.Bool, icp_book_enabled: I.Bool,
         allow_wrapped_stable_to_icusd: I.Opt(I.Bool),
@@ -902,16 +909,8 @@
         reconciliation_queries_per_cycle: I.Nat8, max_open_held_positions: I.Nat16,
         max_open_non_route_reservations: I.Nat16, max_terminal_execution_records: I.Nat32,
         max_execution_record_bytes: I.Nat32, max_reconciliation_evidence_items: I.Nat8,
-        // ckBTC/ckETH-returning books — anticipated, not yet backed by the
-        // canister. Mirrors the stable/icp book fields above field-for-field
-        // (book_enabled / size_ladder / max_..._principal_native /
-        // min_..._profit_native / min_..._profit_bps). See the "backend
-        // field mismatch" note in the commit this block was added in.
-        ckbtc_book_enabled: I.Bool, cketh_book_enabled: I.Bool,
-        ckbtc_size_ladder: I.Vec(I.Nat64), cketh_size_ladder: I.Vec(I.Nat64),
-        max_ckbtc_principal_native: I.Nat64, max_cketh_principal_native: I.Nat64,
-        min_ckbtc_profit_native: I.Nat64, min_ckbtc_profit_bps: I.Nat32,
-        min_cketh_profit_native: I.Nat64, min_cketh_profit_bps: I.Nat32,
+        // ckBTC/ckETH-returning books.
+        ckbtc_book: I.Opt(AssetReturnBookConfigV1), cketh_book: I.Opt(AssetReturnBookConfigV1),
       });
       const RouteArbStatusV1 = I.Record({
         config_valid: I.Bool, config_incident: I.Opt(I.Text), execution_compiled_in: I.Bool,
@@ -922,10 +921,7 @@
         observed_decimals: I.Opt(I.Nat8), ledger_fee_native: I.Opt(I.Nat),
         balance_native: I.Opt(I.Nat), metadata_valid: I.Bool, error: I.Opt(I.Text),
       });
-      // CkBtcReturning / CkEthReturning: anticipated, not yet backed by the
-      // canister (see docs/superpowers/plans — ckBTC/ckETH route books).
-      // Never returned on the wire today; added ahead of the backend so the
-      // dashboard has a fixed place to decode them once it does.
+      // CkBtcReturning / CkEthReturning: ckBTC- and ckETH-returning route books.
       const CandidateClass = I.Variant({ IcpReturning: I.Null, StablePar: I.Null, StableSettledCrossAsset: I.Null, CkBtcReturning: I.Null, CkEthReturning: I.Null });
       const RuntimeStatus = I.Record({ compiled_support: I.Bool, live_authorized: I.Bool,
         enabled: I.Bool, dry_run: I.Bool, last_error: I.Opt(I.Text), last_tick_ns: I.Nat64,
@@ -955,7 +951,6 @@
         route_count: I.Nat32, full_fill_rejections: I.Nat64,
         best_stable_candidate: I.Opt(RouteCandidateReportV1), required_quote_calls: I.Nat64,
         provisional_best_icp_candidate: I.Opt(RouteCandidateReportV1), scan_complete: I.Bool,
-        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
         best_ckbtc_candidate: I.Opt(RouteCandidateReportV1),
         provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1),
         best_cketh_candidate: I.Opt(RouteCandidateReportV1),
@@ -969,7 +964,6 @@
       const ObservationBatchResultV1 = I.Record({ observation: ObservationAccumulatorV1, candidates: I.Vec(RouteCandidateReportV1) });
       const BestRouteCandidatesV1 = I.Record({
         icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
-        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
         ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1),
         observation_id: I.Opt(I.Text), scan_complete: I.Bool,
       });
@@ -985,9 +979,8 @@
         StablePar: I.Record({ start_asset: RouteAsset, principal_native: I.Nat64, principal_usd_6dec: I.Nat64 }),
         IcpNative: I.Record({ principal_icp_e8s: I.Nat64 }),
         LegacyUnknown: I.Record({ preserved_pending_fields: I.Text }),
-        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
-        CkBtcNative: I.Record({ principal_ckbtc_native: I.Nat64 }),
-        CkEthNative: I.Record({ principal_cketh_native: I.Nat64 }),
+        CkBtcNative: I.Record({ principal_ckbtc_sats: I.Nat64 }),
+        CkEthNative: I.Record({ principal_cketh_wei: I.Nat64 }),
       });
       const HeldLotV1 = I.Record({ asset: RouteAsset, native_amount: I.Nat64, attributable_fees_native: I.Nat64, reserved_native: I.Nat64 });
       const HeldPositionV1 = I.Record({
@@ -1016,8 +1009,7 @@
       const LifetimeRouteSummaryV1 = I.Record({
         completed_count: I.Nat64, aborted_count: I.Nat64, held_inventory_count: I.Nat64,
         stable_realized_profit_usd6: I.Int, icp_realized_profit_e8s: I.Int,
-        // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
-        ckbtc_realized_profit_native: I.Int, cketh_realized_profit_native: I.Int,
+        ckbtc_realized_profit_sats: I.Int, cketh_realized_profit_wei: I.Int,
         folded_through: I.Nat64,
       });
       const RouteExecutionLegStatusV1 = I.Variant({
@@ -3431,23 +3423,31 @@
         renderOps();
       }
     };
-    // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note
-    // above. There is no dedicated setter for these fields yet (unlike
-    // set_wrapped_stable_to_icusd_allowed_v1 above), so this round-trips
-    // the whole config through set_route_arb_config_v1 with one field
-    // flipped, same as the "Start automatic arbitrage" flow.
-    window.leverRouteBookEnabled = async function (key, fieldKey, label) {
+    // ckBTC/ckETH-returning books: RouteArbConfigV1 carries each as
+    // `opt AssetReturnBookConfigV1` — absent means "not configured server-side
+    // yet", not a struct of zeros. There is no dedicated setter (unlike
+    // set_wrapped_stable_to_icusd_allowed_v1 above), so this round-trips the
+    // whole config through set_route_arb_config_v1 with the book's `enabled`
+    // flipped, same as the "Start automatic arbitrage" flow. Toggling is a
+    // no-op (with an explanatory toast) when the book is absent, since there
+    // is no size ladder / principal cap / profit floor to preserve.
+    function routeReturnBook(bookKey) { return routeArbConfig ? routeOpt(routeArbConfig[bookKey]) : null; }
+    window.leverRouteBookEnabled = async function (key, bookKey, label) {
       if (state.levers[key] === 'applying' || !requireAuth()) return;
       if (routeSourceState('routeArbConfig') !== 'fresh' || !routeArbConfig) {
         toast(`Route policy ${sourceStateText('routeArbConfig')}; refresh before changing it`, 'error');
         return;
       }
-      const currentlyEnabled = routeArbConfig[fieldKey] === true;
+      const book = routeReturnBook(bookKey);
+      if (!book) {
+        toast(`${label} has no server-side configuration yet (size ladder / principal cap / profit floor unset) — cannot toggle from here.`, 'error');
+        return;
+      }
       state.levers[key] = 'applying';
       renderOps();
       try {
         const refreshed = unwrapResult(
-          await authenticatedActor.set_route_arb_config_v1({ ...routeArbConfig, [fieldKey]: !currentlyEnabled })
+          await authenticatedActor.set_route_arb_config_v1({ ...routeArbConfig, [bookKey]: [{ ...book, enabled: !book.enabled }] })
         );
         routeArbConfig = refreshed;
         markSourceFresh(routeSources.routeArbConfig, refreshed);
@@ -3459,7 +3459,8 @@
         markSourceUnavailable(routeSources.candidates, 'Route policy changed; refreshing quotes');
         renderRouteAutomationViews();
         await loadRouteData();
-        toast(`${label}: ${refreshed[fieldKey] === true ? 'on' : 'off'} · confirmed by canister`, 'success');
+        const refreshedBook = routeOpt(refreshed[bookKey]);
+        toast(`${label}: ${refreshedBook && refreshedBook.enabled === true ? 'on' : 'off'} · confirmed by canister`, 'success');
       } catch (e) {
         markSourceFailed(routeSources.routeArbConfig, e);
         toast(`${label} failed: ` + (e.message || e), 'error');
@@ -3468,22 +3469,20 @@
         renderOps();
       }
     };
-    window.leverCkBtcBookEnabled = function () { return leverRouteBookEnabled('ckbtc-book-enabled', 'ckbtc_book_enabled', 'ckBTC-returning book'); };
-    window.leverCkEthBookEnabled = function () { return leverRouteBookEnabled('cketh-book-enabled', 'cketh_book_enabled', 'ckETH-returning book'); };
+    window.leverCkBtcBookEnabled = function () { return leverRouteBookEnabled('ckbtc-book-enabled', 'ckbtc_book', 'ckBTC-returning book'); };
+    window.leverCkEthBookEnabled = function () { return leverRouteBookEnabled('cketh-book-enabled', 'cketh_book', 'ckETH-returning book'); };
     // Read-only summary of a book's size ladder / principal cap / profit
-    // floor for the Ops policy card. Tolerates an undefined field (the
-    // live canister does not send ckbtc_*/cketh_* config yet) by falling
-    // back to "unavailable" rather than rendering NaN.
-    function routeBookSettingsHtml(prefix, label, decimals) {
-      const cfg = routeArbConfig;
-      const ladder = cfg ? cfg[`${prefix}_size_ladder`] : null;
-      const maxPrincipal = cfg ? cfg[`max_${prefix}_principal_native`] : null;
-      const minProfitNative = cfg ? cfg[`min_${prefix}_profit_native`] : null;
-      const minProfitBps = cfg ? cfg[`min_${prefix}_profit_bps`] : null;
-      const ladderText = Array.isArray(ladder) && ladder.length ? ladder.map(v => fmtTok(v, decimals)).join(', ') : 'unavailable';
-      const maxText = maxPrincipal != null ? `${fmtTok(maxPrincipal, decimals)} ${label}` : 'unavailable';
-      const minText = minProfitNative != null && minProfitBps != null
-        ? `${fmtTok(minProfitNative, decimals)} ${label} or ${(Number(minProfitBps) / 100).toFixed(2)}%`
+    // floor for the Ops policy card. Distinguishes "book not configured
+    // server-side" (opt is None) from "policy source not loaded".
+    function routeBookSettingsHtml(bookKey, label, decimals) {
+      if (!routeArbConfig) return `${esc(label)}: unavailable`;
+      const book = routeReturnBook(bookKey);
+      if (!book) return `${esc(label)}: not configured server-side yet`;
+      const ladderText = Array.isArray(book.size_ladder) && book.size_ladder.length
+        ? book.size_ladder.map(v => fmtTok(v, decimals)).join(', ') : 'unavailable';
+      const maxText = book.max_principal_native != null ? `${fmtTok(book.max_principal_native, decimals)} ${label}` : 'unavailable';
+      const minText = book.min_profit_native != null && book.min_profit_bps != null
+        ? `${fmtTok(book.min_profit_native, decimals)} ${label} or ${(Number(book.min_profit_bps) / 100).toFixed(2)}%`
         : 'unavailable';
       return `${esc(label)} size ladder: ${esc(ladderText)} · max principal: ${esc(maxText)} · min profit: ${esc(minText)}`;
     }
@@ -3496,7 +3495,6 @@
       const candidatesState = routeSourceState('candidates', quoteStaleAfterMs);
       const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
       const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
-      // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
       const ckbtc = latestRouteCandidates ? routeOpt(latestRouteCandidates.ckbtc) : null;
       const cketh = latestRouteCandidates ? routeOpt(latestRouteCandidates.cketh) : null;
       const scanText = observationState === 'loading' ? 'Loading observation…'
@@ -3860,7 +3858,6 @@
       const failed = today.filter(record => variantKey(record.phase) !== 'Completed').length;
       const stableValues = today.filter(record => ['StablePar', 'StableSettledCrossAsset'].includes(variantKey(record.candidate_class))).map(record => routeOpt(record.realized_profit)).filter(value => value != null);
       const icpValues = today.filter(record => variantKey(record.candidate_class) === 'IcpReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
-      // ckBTC/ckETH-returning books — anticipated, see RouteArbConfigV1 note above.
       const ckbtcValues = today.filter(record => variantKey(record.candidate_class) === 'CkBtcReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
       const ckethValues = today.filter(record => variantKey(record.candidate_class) === 'CkEthReturning').map(record => routeOpt(record.realized_profit)).filter(value => value != null);
       const stableRealized = stableValues.reduce((sum, value) => sum + BigInt(value), 0n);
@@ -4006,8 +4003,8 @@
               <div class="hero-number ${lifetime ? pClass(lifetime.stable_realized_profit_usd6) : ''}">${lifetime ? fmt$(lifetime.stable_realized_profit_usd6) : '—'}</div>
               <div class="hero-delta text-ter">stable-book P&amp;L above · terminal totals, all classes: ${lifetime ? `${bi(lifetime.completed_count)} completed · ${bi(lifetime.aborted_count)} aborted · ${bi(lifetime.held_inventory_count)} held` : 'unavailable'}</div>
               <div class="stat-row"><span>ICP-returning, all-time (live)</span><span class="num ${lifetime ? pClass(lifetime.icp_realized_profit_e8s) : ''}">${lifetime ? fmtTok(lifetime.icp_realized_profit_e8s, 8) + ' ICP' : '—'}</span></div>
-              <div class="stat-row"><span>ckBTC-returning, all-time (live)</span><span class="num ${lifetime && lifetime.ckbtc_realized_profit_native != null ? pClass(lifetime.ckbtc_realized_profit_native) : ''}">${lifetime && lifetime.ckbtc_realized_profit_native != null ? fmtTok(lifetime.ckbtc_realized_profit_native, 8) + ' ckBTC' : '—'}</span></div>
-              <div class="stat-row"><span>ckETH-returning, all-time (live)</span><span class="num ${lifetime && lifetime.cketh_realized_profit_native != null ? pClass(lifetime.cketh_realized_profit_native) : ''}">${lifetime && lifetime.cketh_realized_profit_native != null ? fmtTok(lifetime.cketh_realized_profit_native, 18) + ' ckETH' : '—'}</span></div>
+              <div class="stat-row"><span>ckBTC-returning, all-time (live)</span><span class="num ${lifetime && lifetime.ckbtc_realized_profit_sats != null ? pClass(lifetime.ckbtc_realized_profit_sats) : ''}">${lifetime && lifetime.ckbtc_realized_profit_sats != null ? fmtTok(lifetime.ckbtc_realized_profit_sats, 8) + ' ckBTC' : '—'}</span></div>
+              <div class="stat-row"><span>ckETH-returning, all-time (live)</span><span class="num ${lifetime && lifetime.cketh_realized_profit_wei != null ? pClass(lifetime.cketh_realized_profit_wei) : ''}">${lifetime && lifetime.cketh_realized_profit_wei != null ? fmtTok(lifetime.cketh_realized_profit_wei, 18) + ' ckETH' : '—'}</span></div>
               <div class="divider"></div>
               <div class="hero-split">Legacy net P&amp;L · frozen at Stage-1 cutover, no longer accumulating: <span class="num ${s ? pClass(s.net_pnl_usd) : ''}">${s ? fmt$(s.net_pnl_usd) : '—'}</span></div>
               ${s && bi(s.unpaired_drain_usd) > 0 ? `<div class="hero-split">incl. ${fmt$(s.unpaired_drain_usd)} inventory recovery → <span class="${pClass(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}">${fmt$(bi(s.net_pnl_usd) - bi(s.unpaired_drain_usd))}</span> arb</div>` : ''}
@@ -5435,11 +5432,11 @@
           <div class="stat-row"><span>Execution</span><span class="badge ${routeAutomation.state === 'On' ? 'badge-live' : routeAutomation.state === 'Unknown' ? 'badge-stuck' : 'badge-dryrun'}">${esc(executionCopy)}</span></div>
           <div class="lever-grid" style="margin-top:var(--sp-3)">
             ${leverHtml('stable-exit-protection', 'Protect ck stables', 'Blocks ckUSDC/ckUSDT-funded routes from settling into icUSD', routeArbConfig?.allow_wrapped_stable_to_icusd?.[0] !== true, 'leverStableExitProtection()', 'routeArbConfig')}
-            ${leverHtml('ckbtc-book-enabled', 'ckBTC-returning book', 'Routes that begin and end in ckBTC', routeArbConfig?.ckbtc_book_enabled === true, 'leverCkBtcBookEnabled()', 'routeArbConfig')}
-            ${leverHtml('cketh-book-enabled', 'ckETH-returning book', 'Routes that begin and end in ckETH', routeArbConfig?.cketh_book_enabled === true, 'leverCkEthBookEnabled()', 'routeArbConfig')}
+            ${leverHtml('ckbtc-book-enabled', 'ckBTC-returning book', routeReturnBook('ckbtc_book') ? 'Routes that begin and end in ckBTC' : 'Not configured server-side yet', routeReturnBook('ckbtc_book')?.enabled === true, 'leverCkBtcBookEnabled()', 'routeArbConfig')}
+            ${leverHtml('cketh-book-enabled', 'ckETH-returning book', routeReturnBook('cketh_book') ? 'Routes that begin and end in ckETH' : 'Not configured server-side yet', routeReturnBook('cketh_book')?.enabled === true, 'leverCkEthBookEnabled()', 'routeArbConfig')}
           </div>
-          <div class="route-wallet-meta">${routeBookSettingsHtml('ckbtc', 'ckBTC', 8)}</div>
-          <div class="route-wallet-meta">${routeBookSettingsHtml('cketh', 'ckETH', 18)}</div>
+          <div class="route-wallet-meta">${routeBookSettingsHtml('ckbtc_book', 'ckBTC', 8)}</div>
+          <div class="route-wallet-meta">${routeBookSettingsHtml('cketh_book', 'ckETH', 18)}</div>
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>
