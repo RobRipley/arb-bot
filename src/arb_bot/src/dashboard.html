@@ -3229,6 +3229,9 @@
         return { state: 'Unknown', label: 'Unknown', targetOn: false, gatesOn, reason: runtimeState === 'loading' ? 'Loading runtime status' : 'Runtime status unavailable' };
       }
       if (runtimeState === 'stale' && gatesOn) {
+        if (routeRuntimeInFlightState(runtime) === 'active') {
+          return { state: 'On', label: 'Scanning', targetOn: true, gatesOn, reason: `Quote batch in progress · ${routeAge(routeOpt(runtime.scheduler_in_flight_since_ns))} elapsed` };
+        }
         return { state: 'Blocked', label: 'Blocked', targetOn: true, gatesOn, reason: `stale runtime status · ${sourceLastSuccessLabel(routeSources.runtime)}` };
       }
       if (runtimeState === 'stale' && !gatesOn) {
@@ -3769,7 +3772,16 @@
       const terminalSource = cockpitSourceLabel('terminalExecutions', latestTerminalExecutions.length ? `${latestTerminalExecutions[0].execution_id} · ${routePhaseLabel(latestTerminalExecutions[0].phase)}` : '', 'No terminal route execution', terminalState);
       const unknown = (heartbeat = 'Heartbeat unknown') => ({ label: 'Unknown', heartbeat, phase: 'Unknown', phaseCopy: 'Unknown', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) });
       if (runtimeState === 'loading' || runtimeState === 'failed' || runtimeState === 'unavailable' || !latestRouteRuntime) return unknown();
-      if (runtimeState === 'stale') return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', phaseCopy: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      if (runtimeState === 'stale') {
+        const gatesOnStale = Boolean(latestRouteRuntime.live_authorized && latestRouteRuntime.enabled && !latestRouteRuntime.dry_run);
+        if (gatesOnStale && routeRuntimeInFlightState(latestRouteRuntime) === 'active') {
+          const activePhase = latestRouteExecution ? cockpitExecutionPhaseLabel(latestRouteExecution) : (routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete)) ? 'Evaluating' : 'Scanning';
+          const activeDisplayPhase = latestRouteExecution ? cockpitExecutionPhaseCopy(latestRouteExecution) : activePhase;
+          const activeHeartbeat = `Quote batch in progress · ${routeAge(routeOpt(latestRouteRuntime.scheduler_in_flight_since_ns))} elapsed`;
+          return { label: activePhase, heartbeat: activeHeartbeat, phase: activePhase, phaseCopy: activeDisplayPhase, executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+        }
+        return { label: 'Blocked', heartbeat: `Blocked · stale heartbeat · ${sourceLastSuccessLabel(routeSources.runtime)}`, phase: 'Blocked', phaseCopy: 'Blocked', executionSource, terminalSource, today: cockpitTodayResults(terminalSource.state) };
+      }
       if (!latestRouteRuntime.compiled_support) return unknown('Unknown · runtime support unavailable');
       if (executionState === 'loading' || executionState === 'failed' || executionState === 'unavailable') return unknown();
       const phase = latestRouteExecution ? cockpitExecutionPhaseLabel(latestRouteExecution) : routeSourceState('observation') === 'loading' || (latestRouteObservation && !latestRouteObservation.scan_complete) ? 'Evaluating' : executionState === 'stale' ? 'Unknown' : 'Scanning';
