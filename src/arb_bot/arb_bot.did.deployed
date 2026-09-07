@@ -446,6 +446,20 @@ type LegType = variant {
   // Drain — candid-append-safe, old logs decode unchanged.
   TopUp;
 };
+// All-time totals folded from every terminal route execution. Route-arb
+// counterpart to the legacy, now-frozen TradeSummary; the two never share
+// records. folded_through is an internal watermark (TERMINAL_ROUTE_EXECUTIONS
+// entries already counted), exposed for diagnostics/testing, not for display.
+type LifetimeRouteSummaryV1 = record {
+  completed_count : nat64;
+  aborted_count : nat64;
+  held_inventory_count : nat64;
+  // USD, 6-decimal — sum over StablePar/StableSettledCrossAsset executions.
+  stable_realized_profit_usd6 : int;
+  // ICP, 8-decimal e8s — sum over IcpReturning executions.
+  icp_realized_profit_e8s : int;
+  folded_through : nat64;
+};
 type MutationLockV1 = record {
   owner : MutationOwnerV1;
   operation_id : text;
@@ -913,6 +927,9 @@ service : (InitArgs) -> {
   get_current_route_execution_v1 : () -> (opt ExecutionRecordV1) query;
   get_errors : (nat64, nat64) -> (vec ErrorRecord) query;
   get_held_positions_v1 : (nat64, nat64) -> (Result_3) query;
+  // All-time route-execution totals, durable across upgrades. Counterpart
+  // to the legacy, now-frozen get_summary(); the two never share records.
+  get_lifetime_route_summary_v1 : () -> (LifetimeRouteSummaryV1) query;
   get_prices : () -> (PriceInfo);
   // Anonymous-safe stuck-state flags for the logged-out dashboard wedge
   // banner. Booleans only — details require the admin-gated `get_bot_health`.

@@ -48,6 +48,7 @@ Object.assign(context, {
   currentConfig: { quote_max_age_ns: 30_000_000_000n },
   authenticatedActor: null,
   ROUTE_RUNTIME_STALE_AFTER_MS: 30_000,
+  SCHEDULER_NO_PROGRESS_CEILING_MS: 600_000,
   variantKey: value => value && typeof value === 'object' ? Object.keys(value)[0] : '—',
   esc: String,
   ROUTE_ASSET_LABELS: { Icp: 'ICP' },
@@ -219,6 +220,14 @@ async function main() {
   context.cockpitStates.terminalExecutions = 'fresh';
   context.cockpitStates.runtime = 'stale';
   assert.equal(vm.runInContext('cockpitStatus().label', context), 'Blocked', 'stale runtime must block independently');
+  context.latestRouteRuntime = { compiled_support: true, live_authorized: true, enabled: true, dry_run: false, last_tick_ns: todayNs, scheduler_in_flight_since_ns: [BigInt(Date.now()) * 1000000n] };
+  const staleActiveCockpit = vm.runInContext('cockpitStatus()', context);
+  assert.equal(staleActiveCockpit.label, 'Scanning', 'a stale cache with an active in-flight scheduler must keep reporting the running quote batch');
+  assert.match(staleActiveCockpit.heartbeat, /Quote batch in progress/);
+  context.latestRouteRuntime = { compiled_support: true, live_authorized: true, enabled: true, dry_run: false, last_tick_ns: todayNs, scheduler_in_flight_since_ns: [BigInt(Date.now() - 700000) * 1000000n] };
+  assert.equal(vm.runInContext('cockpitStatus().label', context), 'Blocked', 'a stale cache with an in-flight marker past the no-progress ceiling must still block');
+  context.latestRouteRuntime = { compiled_support: true, live_authorized: true, enabled: true, dry_run: false, last_tick_ns: todayNs };
+  context.cockpitStates.runtime = 'fresh';
 
   for (const name of Object.keys(routeActor)) routeActor[name] = async () => { throw Error('query rejected'); };
   walletActor.get_route_wallet_balances_v1 = async () => { throw Error('query rejected'); };
