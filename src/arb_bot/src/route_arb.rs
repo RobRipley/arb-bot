@@ -63,7 +63,11 @@ impl Asset {
 pub enum AssetRole {
     StableSettlement,
     IcpPrincipal,
-    PassThroughOnly,
+    /// Not stable-settled, but — like `IcpPrincipal` — may be the start/end
+    /// principal of its own native same-asset returning cycle (ckBTC-
+    /// returning, ckETH-returning). No longer a truthful description to call
+    /// these "pass-through only": they are also principal-capable now.
+    NativeReturningPrincipal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -161,8 +165,8 @@ pub fn asset_pins() -> Vec<AssetPin> {
         AssetPin { asset: Asset::CkUsdt, ledger: principal("cngnf-vqaaa-aaaar-qag4q-cai"), symbol: "ckUSDT", decimals: 6, role: AssetRole::StableSettlement },
         AssetPin { asset: Asset::CkUsdc, ledger: principal("xevnm-gaaaa-aaaar-qafnq-cai"), symbol: "ckUSDC", decimals: 6, role: AssetRole::StableSettlement },
         AssetPin { asset: Asset::Icp, ledger: principal("ryjl3-tyaaa-aaaaa-aaaba-cai"), symbol: "ICP", decimals: 8, role: AssetRole::IcpPrincipal },
-        AssetPin { asset: Asset::CkBtc, ledger: principal("mxzaz-hqaaa-aaaar-qaada-cai"), symbol: "ckBTC", decimals: 8, role: AssetRole::PassThroughOnly },
-        AssetPin { asset: Asset::CkEth, ledger: principal("ss2fx-dyaaa-aaaar-qacoq-cai"), symbol: "ckETH", decimals: 18, role: AssetRole::PassThroughOnly },
+        AssetPin { asset: Asset::CkBtc, ledger: principal("mxzaz-hqaaa-aaaar-qaada-cai"), symbol: "ckBTC", decimals: 8, role: AssetRole::NativeReturningPrincipal },
+        AssetPin { asset: Asset::CkEth, ledger: principal("ss2fx-dyaaa-aaaar-qacoq-cai"), symbol: "ckETH", decimals: 18, role: AssetRole::NativeReturningPrincipal },
     ]
 }
 

@@ -104,13 +104,22 @@ struct DurableRuntime {
     last_terminal: Option<RuntimeExecution>,
     last_error: Option<String>,
     last_tick_ns: u64,
-    /// Fairness rotation cursor across the four profit-book lanes. `None`
-    /// (fresh state, or upgraded from a pre-N-way blob) starts at the fixed
-    /// default order. Replaces the old two-way `last_served_icp: bool`; the
-    /// old field is simply dropped on decode (a purely operational
-    /// scheduling cursor, not durable financial state).
+    /// Fairness rotation cursor across the four profit-book lanes, set by
+    /// `finish()` on every terminal execution. `None` until the first
+    /// completion under N-way-aware code — including immediately after an
+    /// upgrade from a pre-N-way blob, where `effective_last_served_book`
+    /// derives the equivalent starting lane from the legacy
+    /// `last_served_icp` field below instead.
     #[serde(default)]
     last_served_book: Option<RouteBookKind>,
+    /// Legacy two-way alternation cursor ("was ICP the book last served").
+    /// No longer written — `finish()` writes only `last_served_book` now —
+    /// but still decoded so `effective_last_served_book` can derive the
+    /// correct starting rotation lane for state saved before
+    /// `last_served_book` existed, preserving the exact Stable/ICP
+    /// alternation position across the upgrade instead of restarting it.
+    #[serde(default)]
+    last_served_icp: bool,
 }
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug)]
 pub struct RuntimeStatus {
@@ -1372,6 +1381,23 @@ fn best_candidate_for_book(
     }
 }
 
+/// The rotation cursor to actually use for this tick: the N-way cursor once
+/// any execution has completed under N-way-aware code, otherwise the
+/// two-way legacy cursor translated 1:1 ("was ICP last served" is exactly
+/// what `last_served_icp` recorded, and Icp/Stable were the only two books
+/// that could ever have set it). Feeding this through `rotated_book_order`
+/// reproduces the exact old alternation immediately after an upgrade — the
+/// new CkBtc/CkEth lanes fall in between in the fixed cycle order but are
+/// never selected while both books stay disabled (their slots are empty),
+/// so the effective Stable/ICP choice is unchanged.
+fn effective_last_served_book(s: &DurableRuntime) -> Option<RouteBookKind> {
+    s.last_served_book.or(Some(if s.last_served_icp {
+        RouteBookKind::Icp
+    } else {
+        RouteBookKind::Stable
+    }))
+}
+
 /// One scheduler dispatch: reconcile/advance existing execution before selection.
 pub async fn service_tick() -> Result<(), String> {
     let mut s = load()?;
@@ -1380,7 +1406,7 @@ pub async fn service_tick() -> Result<(), String> {
     let result = if let Some(ex) = s.current {
         advance(&ex.record.execution_id).await.map(|_| ())
     } else if authorized().is_ok() {
-        let order = rotated_book_order(s.last_served_book);
+        let order = rotated_book_order(effective_last_served_book(&s));
         let selected = state::read_state(|s| {
             s.route_observation
                 .as_ref()
@@ -1463,6 +1489,66 @@ mod tests {
         assert_eq!(book_for_class(CandidateClass::CkBtcReturning), RouteBookKind::CkBtc);
         assert_eq!(book_for_class(CandidateClass::CkEthReturning), RouteBookKind::CkEth);
     }
+
+    /// A stable-state blob saved before `last_served_book` existed carries
+    /// only the old two-way `last_served_icp` cursor. That field must still
+    /// decode (not be silently dropped), and the rotation actually used for
+    /// the first post-upgrade tick must reproduce the exact old alternation
+    /// position rather than restarting it.
+    #[test]
+    fn legacy_last_served_icp_field_preserves_stable_icp_alternation_after_upgrade() {
+        state::init_state(state::BotState::default());
+        save(&DurableRuntime::default()).unwrap();
+
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&state::runtime_bytes()).unwrap();
+        legacy.as_object_mut().unwrap().remove("last_served_book");
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("last_served_icp".into(), serde_json::json!(true));
+        state::set_runtime_bytes(serde_json::to_vec(&legacy).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+
+        let decoded = load().unwrap();
+        assert!(decoded.last_served_book.is_none(), "pre-upgrade blob carries no N-way cursor yet");
+        assert!(decoded.last_served_icp, "legacy field must still decode, not be silently dropped");
+
+        // ICP was last served under the old two-way alternation, so Stable
+        // is due next — exactly what `prefer_stable = last_served_icp` used
+        // to pick. ckBTC/ckETH stay disabled by default, so wherever they
+        // fall in the fixed cycle never actually gets served here.
+        let next_of_stable_or_icp = |order: [RouteBookKind; 4]| {
+            order
+                .into_iter()
+                .find(|book| matches!(book, RouteBookKind::Stable | RouteBookKind::Icp))
+        };
+        assert_eq!(
+            next_of_stable_or_icp(rotated_book_order(effective_last_served_book(&decoded))),
+            Some(RouteBookKind::Stable)
+        );
+
+        // The opposite legacy value must preserve the opposite alternation
+        // position: ICP due next.
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .insert("last_served_icp".into(), serde_json::json!(false));
+        state::set_runtime_bytes(serde_json::to_vec(&legacy).unwrap()).unwrap();
+        state::reopen_runtime_cell_for_test();
+        let decoded = load().unwrap();
+        assert_eq!(
+            next_of_stable_or_icp(rotated_book_order(effective_last_served_book(&decoded))),
+            Some(RouteBookKind::Icp)
+        );
+
+        // Once any execution completes under N-way-aware code, the new
+        // cursor takes over and the legacy field is no longer consulted.
+        let mut post_migration = load().unwrap();
+        post_migration.last_served_book = Some(RouteBookKind::CkBtc);
+        assert_eq!(effective_last_served_book(&post_migration), Some(RouteBookKind::CkBtc));
+    }
+
     #[derive(Default)]
     struct Double {
         now: Cell<u64>,
