@@ -56,6 +56,12 @@ fn pre_upgrade() {
 #[post_upgrade]
 fn post_upgrade() {
     state::load_from_stable_memory();
+    // Folds any terminal route executions already durable on this upgrade
+    // (including every one that predates the lifetime-summary feature)
+    // into the summary immediately, so the very first post-upgrade read
+    // reflects full history rather than waiting on the next completion.
+    // Idempotent — see fold_lifetime_route_summary's watermark guard.
+    let _ = state::get_lifetime_route_summary();
     setup_timer();
     setup_volume_timer();
     setup_route_runtime_timer();
@@ -496,6 +502,16 @@ fn get_current_route_execution_v1() -> Option<route_arb::ExecutionRecordV1> {
 #[query]
 fn get_terminal_route_executions_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::ExecutionRecordV1>, String> {
     state::get_terminal_route_executions_page(offset, limit)
+}
+
+/// All-time route-execution totals (completed/aborted/held counts, stable
+/// USD6 realized profit, ICP e8s realized profit), durable across upgrades
+/// and unbounded by the terminal log's pagination. This is the route-arb
+/// counterpart to the legacy, now-frozen `get_summary()`; the two are
+/// intentionally separate and never share records.
+#[query]
+fn get_lifetime_route_summary_v1() -> route_arb::LifetimeRouteSummaryV1 {
+    state::get_lifetime_route_summary()
 }
 
 fn route_execution_detail_response_with<C, D, R>(

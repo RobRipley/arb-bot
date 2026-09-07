@@ -478,3 +478,156 @@ fn ledger_uses_lazy_route_execution_disclosures_and_labels_legacy_history() {
         .unwrap();
     assert_eq!(legacy.matches("<div").count(), legacy.matches("</div>").count(), "legacy card HTML must be balanced");
 }
+
+#[test]
+fn cockpit_phase_today_and_latest_execution_form_one_equal_width_row_above_attention() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    let row_start = cockpit
+        .find("<div class=\"grid g-cols-3\"")
+        .expect("cockpit must open a g-cols-3 row for phase/today/latest-execution");
+    let row = &cockpit[row_start..];
+
+    let phase_pos = row.find("data-cockpit-phase").expect("phase card inside the row");
+    let today_pos = row
+        .find("data-cockpit-today-results")
+        .expect("today card inside the row");
+    let latest_pos = row
+        .find("data-cockpit-latest-execution")
+        .expect("latest-execution card inside the row");
+    let row_end = row
+        .find("<div class=\"card\" data-cockpit-incidents")
+        .expect("attention card must follow the row");
+    assert!(
+        phase_pos < today_pos && today_pos < latest_pos && latest_pos < row_end,
+        "phase, today, and latest-execution must appear in that order inside the row, \
+         immediately followed by the attention card"
+    );
+
+    // The three cards must not be individually re-wrapped in their own
+    // margin-bottom card any more — that spacing now belongs to the row.
+    let three_card_row = &row[..row_end];
+    assert_eq!(
+        three_card_row.matches("class=\"card\"").count(),
+        3,
+        "the row must contain exactly the phase/today/latest-execution cards, no more"
+    );
+
+    // Attention must be the very next card after the row closes, not
+    // separated by any other section.
+    let after_row = &row[row_end..];
+    assert!(
+        after_row.find("Attention").unwrap() < after_row.find("hero-card").unwrap(),
+        "Attention must render immediately below the phase/today/latest-execution row, \
+         before the P&L hero"
+    );
+}
+
+#[test]
+fn cockpit_today_results_reflow_to_two_columns_for_one_third_width() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    let today = cockpit
+        .split("data-cockpit-today-results")
+        .nth(1)
+        .unwrap()
+        .split("data-cockpit-today-coverage")
+        .next()
+        .unwrap();
+    assert!(
+        today.contains("grid g-cols-2"),
+        "Today's realized result must reflow to 2 columns to stay readable at one-third \
+         row width, not the 4-column layout it used when it had the full row"
+    );
+    assert!(
+        !today.contains("g-cols-4"),
+        "the old 4-column stat grid must not survive inside the narrower row"
+    );
+}
+
+#[test]
+fn cockpit_hero_shows_live_route_pnl_and_frozen_legacy_breakdown_separately() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in [
+        "lifetimeRouteSummary",
+        "stable_realized_profit_usd6",
+        "icp_realized_profit_e8s",
+        "completed_count",
+        "aborted_count",
+        "held_inventory_count",
+        "Legacy net P&amp;L",
+        "frozen at Stage-1 cutover",
+        "inventory recovery",
+    ] {
+        assert!(cockpit.contains(marker), "cockpit hero missing marker: {marker}");
+    }
+    // The live route summary badge replaces the old bare "all-time" hero
+    // that was actually reading the frozen legacy ledger every poll.
+    assert!(cockpit.contains("sourceStampHtml('lifetimeRouteSummary')"));
+    assert!(
+        !cockpit.contains("sourceStampHtml('summary')"),
+        "the frozen legacy net P&L must not carry a live Fresh/Stale badge — \
+         it cannot change, so a freshness stamp on it is misleading by construction"
+    );
+    let hero = cockpit.split("hero-card").nth(1).unwrap();
+    let pnl_pos = hero.find("Net P&amp;L").unwrap();
+    let legacy_pos = hero.find("Legacy net P&amp;L").unwrap();
+    assert!(pnl_pos < legacy_pos, "live route P&L must lead; legacy breakdown is secondary");
+}
+
+#[test]
+fn equity_card_labels_legacy_counters_as_legacy_with_no_growth_implying_badge() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in ["Legacy trade legs", "Legacy volume moved"] {
+        assert!(cockpit.contains(marker), "equity card missing renamed marker: {marker}");
+    }
+    for stale_label in [">Trade legs<", ">Volume moved<"] {
+        assert!(
+            !cockpit.contains(stale_label),
+            "equity card must not keep the old unqualified label: {stale_label}"
+        );
+    }
+    // Total equity and per-pocket ledger balances are unaffected — still live.
+    for marker in ["Total equity", "sourceStampHtml('legacyBalances')", "sourceStampHtml('volumeBalances')"] {
+        assert!(cockpit.contains(marker), "equity card missing live marker: {marker}");
+    }
+}
+
+#[test]
+fn retired_get_prices_is_no_longer_polled_and_charts_drop_the_broken_prices_badge() {
+    assert!(
+        !DASHBOARD.contains("loadPrices"),
+        "get_prices is a Stage-1 fail-closed stub that always traps; polling it must be removed"
+    );
+    assert!(
+        !DASHBOARD.contains("authenticatedActor.get_prices"),
+        "no remaining call site may invoke the retired get_prices method"
+    );
+    assert!(
+        !DASHBOARD.contains("routeSources.prices"),
+        "the permanently-broken prices freshness source must be removed, not just unused"
+    );
+    let markets = rendered_region("function renderMarkets()", "// ═══════ Force confirm");
+    assert!(
+        !markets.contains("Prices ${sourceStampHtml('prices')}"),
+        "Markets/Charts must not show a freshness badge that can only ever read Failed/Unavailable"
+    );
+    for marker in ["legacy history", "sourced from the legacy cycle-snapshot log"] {
+        assert!(markets.contains(marker), "Charts card missing honest legacy-data label: {marker}");
+    }
+    // The live direct pool-quote probe (active route prices) is unrelated to
+    // the retired get_prices() and must be unaffected by its removal.
+    assert!(DASHBOARD.contains("loadActiveRoutePrices"));
+    assert!(DASHBOARD.contains("routeSources.activePrices"));
+}
+
+#[test]
+fn dashboard_declares_lifetime_route_summary_query_consistently() {
+    for marker in [
+        "get_lifetime_route_summary_v1",
+        "const LifetimeRouteSummaryV1 = I.Record({",
+        "stable_realized_profit_usd6: I.Int",
+        "icp_realized_profit_e8s: I.Int",
+        "get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query'])",
+    ] {
+        assert!(DASHBOARD.contains(marker), "dashboard IDL missing marker: {marker}");
+    }
+}
