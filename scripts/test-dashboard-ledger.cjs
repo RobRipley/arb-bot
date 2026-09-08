@@ -272,6 +272,32 @@ const completedHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
 assert.match(completedHtml, /route-execution-flow-inner/, 'Completed rows must retain the flow row unchanged');
 context.routeExecutionDetails.delete('completed-exec');
 
+// Only the Aborted terminal phase gets the muted summary-row treatment —
+// Completed and HeldInventory summary rows must render without it so the
+// grey-out reads as "this route aborted", not a generic terminal state.
+context.entry = { ...record('aborted-muted-exec'), phase: { Aborted: null } };
+const abortedSummaryHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(abortedSummaryHtml, /<tr class="route-execution-summary route-execution-summary--aborted"/, 'Aborted summary rows must receive the muted semantic class');
+
+context.entry = { ...record('held-not-muted-exec'), phase: { HeldInventory: null } };
+const heldSummaryHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.doesNotMatch(heldSummaryHtml, /route-execution-summary--aborted/, 'HeldInventory summary rows must not receive the aborted muted class');
+
+context.entry = { ...record('completed-not-muted-exec'), phase: { Completed: null } };
+const completedSummaryHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.doesNotMatch(completedSummaryHtml, /route-execution-summary--aborted/, 'Completed summary rows must not receive the aborted muted class');
+
+// Regression guard: opacity on the row itself composites every descendant
+// (including the Show/Hide legs button) at reduced alpha, and a child
+// `opacity: 1` cannot undo that compositing. The muted styling must instead
+// target text color on descendant cells, never set `opacity` on the bare
+// `.route-execution-summary--aborted` row selector.
+assert.doesNotMatch(
+  html,
+  /\.route-execution-summary--aborted\s*\{[^}]*opacity/,
+  'Aborted-row styling must not set opacity on the summary row itself — it would mute the Show/Hide legs button with no way to restore it',
+);
+
 context.executionDetail = detail('decimal-exec', 2, {
   legs: [leg(0, 2, { from: { CkBtc: null }, to: { CkEth: null }, evidence: [{ evidence_kind: 'receipt', source_reference: 'tx-decimal', amount_native: 123456789n, observed_at_ns: 1n }] }), leg(1, 2)],
 });
