@@ -10,9 +10,18 @@ type AssetInventoryBandV1 = record {
   ceiling_native : nat64;
   floor_native : nat64;
 };
+type AssetReturnBookConfigV1 = record {
+  enabled : bool;
+  size_ladder : vec nat64;
+  max_principal_native : nat64;
+  min_profit_native : nat64;
+  min_profit_bps : nat32;
+};
 type BestRouteCandidatesV1 = record {
   icp : opt RouteCandidateReportV1;
   stable : opt RouteCandidateReportV1;
+  ckbtc : opt RouteCandidateReportV1;
+  cketh : opt RouteCandidateReportV1;
   observation_id : opt text;
   scan_complete : bool;
 };
@@ -262,6 +271,8 @@ type CandidateClass = variant {
   IcpReturning;
   StablePar;
   StableSettledCrossAsset;
+  CkBtcReturning;
+  CkEthReturning;
 };
 type CandidateReport = record {
   fill_ok : bool;
@@ -403,6 +414,8 @@ type HeldBasisV1 = variant {
     principal_usd_6dec : nat64;
   };
   IcpNative : record { principal_icp_e8s : nat64 };
+  CkBtcNative : record { principal_ckbtc_sats : nat64 };
+  CkEthNative : record { principal_cketh_wei : nat64 };
 };
 type HeldLotV1 = record {
   asset : Asset;
@@ -458,6 +471,10 @@ type LifetimeRouteSummaryV1 = record {
   stable_realized_profit_usd6 : int;
   // ICP, 8-decimal e8s — sum over IcpReturning executions.
   icp_realized_profit_e8s : int;
+  // ckBTC, 8-decimal satoshis — sum over CkBtcReturning executions.
+  ckbtc_realized_profit_sats : int;
+  // ckETH, 18-decimal native units — sum over CkEthReturning executions.
+  cketh_realized_profit_wei : int;
   folded_through : nat64;
 };
 type MutationLockV1 = record {
@@ -490,6 +507,10 @@ type ObservationAccumulatorV1 = record {
   best_stable_candidate : opt RouteCandidateReportV1;
   required_quote_calls : nat64;
   provisional_best_icp_candidate : opt RouteCandidateReportV1;
+  best_ckbtc_candidate : opt RouteCandidateReportV1;
+  best_cketh_candidate : opt RouteCandidateReportV1;
+  provisional_best_ckbtc_candidate : opt RouteCandidateReportV1;
+  provisional_best_cketh_candidate : opt RouteCandidateReportV1;
   scan_complete : bool;
 };
 type ObservationBatchResultV1 = record {
@@ -670,6 +691,8 @@ type Result_10 = variant { Ok : ObservationStartV1; Err : text };
 type RouteArbConfigV1 = record {
   max_icp_principal_e8s : nat64;
   allow_wrapped_stable_to_icusd : opt bool;
+  ckbtc_book : opt AssetReturnBookConfigV1;
+  cketh_book : opt AssetReturnBookConfigV1;
   asset_controls : vec AssetControlV1;
   quote_max_age_ns : nat64;
   max_stable_principal_usd_6dec : nat64;
