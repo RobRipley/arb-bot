@@ -251,6 +251,27 @@ context.entry = { ...record('unrecognized-pnl'), candidate_class: { SomeFutureBo
 const unrecognizedPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
 assert.match(unrecognizedPnl, /profit unit unknown/);
 
+// Aborted terminal executions must suppress the second route-flow row
+// (token logos + realized amounts) — there is no realized flow to show
+// once a route aborts. Completed and HeldInventory keep it unchanged.
+context.entry = { ...record('aborted-exec'), phase: { Aborted: null } };
+context.routeExecutionDetails.set('aborted-exec', { status: 'fresh', value: detail('aborted-exec', 2), final: true });
+const abortedHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.doesNotMatch(abortedHtml, /route-execution-flow/, 'Aborted rows must not render the route-flow row at all');
+context.routeExecutionDetails.delete('aborted-exec');
+
+context.entry = { ...record('held-exec'), phase: { HeldInventory: null } };
+context.routeExecutionDetails.set('held-exec', { status: 'fresh', value: detail('held-exec', 2), final: true });
+const heldHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(heldHtml, /route-execution-flow-inner/, 'HeldInventory rows must retain the flow row unchanged');
+context.routeExecutionDetails.delete('held-exec');
+
+context.entry = { ...record('completed-exec'), phase: { Completed: null } };
+context.routeExecutionDetails.set('completed-exec', { status: 'fresh', value: detail('completed-exec', 2), final: true });
+const completedHtml = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(completedHtml, /route-execution-flow-inner/, 'Completed rows must retain the flow row unchanged');
+context.routeExecutionDetails.delete('completed-exec');
+
 context.executionDetail = detail('decimal-exec', 2, {
   legs: [leg(0, 2, { from: { CkBtc: null }, to: { CkEth: null }, evidence: [{ evidence_kind: 'receipt', source_reference: 'tx-decimal', amount_native: 123456789n, observed_at_ns: 1n }] }), leg(1, 2)],
 });
