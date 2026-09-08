@@ -12,6 +12,23 @@ function routeLedgerSection() {
   return html.slice(start, end);
 }
 
+// routeLedgerPnlHtml (inside routeLedgerSection above) resolves each
+// candidate_class's unit/decimals through routeProfitUnit — defined much
+// earlier in the file, next to routeAssetLabel, not inside the ledger
+// section. Load its real source rather than hand-stubbing an equivalent
+// map here: a stub can silently drift from the dashboard's actual
+// candidate_class -> unit table (ckBTC/ckETH added, a class renamed, ...)
+// without this harness ever noticing.
+function routeProfitUnitSection() {
+  const start = html.indexOf('    const ROUTE_PROFIT_UNITS = {');
+  assert.notEqual(start, -1, 'dashboard must define ROUTE_PROFIT_UNITS');
+  const fnStart = html.indexOf('    function routeProfitUnit(candidateClass)', start);
+  assert.notEqual(fnStart, -1, 'dashboard must define routeProfitUnit');
+  const fnLineEnd = html.indexOf('\n', fnStart);
+  assert.notEqual(fnLineEnd, -1, 'routeProfitUnit must terminate its declaration line');
+  return html.slice(start, fnLineEnd);
+}
+
 function option(value) {
   return value == null ? [] : [value];
 }
@@ -130,7 +147,7 @@ function makeContext(actor, details = new Map()) {
     renderLedgerTable() {},
   });
   context.details = details;
-  vm.runInContext(routeLedgerSection(), context);
+  vm.runInContext(`${routeProfitUnitSection()}\n${routeLedgerSection()}`, context);
   return { context, elements };
 }
 
@@ -212,6 +229,27 @@ context.entry = { ...record('icp-pnl'), candidate_class: { IcpReturning: null },
 const icpPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
 assert.match(icpPnl, /ICP/);
 assert.doesNotMatch(icpPnl, /\$123/);
+
+// ckBTC/ckETH-returning books must render their realized P&L in native
+// units (8 / 18 decimals respectively) via routeProfitUnit, the same
+// dispatch every other candidate_class goes through — never the
+// "profit unit unknown" fallback that a genuinely unrecognized class hits.
+context.entry = { ...record('ckbtc-pnl'), candidate_class: { CkBtcReturning: null }, realized_profit: option(250_000_000n) };
+const ckbtcPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(ckbtcPnl, /\+2\.5 ckBTC/, 'ckBTC-returning P&L must render as native ckBTC, not sats or an unknown unit');
+assert.doesNotMatch(ckbtcPnl, /\$250/);
+assert.doesNotMatch(ckbtcPnl, /profit unit unknown/);
+
+context.entry = { ...record('cketh-pnl'), candidate_class: { CkEthReturning: null }, realized_profit: option(250_000_000_000_000_000n) };
+const ckethPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(ckethPnl, /\+0\.25 ckETH/, 'ckETH-returning P&L must render as native ckETH (18-decimal wei), not an unknown unit');
+assert.doesNotMatch(ckethPnl, /profit unit unknown/);
+
+// A candidate_class routeProfitUnit genuinely does not recognize must still
+// hit the explicit unknown-unit fallback rather than silently mislabeling.
+context.entry = { ...record('unrecognized-pnl'), candidate_class: { SomeFutureBook: null }, realized_profit: option(1n) };
+const unrecognizedPnl = vm.runInContext('routeLedgerEntryHtml(entry)', context);
+assert.match(unrecognizedPnl, /profit unit unknown/);
 
 context.executionDetail = detail('decimal-exec', 2, {
   legs: [leg(0, 2, { from: { CkBtc: null }, to: { CkEth: null }, evidence: [{ evidence_kind: 'receipt', source_reference: 'tx-decimal', amount_native: 123456789n, observed_at_ns: 1n }] }), leg(1, 2)],

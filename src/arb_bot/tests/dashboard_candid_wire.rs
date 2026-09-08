@@ -62,10 +62,15 @@ fn lifetime_route_summary_int_fields_round_trip_beyond_i64() {
     // (e.g. int64) would eventually overflow and silently corrupt the Cockpit
     // hero. Exercise a value wider than i64 in both the positive and negative
     // direction, in both fields independently.
-    for (stable, icp) in [
-        (123_i128, -456_i128),
-        ((1_i128 << 100) + 123, -((1_i128 << 100) + 456)),
-        (0_i128, 0_i128),
+    for (stable, icp, ckbtc, cketh) in [
+        (123_i128, -456_i128, 789_i128, -12_i128),
+        (
+            (1_i128 << 100) + 123,
+            -((1_i128 << 100) + 456),
+            (1_i128 << 100) + 789,
+            -((1_i128 << 100) + 12),
+        ),
+        (0_i128, 0_i128, 0_i128, 0_i128),
     ] {
         let summary = LifetimeRouteSummaryV1 {
             completed_count: 7,
@@ -73,6 +78,8 @@ fn lifetime_route_summary_int_fields_round_trip_beyond_i64() {
             held_inventory_count: 1,
             stable_realized_profit_usd6: stable,
             icp_realized_profit_e8s: icp,
+            ckbtc_realized_profit_sats: ckbtc,
+            cketh_realized_profit_wei: cketh,
             folded_through: 10,
         };
         let wire = candid::encode_one(&summary).expect("encode lifetime route summary");

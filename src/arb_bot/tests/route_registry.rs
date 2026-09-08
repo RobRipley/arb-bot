@@ -21,8 +21,8 @@ fn six_asset_registry_is_exact_and_code_pinned() {
             (Asset::CkUsdt, p("cngnf-vqaaa-aaaar-qag4q-cai"), "ckUSDT", 6, AssetRole::StableSettlement),
             (Asset::CkUsdc, p("xevnm-gaaaa-aaaar-qafnq-cai"), "ckUSDC", 6, AssetRole::StableSettlement),
             (Asset::Icp, p("ryjl3-tyaaa-aaaaa-aaaba-cai"), "ICP", 8, AssetRole::IcpPrincipal),
-            (Asset::CkBtc, p("mxzaz-hqaaa-aaaar-qaada-cai"), "ckBTC", 8, AssetRole::PassThroughOnly),
-            (Asset::CkEth, p("ss2fx-dyaaa-aaaar-qacoq-cai"), "ckETH", 18, AssetRole::PassThroughOnly),
+            (Asset::CkBtc, p("mxzaz-hqaaa-aaaar-qaada-cai"), "ckBTC", 8, AssetRole::NativeReturningPrincipal),
+            (Asset::CkEth, p("ss2fx-dyaaa-aaaar-qacoq-cai"), "ckETH", 18, AssetRole::NativeReturningPrincipal),
         ]
     );
 }

@@ -2064,6 +2064,12 @@ fn apply_terminal_record_to_lifetime_summary(
             CandidateClass::IcpReturning => {
                 summary.icp_realized_profit_e8s += profit;
             }
+            CandidateClass::CkBtcReturning => {
+                summary.ckbtc_realized_profit_sats += profit;
+            }
+            CandidateClass::CkEthReturning => {
+                summary.cketh_realized_profit_wei += profit;
+            }
         }
     }
 }

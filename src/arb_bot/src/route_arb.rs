@@ -63,7 +63,11 @@ impl Asset {
 pub enum AssetRole {
     StableSettlement,
     IcpPrincipal,
-    PassThroughOnly,
+    /// Not stable-settled, but — like `IcpPrincipal` — may be the start/end
+    /// principal of its own native same-asset returning cycle (ckBTC-
+    /// returning, ckETH-returning). No longer a truthful description to call
+    /// these "pass-through only": they are also principal-capable now.
+    NativeReturningPrincipal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -108,6 +112,28 @@ pub enum CandidateClass {
     StablePar,
     StableSettledCrossAsset,
     IcpReturning,
+    CkBtcReturning,
+    CkEthReturning,
+}
+
+/// Fairness lane for scheduler rotation. `StablePar` and
+/// `StableSettledCrossAsset` share one lane (they already share one
+/// best-candidate slot); every native-returning class gets its own lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RouteBookKind {
+    Stable,
+    Icp,
+    CkBtc,
+    CkEth,
+}
+
+pub fn book_for_class(class: CandidateClass) -> RouteBookKind {
+    match class {
+        CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => RouteBookKind::Stable,
+        CandidateClass::IcpReturning => RouteBookKind::Icp,
+        CandidateClass::CkBtcReturning => RouteBookKind::CkBtc,
+        CandidateClass::CkEthReturning => RouteBookKind::CkEth,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,8 +165,8 @@ pub fn asset_pins() -> Vec<AssetPin> {
         AssetPin { asset: Asset::CkUsdt, ledger: principal("cngnf-vqaaa-aaaar-qag4q-cai"), symbol: "ckUSDT", decimals: 6, role: AssetRole::StableSettlement },
         AssetPin { asset: Asset::CkUsdc, ledger: principal("xevnm-gaaaa-aaaar-qafnq-cai"), symbol: "ckUSDC", decimals: 6, role: AssetRole::StableSettlement },
         AssetPin { asset: Asset::Icp, ledger: principal("ryjl3-tyaaa-aaaaa-aaaba-cai"), symbol: "ICP", decimals: 8, role: AssetRole::IcpPrincipal },
-        AssetPin { asset: Asset::CkBtc, ledger: principal("mxzaz-hqaaa-aaaar-qaada-cai"), symbol: "ckBTC", decimals: 8, role: AssetRole::PassThroughOnly },
-        AssetPin { asset: Asset::CkEth, ledger: principal("ss2fx-dyaaa-aaaar-qacoq-cai"), symbol: "ckETH", decimals: 18, role: AssetRole::PassThroughOnly },
+        AssetPin { asset: Asset::CkBtc, ledger: principal("mxzaz-hqaaa-aaaar-qaada-cai"), symbol: "ckBTC", decimals: 8, role: AssetRole::NativeReturningPrincipal },
+        AssetPin { asset: Asset::CkEth, ledger: principal("ss2fx-dyaaa-aaaar-qacoq-cai"), symbol: "ckETH", decimals: 18, role: AssetRole::NativeReturningPrincipal },
     ]
 }
 
@@ -258,6 +284,17 @@ fn classify_path(path: &[Asset]) -> Option<CandidateClass> {
     {
         return Some(CandidateClass::IcpReturning);
     }
+    // ckBTC/ckETH-returning admits any simple same-asset cycle over the
+    // pinned pool graph — interior legs are not restricted to stable assets
+    // (unlike IcpReturning). No-repeated-asset/pool and the configured
+    // max-route-leg ceiling are already enforced by walk_routes/
+    // enumerate_routes; this only decides the profit-domain classification.
+    if start == Asset::CkBtc && end == Asset::CkBtc && path.len() > 2 {
+        return Some(CandidateClass::CkBtcReturning);
+    }
+    if start == Asset::CkEth && end == Asset::CkEth && path.len() > 2 {
+        return Some(CandidateClass::CkEthReturning);
+    }
     None
 }
 
@@ -312,7 +349,14 @@ pub fn enumerate_routes(max_legs: u8) -> Result<Vec<Route>, String> {
     }
     let all_edges = directed_edges();
     let mut routes = Vec::new();
-    for start in [Asset::IcUsd, Asset::CkUsdt, Asset::CkUsdc, Asset::Icp] {
+    for start in [
+        Asset::IcUsd,
+        Asset::CkUsdt,
+        Asset::CkUsdc,
+        Asset::Icp,
+        Asset::CkBtc,
+        Asset::CkEth,
+    ] {
         walk_routes(
             start,
             max_legs as usize,
@@ -451,6 +495,17 @@ pub fn net_profit_bps_checked(net_profit: i128, principal: u128) -> Result<i64, 
 pub enum ProfitDomain {
     StableParUsd6Dec,
     IcpE8s,
+    CkBtcSats,
+    CkEthWei,
+}
+
+fn fallback_profit_domain(start_asset: Asset) -> ProfitDomain {
+    match start_asset {
+        Asset::Icp => ProfitDomain::IcpE8s,
+        Asset::CkBtc => ProfitDomain::CkBtcSats,
+        Asset::CkEth => ProfitDomain::CkEthWei,
+        _ => ProfitDomain::StableParUsd6Dec,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -527,6 +582,14 @@ fn quote_profit(quote: &RouteQuote) -> Result<(ProfitDomain, i128, i64), String>
         let final_amount = i128::try_from(final_amount).map_err(|_| "ICP output exceeds signed P&L range")?;
         let principal = i128::try_from(quote.principal_native).map_err(|_| "ICP principal exceeds signed P&L range")?;
         (ProfitDomain::IcpE8s, final_amount.checked_sub(principal).ok_or("ICP profit overflow")?, quote.principal_native)
+    } else if quote.start_asset == Asset::CkBtc && quote.end_asset == Asset::CkBtc {
+        let final_amount = i128::try_from(final_amount).map_err(|_| "ckBTC output exceeds signed P&L range")?;
+        let principal = i128::try_from(quote.principal_native).map_err(|_| "ckBTC principal exceeds signed P&L range")?;
+        (ProfitDomain::CkBtcSats, final_amount.checked_sub(principal).ok_or("ckBTC profit overflow")?, quote.principal_native)
+    } else if quote.start_asset == Asset::CkEth && quote.end_asset == Asset::CkEth {
+        let final_amount = i128::try_from(final_amount).map_err(|_| "ckETH output exceeds signed P&L range")?;
+        let principal = i128::try_from(quote.principal_native).map_err(|_| "ckETH principal exceeds signed P&L range")?;
+        (ProfitDomain::CkEthWei, final_amount.checked_sub(principal).ok_or("ckETH profit overflow")?, quote.principal_native)
     } else {
         return Err("candidate endpoints do not share an admitted profit domain".to_string());
     };
@@ -543,8 +606,12 @@ pub fn evaluate_candidate(
     min_stable_profit_bps: i64,
     min_icp_profit_e8s: i128,
     min_icp_profit_bps: i64,
+    min_ckbtc_profit_sats: i128,
+    min_ckbtc_profit_bps: i64,
+    min_cketh_profit_wei: i128,
+    min_cketh_profit_bps: i64,
 ) -> CandidateEvaluation {
-    let fallback_domain = if quote.start_asset == Asset::Icp { ProfitDomain::IcpE8s } else { ProfitDomain::StableParUsd6Dec };
+    let fallback_domain = fallback_profit_domain(quote.start_asset);
     if quote.principal_native == 0 {
         return rejected(quote, fallback_domain, "principal must be greater than zero");
     }
@@ -616,6 +683,10 @@ pub fn evaluate_candidate(
         ProfitDomain::StableParUsd6Dec if bps < min_stable_profit_bps => Some("below stable bps threshold"),
         ProfitDomain::IcpE8s if profit < min_icp_profit_e8s => Some("below ICP absolute-profit threshold"),
         ProfitDomain::IcpE8s if bps < min_icp_profit_bps => Some("below ICP bps threshold"),
+        ProfitDomain::CkBtcSats if profit < min_ckbtc_profit_sats => Some("below ckBTC absolute-profit threshold"),
+        ProfitDomain::CkBtcSats if bps < min_ckbtc_profit_bps => Some("below ckBTC bps threshold"),
+        ProfitDomain::CkEthWei if profit < min_cketh_profit_wei => Some("below ckETH absolute-profit threshold"),
+        ProfitDomain::CkEthWei if bps < min_cketh_profit_bps => Some("below ckETH bps threshold"),
         _ => None,
     };
     CandidateEvaluation {
@@ -671,12 +742,73 @@ pub struct AssetInventoryBandV1 {
     pub ceiling_native: u64,
 }
 
+/// Per-book configuration for a native same-asset (start==end) returning
+/// book — ckBTC-returning and ckETH-returning today. Grouped into one
+/// substruct (rather than four-plus loose fields per book) so the whole
+/// book toggles as a unit on the candid wire.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct AssetReturnBookConfigV1 {
+    pub enabled: bool,
+    pub size_ladder: Vec<u64>,
+    pub max_principal_native: u64,
+    pub min_profit_native: u64,
+    pub min_profit_bps: u32,
+}
+
+impl Default for AssetReturnBookConfigV1 {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            size_ladder: vec![100_000, 500_000, 1_000_000],
+            max_principal_native: 2_000_000,
+            // A small absolute guard, not the economic gate — 50 bps against
+            // the smallest ladder rung (100,000 sats) is already 500 sats,
+            // an order of magnitude above this floor.
+            min_profit_native: 10,
+            min_profit_bps: 50,
+        }
+    }
+}
+
+impl AssetReturnBookConfigV1 {
+    /// Conservative ckETH defaults (18-decimal wei-scale units). ckETH's
+    /// larger decimal count means the ckBTC defaults above (sats-scale)
+    /// would be economically meaningless if reused verbatim.
+    fn default_cketh() -> Self {
+        Self {
+            enabled: false,
+            size_ladder: vec![
+                1_000_000_000_000_000,
+                5_000_000_000_000_000,
+                10_000_000_000_000_000,
+            ],
+            max_principal_native: 20_000_000_000_000_000,
+            // A small absolute guard, not the economic gate — 50 bps against
+            // the smallest ladder rung (1e15 wei) is already 5e12 wei, well
+            // above this floor.
+            min_profit_native: 1_000_000_000_000,
+            min_profit_bps: 50,
+        }
+    }
+}
+
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct RouteArbConfigV1 {
     pub enabled: bool,
     pub dry_run: bool,
     pub stable_book_enabled: bool,
     pub icp_book_enabled: bool,
+    /// ckBTC-returning book configuration. `None` preserves the protected
+    /// default (book disabled, inert) for pre-field configurations and for
+    /// a caller built against the pre-ckBTC/ckETH interface — see
+    /// `set_route_arb_config_v1`, which resolves an omitted field to the
+    /// currently stored value rather than clobbering it.
+    #[serde(default)]
+    pub ckbtc_book: Option<AssetReturnBookConfigV1>,
+    /// ckETH-returning book configuration. Same omission semantics as
+    /// `ckbtc_book`.
+    #[serde(default)]
+    pub cketh_book: Option<AssetReturnBookConfigV1>,
     /// Allow ckUSDC/ckUSDT-funded stable routes to settle in icUSD.
     /// `None` preserves the protected default for pre-field configurations.
     #[serde(default)]
@@ -712,6 +844,10 @@ impl Default for RouteArbConfigV1 {
             dry_run: true,
             stable_book_enabled: true,
             icp_book_enabled: true,
+            // New books ship disabled so an upgrade is inert; an admin
+            // explicitly opts in post-deploy via set_route_arb_config_v1.
+            ckbtc_book: Some(AssetReturnBookConfigV1::default()),
+            cketh_book: Some(AssetReturnBookConfigV1::default_cketh()),
             allow_wrapped_stable_to_icusd: None,
             asset_controls: Asset::ALL.into_iter().map(|asset| AssetControlV1 { asset, enabled: true }).collect(),
             pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
@@ -745,6 +881,37 @@ impl Default for RouteArbConfigV1 {
     }
 }
 
+impl RouteArbConfigV1 {
+    /// The stored/validated config always has `ckbtc_book = Some(..)`; this
+    /// falls back to the disabled default only for a config that has not
+    /// yet passed through `set_route_arb_config_v1`/`validate_route_config`
+    /// (e.g. a partially-built value in a test).
+    pub fn ckbtc_book_resolved(&self) -> AssetReturnBookConfigV1 {
+        self.ckbtc_book.clone().unwrap_or_default()
+    }
+
+    pub fn cketh_book_resolved(&self) -> AssetReturnBookConfigV1 {
+        self.cketh_book.clone().unwrap_or_else(AssetReturnBookConfigV1::default_cketh)
+    }
+}
+
+/// Merge an incoming `set_route_arb_config_v1` request against the
+/// currently stored config for the two book fields: a caller that supplies
+/// `Some(..)` for `ckbtc_book`/`cketh_book` takes effect normally; a caller
+/// built against the pre-ckBTC/ckETH interface omits the field entirely,
+/// decoding as `None` — that must preserve the currently stored book
+/// configuration rather than reverting it to the disabled default on every
+/// unrelated full-record update. Both fields are always `Some(..)` after
+/// this call, satisfying `validate_route_config`.
+pub fn resolve_incoming_book_fields(
+    mut incoming: RouteArbConfigV1,
+    current: &RouteArbConfigV1,
+) -> RouteArbConfigV1 {
+    incoming.ckbtc_book = Some(incoming.ckbtc_book.unwrap_or_else(|| current.ckbtc_book_resolved()));
+    incoming.cketh_book = Some(incoming.cketh_book.unwrap_or_else(|| current.cketh_book_resolved()));
+    incoming
+}
+
 fn exact_asset_set<T>(items: &[T], asset_of: impl Fn(&T) -> Asset) -> bool {
     let actual: std::collections::BTreeSet<_> = items.iter().map(asset_of).collect();
     actual == Asset::ALL.into_iter().collect() && items.len() == Asset::ALL.len()
@@ -754,9 +921,18 @@ pub fn validate_route_config(config: &RouteArbConfigV1) -> Result<(), String> {
     if !(1..=HARD_MAX_ROUTE_LEGS).contains(&config.max_route_legs) {
         return Err("max_route_legs must be between 1 and 4".to_string());
     }
+    // `None` (a config that predates ckBTC/ckETH, e.g. freshly decoded from a
+    // pre-upgrade stable-state blob) resolves to the disabled default, which
+    // is always valid by construction — so an un-migrated config validates
+    // successfully rather than breaking the entire route-arb engine before
+    // an admin ever calls set_route_arb_config_v1.
+    let ckbtc_book = config.ckbtc_book_resolved();
+    let cketh_book = config.cketh_book_resolved();
     for (name, ladder, maximum) in [
         ("stable", &config.stable_size_ladder, config.max_stable_principal_usd_6dec),
         ("ICP", &config.icp_size_ladder, config.max_icp_principal_e8s),
+        ("ckBTC", &ckbtc_book.size_ladder, ckbtc_book.max_principal_native),
+        ("ckETH", &cketh_book.size_ladder, cketh_book.max_principal_native),
     ] {
         if ladder.is_empty() || ladder.len() > usize::from(HARD_MAX_SIZE_LADDER_ENTRIES) {
             return Err(format!("{name} size ladder must contain 1..=16 entries"));
@@ -970,21 +1146,29 @@ pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, St
         .filter(|route| match route.candidate_class {
             CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => config.stable_book_enabled,
             CandidateClass::IcpReturning => config.icp_book_enabled,
+            CandidateClass::CkBtcReturning => config.ckbtc_book_resolved().enabled,
+            CandidateClass::CkEthReturning => config.cketh_book_resolved().enabled,
         })
         .collect::<Vec<_>>();
     let route_count = routes.len();
+    let ckbtc_book = config.ckbtc_book_resolved();
+    let cketh_book = config.cketh_book_resolved();
     let mut items = Vec::new();
     for route in routes {
-        let ladder = if route.candidate_class == CandidateClass::IcpReturning {
-            &config.icp_size_ladder
-        } else {
-            &config.stable_size_ladder
+        let ladder = match route.candidate_class {
+            CandidateClass::IcpReturning => &config.icp_size_ladder,
+            CandidateClass::CkBtcReturning => &ckbtc_book.size_ladder,
+            CandidateClass::CkEthReturning => &cketh_book.size_ladder,
+            CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => &config.stable_size_ladder,
         };
         for (index, configured_size) in ladder.iter().enumerate() {
-            let principal_native = if route.candidate_class == CandidateClass::IcpReturning {
-                *configured_size
-            } else {
-                native_stable_principal(*configured_size, route.start_asset())?
+            let principal_native = match route.candidate_class {
+                CandidateClass::IcpReturning | CandidateClass::CkBtcReturning | CandidateClass::CkEthReturning => {
+                    *configured_size
+                }
+                CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => {
+                    native_stable_principal(*configured_size, route.start_asset())?
+                }
             };
             items.push(RouteWorkItem {
                 work_id: format!("{}#s{:02}", route.route_id, index),
@@ -1129,10 +1313,11 @@ pub struct RouteCandidateReportV1 {
 impl RouteCandidateReportV1 {
     /// Deterministic constructor used by pure observation-state tests.
     pub fn fixture(id: &str, class: CandidateClass, profit: i64, eligible: bool) -> Self {
-        let (start, end) = if class == CandidateClass::IcpReturning {
-            (Asset::Icp, Asset::Icp)
-        } else {
-            (Asset::CkUsdc, Asset::CkUsdc)
+        let (start, end) = match class {
+            CandidateClass::IcpReturning => (Asset::Icp, Asset::Icp),
+            CandidateClass::CkBtcReturning => (Asset::CkBtc, Asset::CkBtc),
+            CandidateClass::CkEthReturning => (Asset::CkEth, Asset::CkEth),
+            CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => (Asset::CkUsdc, Asset::CkUsdc),
         };
         Self {
             route_id: id.to_string(), canonical_cycle_id: None, candidate_class: class,
@@ -1162,8 +1347,16 @@ pub struct ObservationAccumulatorV1 {
     pub completed_at_ns: Option<u64>,
     pub provisional_best_stable_candidate: Option<RouteCandidateReportV1>,
     pub provisional_best_icp_candidate: Option<RouteCandidateReportV1>,
+    #[serde(default)]
+    pub provisional_best_ckbtc_candidate: Option<RouteCandidateReportV1>,
+    #[serde(default)]
+    pub provisional_best_cketh_candidate: Option<RouteCandidateReportV1>,
     pub best_stable_candidate: Option<RouteCandidateReportV1>,
     pub best_icp_candidate: Option<RouteCandidateReportV1>,
+    #[serde(default)]
+    pub best_ckbtc_candidate: Option<RouteCandidateReportV1>,
+    #[serde(default)]
+    pub best_cketh_candidate: Option<RouteCandidateReportV1>,
     pub incident: Option<String>,
 }
 
@@ -1182,7 +1375,9 @@ impl ObservationAccumulatorV1 {
             quote_calls_made: 0, full_fill_rejections: 0, candidates_evaluated: 0,
             scan_complete: false, completed_at_ns: None,
             provisional_best_stable_candidate: None, provisional_best_icp_candidate: None,
-            best_stable_candidate: None, best_icp_candidate: None, incident: None,
+            provisional_best_ckbtc_candidate: None, provisional_best_cketh_candidate: None,
+            best_stable_candidate: None, best_icp_candidate: None,
+            best_ckbtc_candidate: None, best_cketh_candidate: None, incident: None,
         }
     }
 }
@@ -1238,6 +1433,8 @@ pub fn accumulate_observation_batch(
         match candidate.candidate_class {
             CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => replace_best(&mut state.provisional_best_stable_candidate, candidate),
             CandidateClass::IcpReturning => replace_best(&mut state.provisional_best_icp_candidate, candidate),
+            CandidateClass::CkBtcReturning => replace_best(&mut state.provisional_best_ckbtc_candidate, candidate),
+            CandidateClass::CkEthReturning => replace_best(&mut state.provisional_best_cketh_candidate, candidate),
         }
     }
     if next == state.total_work_items {
@@ -1245,6 +1442,8 @@ pub fn accumulate_observation_batch(
         if state.quote_call_budget_sufficient {
             state.best_stable_candidate = state.provisional_best_stable_candidate.clone();
             state.best_icp_candidate = state.provisional_best_icp_candidate.clone();
+            state.best_ckbtc_candidate = state.provisional_best_ckbtc_candidate.clone();
+            state.best_cketh_candidate = state.provisional_best_cketh_candidate.clone();
         } else {
             state.incident = Some("complete route-and-size universe exceeds configured quote-call budget".to_string());
         }
@@ -1274,6 +1473,8 @@ pub struct BestRouteCandidatesV1 {
     pub scan_complete: bool,
     pub stable: Option<RouteCandidateReportV1>,
     pub icp: Option<RouteCandidateReportV1>,
+    pub ckbtc: Option<RouteCandidateReportV1>,
+    pub cketh: Option<RouteCandidateReportV1>,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -1323,6 +1524,8 @@ pub struct OwnershipReservationV1 {
 pub enum HeldBasisV1 {
     StablePar { start_asset: Asset, principal_native: u64, principal_usd_6dec: u64 },
     IcpNative { principal_icp_e8s: u64 },
+    CkBtcNative { principal_ckbtc_sats: u64 },
+    CkEthNative { principal_cketh_wei: u64 },
     LegacyUnknown { preserved_pending_fields: String },
 }
 
@@ -1488,6 +1691,14 @@ pub struct LifetimeRouteSummaryV1 {
     /// Sum of `realized_profit` (ICP, 8-decimal e8s) across terminal
     /// executions whose `candidate_class` is `IcpReturning`.
     pub icp_realized_profit_e8s: i128,
+    /// Sum of `realized_profit` (ckBTC, 8-decimal satoshis) across terminal
+    /// executions whose `candidate_class` is `CkBtcReturning`.
+    #[serde(default)]
+    pub ckbtc_realized_profit_sats: i128,
+    /// Sum of `realized_profit` (ckETH, 18-decimal native units) across
+    /// terminal executions whose `candidate_class` is `CkEthReturning`.
+    #[serde(default)]
+    pub cketh_realized_profit_wei: i128,
     pub folded_through: u64,
 }
 
@@ -1522,6 +1733,12 @@ pub fn prepare_execution(
         }
         CandidateClass::IcpReturning => {
             candidate.start_asset == Asset::Icp && candidate.end_asset == Asset::Icp
+        }
+        CandidateClass::CkBtcReturning => {
+            candidate.start_asset == Asset::CkBtc && candidate.end_asset == Asset::CkBtc
+        }
+        CandidateClass::CkEthReturning => {
+            candidate.start_asset == Asset::CkEth && candidate.end_asset == Asset::CkEth
         }
     };
     if !endpoint_valid {
@@ -1888,10 +2105,14 @@ async fn quote_work_item_live(
     };
     quote.allowance_sufficient = Some(allowance_sufficient);
     let bands = inventory_bands_from_config(config);
+    let ckbtc_book = config.ckbtc_book_resolved();
+    let cketh_book = config.cketh_book_resolved();
     let evaluation = evaluate_candidate(
         &quote, balances, reservations, &bands,
         i128::from(config.min_stable_profit_usd_6dec), i64::from(config.min_stable_profit_bps),
         i128::from(config.min_icp_profit_e8s), i64::from(config.min_icp_profit_bps),
+        i128::from(ckbtc_book.min_profit_native), i64::from(ckbtc_book.min_profit_bps),
+        i128::from(cketh_book.min_profit_native), i64::from(cketh_book.min_profit_bps),
     );
     (candidate_report(item, &quote, evaluation, allowance_sufficient), quote_calls, false)
 }

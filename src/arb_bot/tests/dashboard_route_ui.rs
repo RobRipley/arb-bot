@@ -369,6 +369,17 @@ fn realized_profit_totals_preserve_candidate_units() {
     assert!(results.contains("icpResult"));
     assert!(cockpit.contains("Stable profit") || cockpit.contains("USD realized"));
     assert!(cockpit.contains("ICP profit") || cockpit.contains("ICP realized"));
+    // ckBTC/ckETH-returning books: today's realized-result bucket must
+    // recognize both candidate classes rather than silently dropping their
+    // profit into no bucket at all.
+    assert!(results.contains("CkBtcReturning"));
+    assert!(results.contains("CkEthReturning"));
+    assert!(results.contains("ckbtcRealized"));
+    assert!(results.contains("ckethRealized"));
+    assert!(results.contains("ckbtcResult"));
+    assert!(results.contains("ckethResult"));
+    assert!(cockpit.contains("ckBTC profit"));
+    assert!(cockpit.contains("ckETH profit"));
 }
 
 #[test]
@@ -556,6 +567,12 @@ fn cockpit_hero_shows_live_route_pnl_and_frozen_legacy_breakdown_separately() {
         "Legacy net P&amp;L",
         "frozen at Stage-1 cutover",
         "inventory recovery",
+        // ckBTC/ckETH-returning books. The hero must report their all-time
+        // totals (native ckBTC sats / ckETH wei) alongside stable/ICP.
+        "ckbtc_realized_profit_sats",
+        "cketh_realized_profit_wei",
+        "ckBTC-returning, all-time",
+        "ckETH-returning, all-time",
     ] {
         assert!(cockpit.contains(marker), "cockpit hero missing marker: {marker}");
     }
@@ -627,7 +644,203 @@ fn dashboard_declares_lifetime_route_summary_query_consistently() {
         "stable_realized_profit_usd6: I.Int",
         "icp_realized_profit_e8s: I.Int",
         "get_lifetime_route_summary_v1: I.Func([], [LifetimeRouteSummaryV1], ['query'])",
+        // Unlike the always-present stable/icp totals, the ckBTC/ckETH
+        // native totals are opt int on the wire — a book with no completed
+        // executions yet reports None, not zero.
+        "ckbtc_realized_profit_sats: I.Opt(I.Int)",
+        "cketh_realized_profit_wei: I.Opt(I.Int)",
     ] {
         assert!(DASHBOARD.contains(marker), "dashboard IDL missing marker: {marker}");
     }
+}
+
+#[test]
+fn cockpit_hero_unwraps_ckbtc_and_cketh_lifetime_profit_through_route_opt() {
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in [
+        "routeOpt(lifetime.ckbtc_realized_profit_sats)",
+        "routeOpt(lifetime.cketh_realized_profit_wei)",
+    ] {
+        assert!(cockpit.contains(marker), "cockpit hero must unwrap the opt-int lifetime field through routeOpt: {marker}");
+    }
+    // A raw `!= null` check on the un-unwrapped opt (an array) is always
+    // true, silently defeating the None/zero distinction the backend added
+    // opt int specifically to express.
+    assert!(!cockpit.contains("lifetime.ckbtc_realized_profit_sats != null"));
+    assert!(!cockpit.contains("lifetime.cketh_realized_profit_wei != null"));
+}
+
+#[test]
+fn dashboard_idl_declares_ckbtc_and_cketh_returning_books() {
+    for marker in [
+        // CandidateClass gains the two new book classes.
+        "CkBtcReturning: I.Null, CkEthReturning: I.Null",
+        // RouteArbConfigV1 carries each book as an opt nested record — not
+        // a flat book_enabled/size_ladder/max_principal/min_profit field
+        // set — since a book with no config yet is absent, not zeroed.
+        "const AssetReturnBookConfigV1 = I.Record({",
+        "enabled: I.Bool, size_ladder: I.Vec(I.Nat64)",
+        "max_principal_native: I.Nat64, min_profit_native: I.Nat64, min_profit_bps: I.Nat32",
+        "ckbtc_book: I.Opt(AssetReturnBookConfigV1), cketh_book: I.Opt(AssetReturnBookConfigV1)",
+        // ObservationAccumulatorV1 / BestRouteCandidatesV1 gain best/provisional candidates.
+        "best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
+        "provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1)",
+        "best_cketh_candidate: I.Opt(RouteCandidateReportV1)",
+        "provisional_best_cketh_candidate: I.Opt(RouteCandidateReportV1)",
+        "ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1)",
+        // HeldBasisV1 gains native-basis variants for held ckBTC/ckETH inventory.
+        "CkBtcNative: I.Record({ principal_ckbtc_sats: I.Nat64 })",
+        "CkEthNative: I.Record({ principal_cketh_wei: I.Nat64 })",
+    ] {
+        assert!(DASHBOARD.contains(marker), "dashboard IDL missing ckBTC/ckETH marker: {marker}");
+    }
+    // The old flat per-book config fields must be fully gone, not just
+    // superseded — a leftover flat field would mean stale dead IDL.
+    for retired in [
+        "ckbtc_book_enabled",
+        "cketh_book_enabled",
+        "ckbtc_size_ladder",
+        "cketh_size_ladder",
+        "max_ckbtc_principal_native",
+        "max_cketh_principal_native",
+        "min_ckbtc_profit_native",
+        "min_cketh_profit_native",
+        "principal_ckbtc_native",
+        "principal_cketh_native",
+        "ckbtc_realized_profit_native",
+        "cketh_realized_profit_native",
+    ] {
+        assert!(!DASHBOARD.contains(retired), "retired flat ckBTC/ckETH field still present: {retired}");
+    }
+}
+
+#[test]
+fn route_aggregate_state_watches_ckbtc_and_cketh_candidate_freshness() {
+    let aggregate = rendered_region("function routeAggregateState()", "function updateFreshnessIndicator()");
+    for marker in [
+        "routeOpt(candidates.stable)",
+        "routeOpt(candidates.icp)",
+        "routeOpt(candidates.ckbtc)",
+        "routeOpt(candidates.cketh)",
+    ] {
+        assert!(aggregate.contains(marker), "top-level freshness must watch every enabled return book's candidate: {marker}");
+    }
+}
+
+#[test]
+fn route_execution_leg_count_fallback_covers_ckbtc_and_cketh_candidates() {
+    let leg_count_fn = rendered_region("function routeExecutionLegCount(execution)", "function cockpitExecutionLegLabel");
+    for marker in [
+        "routeOpt(candidates.stable)",
+        "routeOpt(candidates.icp)",
+        "routeOpt(candidates.ckbtc)",
+        "routeOpt(candidates.cketh)",
+    ] {
+        assert!(leg_count_fn.contains(marker), "leg-count fallback must search every return book's candidate: {marker}");
+    }
+}
+
+#[test]
+fn markets_shows_four_candidate_books() {
+    let route_panel = rendered_region("function routeArbitrageHtml()", "async function loadTerminalExecutionsForToday");
+    for marker in [
+        "g-cols-4",
+        "route-stable-candidate",
+        "route-icp-candidate",
+        "route-ckbtc-candidate",
+        "route-cketh-candidate",
+        "Best stable-returning route",
+        "Best ICP-returning route",
+        "Best ckBTC-returning route",
+        "Best ckETH-returning route",
+    ] {
+        assert!(route_panel.contains(marker), "Markets missing candidate-book marker: {marker}");
+    }
+}
+
+#[test]
+fn route_arbitrage_subtitle_names_all_four_return_books() {
+    let route_panel = rendered_region("function routeArbitrageHtml()", "async function loadTerminalExecutionsForToday");
+    for marker in ["stablecoin", "ICP", "ckBTC", "ckETH", "return book"] {
+        assert!(route_panel.contains(marker), "route arbitrage subtitle missing book: {marker}");
+    }
+    assert!(
+        !route_panel.contains("begin and end in a stablecoin or begin and end in ICP"),
+        "the stale two-book subtitle must not survive alongside the four-book Markets grid"
+    );
+}
+
+#[test]
+fn ckbtc_and_cketh_native_values_avoid_number_precision_loss() {
+    // The configured ckETH size ladder / principal cap and any wei-scale
+    // P&L routinely exceed 2^53 (0.01 ckETH is already ~1e16 wei); fmtTok
+    // and a bare Number(...) both round-trip through a JS double and
+    // silently corrupt values above that threshold. Every ckBTC/ckETH
+    // native-amount call site below must use the exact, BigInt-safe
+    // routeLedgerFormatAmount instead.
+    let settings_fn = rendered_region("function routeBookSettingsHtml", "function routeArbitrageHtml()");
+    assert!(settings_fn.contains("routeLedgerFormatAmount"));
+    assert!(!settings_fn.contains("fmtTok("), "Ops book settings must not round-trip ckBTC/ckETH native amounts through Number");
+
+    let today_results = rendered_region("function cockpitTodayResults", "function cockpitStatus");
+    for marker in ["routeLedgerFormatAmount(ckbtcRealized, 8)", "routeLedgerFormatAmount(ckethRealized, 18)"] {
+        assert!(today_results.contains(marker), "cockpitTodayResults missing exact ckBTC/ckETH formatting: {marker}");
+    }
+    assert!(!today_results.contains("fmtTok(ckbtcRealized"));
+    assert!(!today_results.contains("fmtTok(ckethRealized"));
+
+    let cockpit = rendered_region("function renderCockpit()", "// ═══════ Markets");
+    for marker in ["routeLedgerFormatAmount(ckbtcLifetimeProfit, 8)", "routeLedgerFormatAmount(ckethLifetimeProfit, 18)"] {
+        assert!(cockpit.contains(marker), "cockpit hero missing exact ckBTC/ckETH formatting: {marker}");
+    }
+    assert!(!cockpit.contains("fmtTok(lifetime.ckbtc_realized_profit_sats"));
+    assert!(!cockpit.contains("fmtTok(lifetime.cketh_realized_profit_wei"));
+
+    let runtime = rendered_region("function routeRuntimeHtml()", "window.setRouteTrading");
+    assert!(runtime.contains("routeLedgerFormatAmount(profit, profitUnit.decimals)"));
+    assert!(!runtime.contains("Number(profit)"), "latest realized result must not convert an arbitrary-precision profit through Number");
+}
+
+#[test]
+fn ops_exposes_ckbtc_and_cketh_book_toggles_and_settings() {
+    let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
+    for marker in [
+        "leverCkBtcBookEnabled()",
+        "leverCkEthBookEnabled()",
+        "ckbtc_book",
+        "cketh_book",
+        "ckBTC-returning book",
+        "ckETH-returning book",
+        "routeBookSettingsHtml('ckbtc_book'",
+        "routeBookSettingsHtml('cketh_book'",
+        "Not configured server-side yet",
+    ] {
+        assert!(ops.contains(marker), "Ops missing ckBTC/ckETH book marker: {marker}");
+    }
+    // The generic handler round-trips the whole config through
+    // set_route_arb_config_v1 (there is no dedicated setter yet), flipping
+    // only the nested book's `enabled` field, and must invalidate cached
+    // quotes the same way the ck-stable-exit lever does. A book that is
+    // still `None` server-side has no size ladder/principal/profit floor to
+    // preserve, so toggling it must refuse rather than fabricate one.
+    assert!(DASHBOARD.contains("window.leverRouteBookEnabled"));
+    assert!(DASHBOARD.contains("[bookKey]: [{ ...book, enabled: !book.enabled }]"));
+    assert!(DASHBOARD.contains("has no server-side configuration yet"));
+}
+
+#[test]
+fn ledger_pnl_handles_ckbtc_and_cketh_returning_without_an_unknown_unit_fallback() {
+    let pnl = rendered_region("function routeLedgerPnlHtml", "function routeLedgerFlowStage");
+    assert!(pnl.contains("routeProfitUnit(record.candidate_class)"));
+    assert!(pnl.contains("profit unit unknown"), "a true-unknown fallback must still exist for future classes");
+    // routeProfitUnit is the single source of truth for candidate-class ->
+    // unit/decimals; confirm it actually names the two new classes rather
+    // than only being wired up for the pre-existing three.
+    let unit_map = rendered_region("const ROUTE_PROFIT_UNITS = {", "function routeProfitUnit");
+    assert!(unit_map.contains("CkBtcReturning"));
+    assert!(unit_map.contains("CkEthReturning"));
+    assert!(unit_map.contains("'ckBTC'"));
+    assert!(unit_map.contains("'ckETH'"));
+    assert!(unit_map.contains("decimals: 8"));
+    assert!(unit_map.contains("decimals: 18"));
 }

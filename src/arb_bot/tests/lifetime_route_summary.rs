@@ -77,13 +77,28 @@ fn new_terminal_completions_fold_exactly_once_across_all_phases_and_classes() {
         None,
     ))
     .unwrap();
+    state::complete_current_route_execution(record(
+        "lifetime-fold-ckbtc-returning",
+        ExecutionPhaseV1::Completed,
+        CandidateClass::CkBtcReturning,
+        Some(1_234),
+    ))
+    .unwrap();
+    state::complete_current_route_execution(record(
+        "lifetime-fold-cketh-returning",
+        ExecutionPhaseV1::Completed,
+        CandidateClass::CkEthReturning,
+        Some(-5_678),
+    ))
+    .unwrap();
 
     let after = state::get_lifetime_route_summary();
 
-    // All three Completed-phase records above (StablePar, StableSettledCrossAsset,
-    // IcpReturning) count toward "Completed"; the two stable-book candidate
-    // classes additionally bucket into the same USD6 profit sum below.
-    assert_eq!(after.completed_count, before.completed_count + 3);
+    // All five Completed-phase records above (StablePar, StableSettledCrossAsset,
+    // IcpReturning, CkBtcReturning, CkEthReturning) count toward "Completed";
+    // the two stable-book candidate classes additionally bucket into the same
+    // USD6 profit sum below, and ckBTC/ckETH each keep their own native total.
+    assert_eq!(after.completed_count, before.completed_count + 5);
     assert_eq!(after.aborted_count, before.aborted_count + 1);
     assert_eq!(after.held_inventory_count, before.held_inventory_count + 1);
     assert_eq!(
@@ -94,9 +109,17 @@ fn new_terminal_completions_fold_exactly_once_across_all_phases_and_classes() {
         after.icp_realized_profit_e8s,
         before.icp_realized_profit_e8s - 20
     );
+    assert_eq!(
+        after.ckbtc_realized_profit_sats,
+        before.ckbtc_realized_profit_sats + 1_234
+    );
+    assert_eq!(
+        after.cketh_realized_profit_wei,
+        before.cketh_realized_profit_wei - 5_678
+    );
     // None-profit terminal records (Aborted/HeldInventory here) must not
-    // perturb either profit bucket beyond the two completions above.
-    assert_eq!(after.folded_through, before.folded_through + 5);
+    // perturb any profit bucket beyond the four completions above.
+    assert_eq!(after.folded_through, before.folded_through + 7);
 }
 
 #[test]

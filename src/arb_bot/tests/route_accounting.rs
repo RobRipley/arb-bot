@@ -111,16 +111,14 @@ fn fee_recurrence_and_dual_thresholds_drive_stable_eligibility() {
         500_000,
         50,
         0,
-        0,
-    );
+        0, 0, 0, 0, 0);
     assert!(evaluation.eligible, "{:?}", evaluation.rejection_reason);
     assert_eq!(evaluation.profit_domain, ProfitDomain::StableParUsd6Dec);
     assert_eq!(evaluation.net_profit_native, 1_000_000);
     assert_eq!(evaluation.net_profit_bps, 100);
 
     let below_absolute = evaluate_candidate(
-        &stable_quote(100_400_000), &balances, &reservations, &bands, 500_000, 10, 0, 0,
-    );
+        &stable_quote(100_400_000), &balances, &reservations, &bands, 500_000, 10, 0, 0, 0, 0, 0, 0);
     assert!(!below_absolute.eligible);
     assert_eq!(below_absolute.rejection_reason.as_deref(), Some("below stable absolute-profit threshold"));
 }
@@ -130,18 +128,18 @@ fn malformed_chain_partial_fill_unknown_allowance_and_inventory_fail_closed() {
     let (balances, reservations, bands) = permissive_context();
     let mut quote = stable_quote(101_000_000);
     quote.legs[1].venue_input += 1;
-    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0).eligible);
+    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
 
     let mut quote = stable_quote(101_000_000);
     quote.legs[0].full_fill = false;
-    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0).eligible);
+    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
 
     let mut quote = stable_quote(101_000_000);
     quote.allowance_sufficient = None;
-    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0).eligible);
+    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
 
     let low_balance = amounts(&[(Asset::CkUsdc, Some(99_999_999))]);
-    assert!(!evaluate_candidate(&stable_quote(101_000_000), &low_balance, &reservations, &bands, 1, 1, 0, 0).eligible);
+    assert!(!evaluate_candidate(&stable_quote(101_000_000), &low_balance, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
 }
 
 #[test]
@@ -155,8 +153,7 @@ fn same_asset_terminal_ceiling_uses_post_debit_balance() {
     bands.set(Asset::CkUsdc, 0, 1_001_000_000);
     bands.set(Asset::IcUsd, 0, u128::MAX);
     let result = evaluate_candidate(
-        &stable_quote(101_000_000), &balances, &reservations, &bands, 1, 1, 0, 0,
-    );
+        &stable_quote(101_000_000), &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
     assert!(result.eligible, "principal is removed before same-token proceeds return: {:?}", result.rejection_reason);
 }
 
@@ -173,7 +170,7 @@ fn icp_profit_stays_native_and_changed_stable_terminal_uses_par() {
             QuoteLeg { edge_id: "b".into(), from: Asset::IcUsd, to: Asset::Icp, wallet_before: 1_000_000_000, entry_ledger_fee: 100_000, venue_input: 999_900_000, gross_output: 101_010_000, output_ledger_fee: 10_000, wallet_after: 101_000_000, dex_fee_native: 1, full_fill: true },
         ], allowance_sufficient: Some(true), quoted_at_ns: 1, size_ladder_index: 0,
     };
-    let evaluated = evaluate_candidate(&icp, &balances, &reservations, &bands, 0, 0, 500_000, 50);
+    let evaluated = evaluate_candidate(&icp, &balances, &reservations, &bands, 0, 0, 500_000, 50, 0, 0, 0, 0);
     assert!(evaluated.eligible);
     assert_eq!(evaluated.profit_domain, ProfitDomain::IcpE8s);
     assert_eq!(evaluated.net_profit_native, 1_000_000);
@@ -185,7 +182,7 @@ fn icp_profit_stays_native_and_changed_stable_terminal_uses_par() {
         legs: vec![QuoteLeg { edge_id: "c".into(), from: Asset::CkUsdc, to: Asset::IcUsd, wallet_before: 100_000_000, entry_ledger_fee: 10_000, venue_input: 99_990_000, gross_output: 10_100_100_000, output_ledger_fee: 100_000, wallet_after: 10_100_000_000, dex_fee_native: 1, full_fill: true }],
         allowance_sufficient: Some(true), quoted_at_ns: 1, size_ladder_index: 0,
     };
-    let evaluated = evaluate_candidate(&changed, &balances, &reservations, &bands, 1, 1, 0, 0);
+    let evaluated = evaluate_candidate(&changed, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
     assert!(evaluated.eligible && evaluated.par_assumption);
     assert_eq!(evaluated.net_profit_native, 1_000_000);
 }
@@ -219,12 +216,12 @@ fn changed_stable_terminal_floor_is_enforced() {
     };
 
     bands.set(Asset::IcUsd, 1_010_100_000_001, u128::MAX);
-    let below_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0);
+    let below_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
     assert!(!below_floor.eligible);
     assert_eq!(below_floor.rejection_reason.as_deref(), Some("IcUsd inventory floor breached"));
 
     bands.set(Asset::IcUsd, 1_010_100_000_000, u128::MAX);
-    let at_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0);
+    let at_floor = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
     assert!(at_floor.eligible, "terminal balance reaches configured floor: {:?}", at_floor.rejection_reason);
 }
 

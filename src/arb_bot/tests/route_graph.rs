@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 #[test]
 fn exact_bounded_route_universe_is_stable() {
     let routes = enumerate_routes(4).expect("valid bound");
-    assert_eq!(routes.len(), 696);
+    assert_eq!(routes.len(), 870);
     let by_length = (1..=4)
         .map(|length| routes.iter().filter(|route| route.edges.len() == length).count())
         .collect::<Vec<_>>();
-    assert_eq!(by_length, vec![12, 44, 190, 450]);
+    assert_eq!(by_length, vec![12, 44, 228, 586]);
     assert!(routes.windows(2).all(|pair| pair[0].route_id < pair[1].route_id));
     assert_eq!(
         routes.iter().map(|route| route.route_id.as_str()).collect::<BTreeSet<_>>().len(),
@@ -19,14 +19,21 @@ fn exact_bounded_route_universe_is_stable() {
 }
 
 #[test]
-fn route_shapes_match_the_three_economic_classes() {
+fn exact_route_universe_breaks_down_by_candidate_class() {
+    let routes = enumerate_routes(4).expect("valid bound");
+    let count = |class: CandidateClass| routes.iter().filter(|route| route.candidate_class == class).count();
+    assert_eq!(count(CandidateClass::StablePar), 66);
+    assert_eq!(count(CandidateClass::StableSettledCrossAsset), 600);
+    assert_eq!(count(CandidateClass::IcpReturning), 30);
+    assert_eq!(count(CandidateClass::CkBtcReturning), 104);
+    assert_eq!(count(CandidateClass::CkEthReturning), 70);
+}
+
+#[test]
+fn route_shapes_match_the_five_economic_classes() {
     for route in enumerate_routes(4).unwrap() {
         assert!(route.edges.len() <= 4);
         assert_eq!(route.asset_path.len(), route.edges.len() + 1);
-        assert_ne!(route.start_asset(), Asset::CkBtc);
-        assert_ne!(route.start_asset(), Asset::CkEth);
-        assert_ne!(route.end_asset(), Asset::CkBtc);
-        assert_ne!(route.end_asset(), Asset::CkEth);
         match route.candidate_class {
             CandidateClass::StablePar => {
                 assert!(route.asset_path.iter().all(|asset| asset.is_stable()));
@@ -42,8 +49,53 @@ fn route_shapes_match_the_three_economic_classes() {
                     .iter()
                     .all(|asset| asset.is_stable()));
             }
+            // Unlike IcpReturning, ckBTC/ckETH-returning admits any simple
+            // same-asset cycle over the pinned graph — interior legs are not
+            // restricted to stable assets.
+            CandidateClass::CkBtcReturning => {
+                assert_eq!(route.start_asset(), Asset::CkBtc);
+                assert_eq!(route.end_asset(), Asset::CkBtc);
+            }
+            CandidateClass::CkEthReturning => {
+                assert_eq!(route.start_asset(), Asset::CkEth);
+                assert_eq!(route.end_asset(), Asset::CkEth);
+            }
         }
     }
+}
+
+/// Required example shape: ckBTC -> ckETH -> ckUSDC -> ckBTC, a 3-leg
+/// CkBtcReturning cycle whose interior passes through another pass-through
+/// asset (ckETH) rather than a stable asset only.
+#[test]
+fn ckbtc_returning_admits_the_ckbtc_cketh_ckusdc_cycle() {
+    let routes = enumerate_routes(4).unwrap();
+    let found = routes.iter().find(|route| {
+        route.candidate_class == CandidateClass::CkBtcReturning
+            && route.asset_path == vec![Asset::CkBtc, Asset::CkEth, Asset::CkUsdc, Asset::CkBtc]
+    });
+    assert!(found.is_some(), "expected a ckBTC->ckETH->ckUSDC->ckBTC route in the universe");
+    let route = found.unwrap();
+    assert_eq!(route.edges.len(), 3);
+    let pool_ids: BTreeSet<_> = route.edges.iter().map(|edge| edge.pool_id).collect();
+    assert_eq!(pool_ids.len(), 3, "each leg must use a distinct pinned pool");
+}
+
+/// Required example shape: ckETH -> ICP -> ckUSDC -> ckETH, a 3-leg
+/// CkEthReturning cycle whose interior passes through ICP rather than a
+/// stable asset only.
+#[test]
+fn cketh_returning_admits_the_cketh_icp_ckusdc_cycle() {
+    let routes = enumerate_routes(4).unwrap();
+    let found = routes.iter().find(|route| {
+        route.candidate_class == CandidateClass::CkEthReturning
+            && route.asset_path == vec![Asset::CkEth, Asset::Icp, Asset::CkUsdc, Asset::CkEth]
+    });
+    assert!(found.is_some(), "expected a ckETH->ICP->ckUSDC->ckETH route in the universe");
+    let route = found.unwrap();
+    assert_eq!(route.edges.len(), 3);
+    let pool_ids: BTreeSet<_> = route.edges.iter().map(|edge| edge.pool_id).collect();
+    assert_eq!(pool_ids.len(), 3, "each leg must use a distinct pinned pool");
 }
 
 #[test]

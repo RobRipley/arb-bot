@@ -282,9 +282,25 @@ fn get_config() -> BotConfig {
     state::read_state(|s| s.config.clone())
 }
 
+/// Reads the stored route-arb config, normalizing `ckbtc_book`/`cketh_book`
+/// to `Some(disabled default)` for display when a pre-ckBTC/ckETH stable
+/// state blob has not yet been touched by `set_route_arb_config_v1` (which
+/// would otherwise normalize them on write). This is read-only — the
+/// returned value is a detached clone, never written back to state — so an
+/// admin can flip either book on immediately after the upgrade without a
+/// separate initialization call first.
 #[query]
 fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
-    state::read_state(|s| s.route_arb.clone())
+    state::read_state(|s| {
+        let mut config = s.route_arb.clone();
+        if config.ckbtc_book.is_none() {
+            config.ckbtc_book = Some(config.ckbtc_book_resolved());
+        }
+        if config.cketh_book.is_none() {
+            config.cketh_book = Some(config.cketh_book_resolved());
+        }
+        config
+    })
 }
 
 #[update]
@@ -294,6 +310,7 @@ fn set_route_arb_config_v1(mut config: route_arb::RouteArbConfigV1) -> Result<()
         // This field has a dedicated setter so a stale full-record client
         // cannot silently undo the inventory-protection policy.
         config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd;
+        config = route_arb::resolve_incoming_book_fields(config, &s.route_arb);
         route_arb::validate_route_config(&config)?;
         s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
             .ok_or_else(|| "route config generation exhausted".to_string())?;
@@ -472,9 +489,11 @@ fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
             scan_complete: observation.scan_complete,
             stable: observation.best_stable_candidate.clone(),
             icp: observation.best_icp_candidate.clone(),
+            ckbtc: observation.best_ckbtc_candidate.clone(),
+            cketh: observation.best_cketh_candidate.clone(),
         },
         None => route_arb::BestRouteCandidatesV1 {
-            observation_id: None, scan_complete: false, stable: None, icp: None,
+            observation_id: None, scan_complete: false, stable: None, icp: None, ckbtc: None, cketh: None,
         },
     })
 }
@@ -652,6 +671,60 @@ mod route_execution_detail_query_tests {
         )
         .unwrap();
         assert_eq!(actual, expected);
+    }
+}
+
+#[cfg(test)]
+mod route_arb_config_query_tests {
+    use super::*;
+
+    fn state_with_route_arb(route_arb: route_arb::RouteArbConfigV1) -> state::BotState {
+        let mut state = state::BotState::default();
+        state.route_arb = route_arb;
+        state
+    }
+
+    #[test]
+    fn normalizes_none_books_to_disabled_defaults_without_mutating_state() {
+        let mut route_arb = route_arb::RouteArbConfigV1::default();
+        route_arb.ckbtc_book = None;
+        route_arb.cketh_book = None;
+        state::init_state(state_with_route_arb(route_arb));
+
+        let returned = get_route_arb_config_v1();
+        let ckbtc = returned.ckbtc_book.expect("ckbtc_book must be normalized to Some");
+        let cketh = returned.cketh_book.expect("cketh_book must be normalized to Some");
+        assert!(!ckbtc.enabled, "normalized default must stay disabled");
+        assert!(!cketh.enabled, "normalized default must stay disabled");
+        assert_eq!(ckbtc, route_arb::AssetReturnBookConfigV1::default());
+        assert_eq!(
+            cketh,
+            route_arb::RouteArbConfigV1::default().cketh_book_resolved(),
+            "ckETH normalizes to its own (18-decimal) default, not the ckBTC default"
+        );
+
+        // The query must be read-only: the stored state still decodes None.
+        let stored = state::read_state(|s| (s.route_arb.ckbtc_book.clone(), s.route_arb.cketh_book.clone()));
+        assert_eq!(stored, (None, None), "get_route_arb_config_v1 must not write back to state");
+    }
+
+    #[test]
+    fn preserves_a_populated_stored_book_exactly() {
+        let custom_ckbtc = route_arb::AssetReturnBookConfigV1 {
+            enabled: true,
+            size_ladder: vec![7, 77, 777],
+            max_principal_native: 1_000,
+            min_profit_native: 3,
+            min_profit_bps: 12,
+        };
+        let mut route_arb = route_arb::RouteArbConfigV1::default();
+        route_arb.ckbtc_book = Some(custom_ckbtc.clone());
+        route_arb.cketh_book = None;
+        state::init_state(state_with_route_arb(route_arb));
+
+        let returned = get_route_arb_config_v1();
+        assert_eq!(returned.ckbtc_book, Some(custom_ckbtc), "a populated book must round-trip unchanged");
+        assert!(returned.cketh_book.is_some(), "the still-absent book is normalized independently");
     }
 }
 

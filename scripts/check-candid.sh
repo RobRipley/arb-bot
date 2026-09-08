@@ -70,11 +70,12 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 RUST_LIB="$ROOT/src/arb_bot/src/lib.rs"
 RUST_STATE="$ROOT/src/arb_bot/src/state.rs"
+RUST_ROUTE_ARB="$ROOT/src/arb_bot/src/route_arb.rs"
 DID="$ROOT/src/arb_bot/arb_bot.did"
 DASH="$ROOT/src/arb_bot/src/dashboard.html"
 DID_DEPLOYED="$ROOT/src/arb_bot/arb_bot.did.deployed"
 
-for f in "$RUST_LIB" "$RUST_STATE" "$DID" "$DASH" "$DID_DEPLOYED"; do
+for f in "$RUST_LIB" "$RUST_STATE" "$RUST_ROUTE_ARB" "$DID" "$DASH" "$DID_DEPLOYED"; do
   if [[ ! -f "$f" ]]; then
     echo "FATAL: expected source not found: $f" >&2
     exit 2
@@ -194,6 +195,86 @@ dash_opt_fields_array() { # $1=file
   | tr -d "'" | sort -u
 }
 
+# Keys of a dashboard `const <Name> = I.Record({ ... });` literal — the
+# newer route-arb section's shorthand form of dash_record_fields above
+# (that section destructures `({ IDL: I }) => { ... }`, so `I.Record` and
+# `IDL.Record` are the same constructor under two names). Only safe for a
+# FLAT record (no nested I.Record(...)/I.Variant(...) value), same caveat
+# as dash_record_fields.
+dash_record_fields_i() { # $1=const name  $2=file
+  awk -v s="const $1 = I.Record({" '
+    index($0, s) { inb = 1 }
+    inb          { print }
+    inb && /}\);/ { inb = 0 }
+  ' "$2" \
+  | grep -oE '[a-z_][a-z0-9_]*[[:space:]]*:' \
+  | sed -E 's/[[:space:]]//g; s/:$//' | sort -u
+}
+
+# Leading capitalized identifier on each line of a Rust `pub enum <Name> {`
+# block — covers bare (`Tag,`), tuple (`Tag(...)`.), and struct
+# (`Tag { ... }`) variants alike, since all three start with the tag name.
+rust_enum_variants() { # $1=enum name  $2=file
+  awk -v s="pub enum $1 {" '
+    index($0, s) { inb = 1; next }
+    inb && /^}/  { inb = 0 }
+    inb' "$2" \
+  | grep -oE '^[[:space:]]*[A-Z][A-Za-z0-9_]*' \
+  | sed -E 's/^[[:space:]]*//' | sort -u
+}
+
+# Leading identifier on each line of a candid `type <Name> = variant { ... };`
+# block that sits at brace-depth 0 relative to the variant's own opening —
+# depth-tracked (not just line-anchored like the Rust/dashboard variants
+# above) because a payload variant's `record { ... }` body may itself span
+# multiple lines (e.g. HeldBasisV1's StablePar in arb_bot.did), and a naive
+# per-line scan would leak that record's own field names as false variants.
+did_variant_names() { # $1=type name  $2=file
+  awk -v s="type $1 = variant {" '
+    index($0, s) { inb = 1; depth = 0; next }
+    inb {
+      if (depth == 0 && match($0, /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*/)) {
+        print substr($0, RSTART, RLENGTH)
+      }
+      opens = gsub(/\{/, "{"); closes = gsub(/\}/, "}")
+      depth += opens - closes
+      if (depth <= 0 && $0 ~ /^};/) inb = 0
+    }
+  ' "$2" \
+  | sed -E 's/^[[:space:]]*//' | sort -u
+}
+
+# Variant tags from a dashboard `const <Name> = I.Variant({ ... });` literal
+# whose entries are ALL unit (`Tag: I.Null`) — safe to scan for any
+# `Identifier:` anywhere in the block since a unit-only variant has no
+# nested colon to false-positive on. Do not use this on a variant carrying
+# a payload record — use dash_variant_names_lines_i below instead.
+dash_variant_names_flat_i() { # $1=const name  $2=file
+  awk -v s="const $1 = I.Variant({" '
+    index($0, s) { inb = 1 }
+    inb          { print }
+    inb && /}\);/ { inb = 0 }
+  ' "$2" \
+  | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:' \
+  | sed -E 's/[[:space:]]*:$//' \
+  | grep -vxE 'I|const' | sort -u
+}
+
+# Variant tags from a dashboard `const <Name> = I.Variant({ ... });` literal
+# whose entries carry a payload (e.g. `Tag: I.Record({ field: ... })`) —
+# only safe when the dashboard formats one variant per line (as HeldBasisV1
+# does), since it anchors to line-start to skip the payload's own field
+# names. A single-line declaration would silently yield zero matches; if
+# that ever changes, use dash_variant_names_flat_i's approach instead.
+dash_variant_names_lines_i() { # $1=const name  $2=file
+  awk -v s="const $1 = I.Variant({" '
+    index($0, s) { inb = 1; next }
+    inb && /^[[:space:]]*\}\);/ { inb = 0 }
+    inb' "$2" \
+  | grep -oE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*:' \
+  | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:$//' | sort -u
+}
+
 # ── comparison ────────────────────────────────────────────────────────────
 # compare3 <label> <rust-list> <did-list> <dash-list>
 compare3() {
@@ -271,11 +352,45 @@ compare3 "CycleSnapshot fields" \
   "$(did_record_fields CycleSnapshot "$DID")" \
   "$(dash_record_fields CycleSnapshot "$DASH")"
 
+# The following checks cover the ckBTC/ckETH-returning route book types in
+# the dashboard's IDL: CandidateClass's CkBtcReturning/CkEthReturning
+# variants, HeldBasisV1's CkBtcNative/CkEthNative variants,
+# AssetReturnBookConfigV1, RouteArbConfigV1's ckbtc_book/cketh_book fields,
+# and LifetimeRouteSummaryV1's ckbtc_realized_profit_sats/
+# cketh_realized_profit_wei fields. A DRIFT result on any of them means the
+# Rust backend and/or arb_bot.did have not (yet) been extended to match the
+# dashboard for that type; reconcile it the same way as any other 3-way
+# mismatch above.
+compare3 "CandidateClass variants" \
+  "$(rust_enum_variants CandidateClass "$RUST_ROUTE_ARB")" \
+  "$(did_variant_names CandidateClass "$DID")" \
+  "$(dash_variant_names_flat_i CandidateClass "$DASH")"
+
+compare3 "HeldBasisV1 variants" \
+  "$(rust_enum_variants HeldBasisV1 "$RUST_ROUTE_ARB")" \
+  "$(did_variant_names HeldBasisV1 "$DID")" \
+  "$(dash_variant_names_lines_i HeldBasisV1 "$DASH")"
+
+compare3 "AssetReturnBookConfigV1 fields" \
+  "$(rust_struct_fields AssetReturnBookConfigV1 "$RUST_ROUTE_ARB")" \
+  "$(did_record_fields AssetReturnBookConfigV1 "$DID")" \
+  "$(dash_record_fields_i AssetReturnBookConfigV1 "$DASH")"
+
+compare3 "RouteArbConfigV1 fields" \
+  "$(rust_struct_fields RouteArbConfigV1 "$RUST_ROUTE_ARB")" \
+  "$(did_record_fields RouteArbConfigV1 "$DID")" \
+  "$(dash_record_fields_i RouteArbConfigV1 "$DASH")"
+
+compare3 "LifetimeRouteSummaryV1 fields" \
+  "$(rust_struct_fields LifetimeRouteSummaryV1 "$RUST_ROUTE_ARB")" \
+  "$(did_record_fields LifetimeRouteSummaryV1 "$DID")" \
+  "$(dash_record_fields_i LifetimeRouteSummaryV1 "$DASH")"
+
 echo
 if [[ "$fail" -ne 0 ]]; then
   echo "FAIL: dashboard/Rust/.did drift detected above. Reconcile the three sources by hand." >&2
 else
-  echo "PASS: strategy method sets, BotConfig, and CycleSnapshot agree across all 3 sources."
+  echo "PASS: strategy method sets, BotConfig, CycleSnapshot, and route-arb books agree across all 3 sources."
 fi
 
 # ── Rust <-> .did equality test (full candid rigor) ───────────────────────
