@@ -124,7 +124,7 @@ fn fee_recurrence_and_dual_thresholds_drive_stable_eligibility() {
 }
 
 #[test]
-fn malformed_chain_partial_fill_unknown_allowance_and_inventory_fail_closed() {
+fn malformed_chain_and_partial_fill_have_no_quote_economics_but_later_gates_preserve_them() {
     let (balances, reservations, bands) = permissive_context();
     let mut quote = stable_quote(101_000_000);
     quote.legs[1].venue_input += 1;
@@ -136,10 +136,19 @@ fn malformed_chain_partial_fill_unknown_allowance_and_inventory_fail_closed() {
 
     let mut quote = stable_quote(101_000_000);
     quote.allowance_sufficient = None;
-    assert!(!evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
+    let allowance_blocked = evaluate_candidate(&quote, &balances, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
+    assert!(!allowance_blocked.eligible);
+    assert_eq!(allowance_blocked.rejection_reason.as_deref(), Some("allowance unknown or insufficient"));
+    assert_eq!(allowance_blocked.net_profit_native, 1_000_000);
+    assert_eq!(allowance_blocked.net_profit_bps, 100);
 
-    let low_balance = amounts(&[(Asset::CkUsdc, Some(99_999_999))]);
-    assert!(!evaluate_candidate(&stable_quote(101_000_000), &low_balance, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0).eligible);
+    let (mut low_balance, _, _) = permissive_context();
+    low_balance.set(Asset::CkUsdc, Some(99_999_999));
+    let inventory_blocked = evaluate_candidate(&stable_quote(101_000_000), &low_balance, &reservations, &bands, 1, 1, 0, 0, 0, 0, 0, 0);
+    assert!(!inventory_blocked.eligible);
+    assert_eq!(inventory_blocked.rejection_reason.as_deref(), Some("starting debit exceeds ledger balance"));
+    assert_eq!(inventory_blocked.net_profit_native, 1_000_000);
+    assert_eq!(inventory_blocked.net_profit_bps, 100);
 }
 
 #[test]

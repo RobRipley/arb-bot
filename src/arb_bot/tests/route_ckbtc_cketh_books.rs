@@ -266,13 +266,12 @@ fn cketh_quote(principal: u128, final_amount: u128) -> RouteQuote {
 
 /// Zero starting balance must make a CkBtcReturning/CkEthReturning candidate
 /// ineligible, not error out of the evaluation entirely. For any same-asset
-/// returning route the terminal leg always credits back into the start
-/// asset, so `evaluate_candidate`'s leg-loop simulates the eventual starting
-/// debit against the *current* balance of that same asset before ever
-/// reaching the separate post-loop `available_native` check — with a known
-/// zero balance and a nonzero principal that subtraction always underflows
-/// first, yielding "starting debit exceeds ledger balance". This exact
-/// mechanism is shared, asset-agnostic code already exercised by
+/// returning route the terminal leg always credits back into the start asset.
+/// `evaluate_candidate` verifies the fully filled quote first, then checks the
+/// starting debit against the current balance. With a known zero balance and a
+/// nonzero principal that subtraction underflows, yielding "starting debit
+/// exceeds ledger balance" while preserving the measured quote economics.
+/// This exact mechanism is shared, asset-agnostic code already exercised by
 /// `same_asset_terminal_ceiling_uses_post_debit_balance` in
 /// route_accounting.rs (for its success path); this is the zero-balance
 /// regression proof that CkBtcReturning/CkEthReturning inherit it correctly.
@@ -296,6 +295,8 @@ fn ckbtc_and_cketh_returning_zero_balance_is_ineligible_with_expected_reason() {
     assert!(!ckbtc_eval.eligible);
     assert_eq!(ckbtc_eval.rejection_reason.as_deref(), Some("starting debit exceeds ledger balance"));
     assert_eq!(ckbtc_eval.profit_domain, ProfitDomain::CkBtcSats);
+    assert_eq!(ckbtc_eval.net_profit_native, 1_000);
+    assert_eq!(ckbtc_eval.net_profit_bps, 100);
 
     let mut zero_cketh = AssetAmounts::zero();
     zero_cketh.set(Asset::CkUsdc, Some(u128::MAX / 2));
@@ -311,6 +312,8 @@ fn ckbtc_and_cketh_returning_zero_balance_is_ineligible_with_expected_reason() {
     assert!(!cketh_eval.eligible);
     assert_eq!(cketh_eval.rejection_reason.as_deref(), Some("starting debit exceeds ledger balance"));
     assert_eq!(cketh_eval.profit_domain, ProfitDomain::CkEthWei);
+    assert_eq!(cketh_eval.net_profit_native, 10_000_000_000_000);
+    assert_eq!(cketh_eval.net_profit_bps, 100);
 }
 
 fn ineligible_zero_balance_report(route_id: &str, class: CandidateClass, start: Asset) -> RouteCandidateReportV1 {
