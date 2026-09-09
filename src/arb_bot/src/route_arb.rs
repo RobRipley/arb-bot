@@ -572,6 +572,33 @@ fn rejected(quote: &RouteQuote, domain: ProfitDomain, reason: impl Into<String>)
     }
 }
 
+/// Keep economics from a structurally valid, fully filled quote visible when a
+/// later execution gate rejects it.  Observability must not turn an allowance
+/// or inventory block into a fictitious zero-spread quote.
+fn rejected_after_quote(
+    quote: &RouteQuote,
+    domain: ProfitDomain,
+    profit: i128,
+    bps: i64,
+    reason: impl Into<String>,
+) -> CandidateEvaluation {
+    CandidateEvaluation {
+        route_id: quote.route_id.clone(),
+        canonical_cycle_id: quote.canonical_cycle_id.clone(),
+        start_asset: quote.start_asset,
+        end_asset: quote.end_asset,
+        profit_domain: domain,
+        principal_native: quote.principal_native,
+        net_profit_native: profit,
+        net_profit_bps: bps,
+        leg_count: quote.legs.len().try_into().unwrap_or(u8::MAX),
+        size_ladder_index: quote.size_ladder_index,
+        par_assumption: quote.start_asset != quote.end_asset,
+        eligible: false,
+        rejection_reason: Some(reason.into()),
+    }
+}
+
 fn quote_profit(quote: &RouteQuote) -> Result<(ProfitDomain, i128, i64), String> {
     let final_amount = quote.legs.last().ok_or("route has no quoted legs")?.wallet_after;
     let (domain, profit, principal) = if quote.start_asset.is_stable() && quote.end_asset.is_stable() {
@@ -615,12 +642,9 @@ pub fn evaluate_candidate(
     if quote.principal_native == 0 {
         return rejected(quote, fallback_domain, "principal must be greater than zero");
     }
-    if quote.allowance_sufficient != Some(true) {
-        return rejected(quote, fallback_domain, "allowance unknown or insufficient");
-    }
     let mut expected_before = quote.principal_native;
     let mut expected_from = quote.start_asset;
-    for (leg_index, leg) in quote.legs.iter().enumerate() {
+    for leg in &quote.legs {
         if !leg.full_fill {
             return rejected(quote, fallback_domain, "route contains a non-full-fill leg");
         }
@@ -632,52 +656,57 @@ pub fn evaluate_candidate(
         {
             return rejected(quote, fallback_domain, "ledger-fee recurrence mismatch");
         }
-        let current = match balances.get(leg.to) {
-            Some(value) => value,
-            None => return rejected(quote, fallback_domain, format!("unknown {:?} ledger balance", leg.to)),
-        };
-        let current_after_start_debit = if leg_index + 1 == quote.legs.len() && leg.to == quote.start_asset {
-            match current.checked_sub(quote.principal_native) {
-                Some(value) => value,
-                None => return rejected(quote, fallback_domain, "starting debit exceeds ledger balance"),
-            }
-        } else {
-            current
-        };
-        let exposure = match current_after_start_debit.checked_add(leg.wallet_after) {
-            Some(value) => value,
-            None => return rejected(quote, fallback_domain, "inventory exposure overflow"),
-        };
-        if exposure > bands.ceiling(leg.to) {
-            return rejected(quote, fallback_domain, format!("{:?} inventory ceiling exceeded", leg.to));
-        }
-        if leg_index + 1 == quote.legs.len()
-            && quote.end_asset != quote.start_asset
-            && exposure < bands.floor(leg.to)
-        {
-            return rejected(quote, fallback_domain, format!("{:?} inventory floor breached", leg.to));
-        }
         expected_before = leg.wallet_after;
         expected_from = leg.to;
     }
     if expected_from != quote.end_asset {
         return rejected(quote, fallback_domain, "quoted terminal asset does not match route");
     }
-    let available = match available_native(quote.start_asset, balances.get(quote.start_asset), reservations) {
-        Ok(value) => value,
-        Err(reason) => return rejected(quote, fallback_domain, reason),
-    };
-    let remaining = match available.checked_sub(quote.principal_native) {
-        Some(value) => value,
-        None => return rejected(quote, fallback_domain, "insufficient unencumbered starting balance"),
-    };
-    if remaining < bands.floor(quote.start_asset) {
-        return rejected(quote, fallback_domain, "starting asset inventory floor breached");
-    }
     let (domain, profit, bps) = match quote_profit(quote) {
         Ok(value) => value,
         Err(reason) => return rejected(quote, fallback_domain, reason),
     };
+    if quote.allowance_sufficient != Some(true) {
+        return rejected_after_quote(quote, domain, profit, bps, "allowance unknown or insufficient");
+    }
+    for (leg_index, leg) in quote.legs.iter().enumerate() {
+        let current = match balances.get(leg.to) {
+            Some(value) => value,
+            None => return rejected_after_quote(quote, domain, profit, bps, format!("unknown {:?} ledger balance", leg.to)),
+        };
+        let current_after_start_debit = if leg_index + 1 == quote.legs.len() && leg.to == quote.start_asset {
+            match current.checked_sub(quote.principal_native) {
+                Some(value) => value,
+                None => return rejected_after_quote(quote, domain, profit, bps, "starting debit exceeds ledger balance"),
+            }
+        } else {
+            current
+        };
+        let exposure = match current_after_start_debit.checked_add(leg.wallet_after) {
+            Some(value) => value,
+            None => return rejected_after_quote(quote, domain, profit, bps, "inventory exposure overflow"),
+        };
+        if exposure > bands.ceiling(leg.to) {
+            return rejected_after_quote(quote, domain, profit, bps, format!("{:?} inventory ceiling exceeded", leg.to));
+        }
+        if leg_index + 1 == quote.legs.len()
+            && quote.end_asset != quote.start_asset
+            && exposure < bands.floor(leg.to)
+        {
+            return rejected_after_quote(quote, domain, profit, bps, format!("{:?} inventory floor breached", leg.to));
+        }
+    }
+    let available = match available_native(quote.start_asset, balances.get(quote.start_asset), reservations) {
+        Ok(value) => value,
+        Err(reason) => return rejected_after_quote(quote, domain, profit, bps, reason),
+    };
+    let remaining = match available.checked_sub(quote.principal_native) {
+        Some(value) => value,
+        None => return rejected_after_quote(quote, domain, profit, bps, "insufficient unencumbered starting balance"),
+    };
+    if remaining < bands.floor(quote.start_asset) {
+        return rejected_after_quote(quote, domain, profit, bps, "starting asset inventory floor breached");
+    }
     let threshold_reason = match domain {
         ProfitDomain::StableParUsd6Dec if profit < min_stable_profit_usd_6dec => Some("below stable absolute-profit threshold"),
         ProfitDomain::StableParUsd6Dec if bps < min_stable_profit_bps => Some("below stable bps threshold"),

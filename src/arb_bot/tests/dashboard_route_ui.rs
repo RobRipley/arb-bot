@@ -36,6 +36,34 @@ fn dashboard_exposes_the_consolidated_six_asset_route_surface() {
 }
 
 #[test]
+fn dashboard_exposes_completed_quote_history_without_a_trade_affordance() {
+    let route_panel = rendered_region(
+        "function routeArbitrageHtml()",
+        "async function loadTerminalExecutionsForToday",
+    );
+    let history_loader = rendered_region(
+        "async function loadCompletedRouteObservationHistory()",
+        "function routeObservationHistoryHtml",
+    );
+
+    for required in [
+        "Quote history · last 48 hours",
+        "Completed scans only.",
+        "not submitted trades or realized P&amp;L",
+        "route-observation-history",
+        "get_route_observations_v1",
+        "ROUTE_HISTORY_WINDOW_NS",
+        "observation.scan_complete",
+        "coverageComplete",
+    ] {
+        assert!(DASHBOARD.contains(required), "missing completed quote history marker: {required}");
+    }
+    assert!(DASHBOARD.contains("completed_at_ns"));
+    assert!(history_loader.contains("ROUTE_HISTORY_MAX_RECORDS"));
+    assert!(!route_panel.contains("force"), "history must not add a force-trade affordance");
+}
+
+#[test]
 fn dashboard_does_not_render_retired_lettered_strategy_actions() {
     let markets = rendered_region(
         "function renderMarkets()",

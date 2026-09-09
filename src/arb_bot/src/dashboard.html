@@ -1605,6 +1605,7 @@
     let latestRouteObservation = null;
     let latestRouteCandidates = null;
     let latestTopRouteCandidates = null;
+    let latestRouteObservationHistory = { entries: [], coverageComplete: false, loadedCount: 0 };
     let latestRouteLock = null;
     let latestRouteReservations = [];
     let latestHeldPositions = [];
@@ -1710,6 +1711,7 @@
       observation: createSourceState(),
       candidates: createSourceState(),
       topCandidates: createSourceState(),
+      observationHistory: createSourceState(),
       lock: createSourceState(),
       reservations: createSourceState(),
       heldPositions: createSourceState(),
@@ -3017,7 +3019,7 @@
     }
     function routeAggregateState() {
       const quoteStaleAfterMs = routeQuoteStaleAfterMs();
-      const names = ['status', 'observation', 'candidates', 'topCandidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'lifetimeRouteSummary', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'snapshots'];
+      const names = ['status', 'observation', 'candidates', 'topCandidates', 'observationHistory', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'lifetimeRouteSummary', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'snapshots'];
       if (authenticatedActor) names.push('wallet');
       const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates' || name === 'topCandidates') ? quoteStaleAfterMs : null));
       const candidates = routeSources.candidates.value;
@@ -3108,6 +3110,64 @@
           <div class="route-top-spread ${spread >= 0 ? 'positive' : 'negative'}">${spread >= 0 ? '+' : ''}${spread} bps</div>
           <div class="route-top-state ${gate.className}" title="${esc(gate.detail)}">${esc(gate.label)}</div>
         </div>`;
+      }).join('');
+    }
+    const ROUTE_HISTORY_WINDOW_NS = 48n * 60n * 60n * 1_000_000_000n;
+    const ROUTE_HISTORY_PAGE_SIZE = 100n;
+    const ROUTE_HISTORY_MAX_RECORDS = 200;
+    const ROUTE_HISTORY_DISPLAY_LIMIT = 48;
+    function routeObservationCompletedAtNs(observation) {
+      const completed = routeOpt(observation && observation.completed_at_ns);
+      return completed == null ? null : BigInt(completed);
+    }
+    async function loadCompletedRouteObservationHistory() {
+      if (!anonymousActor || typeof anonymousActor.get_route_observations_v1 !== 'function') {
+        throw new Error('completed quote history is unavailable');
+      }
+      const cutoffNs = BigInt(Date.now()) * 1_000_000n - ROUTE_HISTORY_WINDOW_NS;
+      const entries = [];
+      let offset = 0n;
+      let coverageComplete = false;
+      while (entries.length < ROUTE_HISTORY_MAX_RECORDS) {
+        const remaining = BigInt(ROUTE_HISTORY_MAX_RECORDS - entries.length);
+        const limit = remaining < ROUTE_HISTORY_PAGE_SIZE ? remaining : ROUTE_HISTORY_PAGE_SIZE;
+        const result = await anonymousActor.get_route_observations_v1(offset, limit);
+        if (!result || Object.prototype.hasOwnProperty.call(result, 'Err')) {
+          throw new Error(result && result.Err ? result.Err : 'completed quote history query failed');
+        }
+        const page = result.Ok || [];
+        entries.push(...page.filter(observation => observation.scan_complete && routeObservationCompletedAtNs(observation) != null));
+        const oldestNs = page.reduce((oldest, observation) => {
+          const completedAt = routeObservationCompletedAtNs(observation);
+          return completedAt == null || (oldest != null && oldest <= completedAt) ? oldest : completedAt;
+        }, null);
+        if (page.length < Number(limit) || (oldestNs != null && oldestNs < cutoffNs)) {
+          coverageComplete = true;
+          break;
+        }
+        offset += BigInt(page.length);
+      }
+      const recent = entries.filter(observation => routeObservationCompletedAtNs(observation) >= cutoffNs)
+        .sort((left, right) => {
+          const leftAt = routeObservationCompletedAtNs(left);
+          const rightAt = routeObservationCompletedAtNs(right);
+          return leftAt === rightAt ? 0 : leftAt > rightAt ? -1 : 1;
+        });
+      return { entries: recent, coverageComplete, loadedCount: entries.length };
+    }
+    function routeObservationHistoryHtml(history) {
+      const entries = history && Array.isArray(history.entries) ? history.entries : [];
+      if (!entries.length) return '<div class="route-empty">No completed full-scan quotes were retained in the last 48 hours.</div>';
+      return entries.slice(0, ROUTE_HISTORY_DISPLAY_LIMIT).map(observation => {
+        const candidates = Array.isArray(observation.top_candidates) ? observation.top_candidates : [];
+        const best = candidates[0];
+        const completedAt = routeObservationCompletedAtNs(observation);
+        const completed = completedAt == null ? 'completion time unavailable' : new Date(Number(completedAt / 1_000_000n)).toLocaleString();
+        if (!best) return `<div class="route-top-candidate"><div class="route-top-rank">—</div><div><div class="route-top-path">No fully filled quote</div><div class="route-top-meta">${esc(completed)} · ${esc(bi(observation.candidates_evaluated))} candidates evaluated</div></div><div class="route-top-state negative">No candidate</div></div>`;
+        const spread = Number(best.net_profit_bps);
+        const gate = routeTopCandidateGate(best);
+        const path = Array.isArray(best.asset_path) ? best.asset_path.map(routeAssetLabel).join(' → ') : 'Route path unavailable';
+        return `<div class="route-top-candidate"><div class="route-top-rank">${esc(completed)}</div><div><div class="route-top-path">${esc(path)}</div><div class="route-top-meta">Best of ${esc(candidates.length)} retained routes · ${esc(routeNativeAmount(best.principal_native, best.start_asset))} ${esc(routeAssetLabel(best.start_asset))} quoted</div></div><div class="route-top-spread ${spread >= 0 ? 'positive' : 'negative'}">${spread >= 0 ? '+' : ''}${spread} bps</div><div class="route-top-state ${gate.className}" title="${esc(gate.detail)}">${esc(gate.label)}</div></div>`;
       }).join('');
     }
     function routeWalletHtml() {
@@ -3550,6 +3610,7 @@
       const observationState = routeSourceState('observation', quoteStaleAfterMs);
       const candidatesState = routeSourceState('candidates', quoteStaleAfterMs);
       const topCandidatesState = routeSourceState('topCandidates', quoteStaleAfterMs);
+      const historyState = routeSourceState('observationHistory');
       const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
       const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
       const ckbtc = latestRouteCandidates ? routeOpt(latestRouteCandidates.ckbtc) : null;
@@ -3575,6 +3636,14 @@
           : topCandidates ? 'Partial scan so far' : 'No scan yet';
       const topCandidateObservation = topCandidates && routeOpt(topCandidates.observation_id)
         ? `Observation ${routeOpt(topCandidates.observation_id)}` : 'Observation ID unavailable';
+      const historyUnavailable = historyState === 'loading' ? '<div class="route-empty">Loading completed quote history…</div>'
+        : historyState === 'failed' || historyState === 'unavailable' ? `<div class="route-empty negative">Completed quote history unavailable${esc(routeSourceError(routeSources.observationHistory))}</div>`
+        : routeObservationHistoryHtml(latestRouteObservationHistory);
+      const historyCount = latestRouteObservationHistory && Array.isArray(latestRouteObservationHistory.entries)
+        ? latestRouteObservationHistory.entries.length : 0;
+      const historyStamp = historyState === 'stale' ? `Stale · ${sourceLastSuccessLabel(routeSources.observationHistory)}`
+        : latestRouteObservationHistory && latestRouteObservationHistory.coverageComplete ? `${historyCount} completed scans`
+          : `${historyCount} completed scans · coverage may be incomplete`;
       const statusText = statusState === 'loading' ? 'Loading route status…'
         : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
         : status ? `${bi(status.route_count)} graph routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
@@ -3587,6 +3656,7 @@
         <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header" style="display:flex;justify-content:space-between;gap:var(--sp-3);align-items:baseline"><span>Top five evaluated routes</span><span class="source-stamp ${topCandidatesState === 'fresh' ? 'fresh' : topCandidatesState === 'stale' ? 'stale' : topCandidatesState === 'loading' ? 'loading' : 'failed'}">${esc(topCandidateStamp)}</span></div><div class="card-subtitle">Fully filled quotes, ranked by estimated net spread. Below-threshold and otherwise blocked routes stay visible here; this is read-only evaluation, not an order list.</div><div id="route-top-candidates" class="route-top-candidates">${topCandidatesUnavailable}</div><div class="route-wallet-meta">${esc(topCandidateObservation)}</div></div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header" style="display:flex;justify-content:space-between;gap:var(--sp-3);align-items:baseline"><span>Quote history · last 48 hours</span><span class="source-stamp ${historyState === 'fresh' ? 'fresh' : historyState === 'stale' ? 'stale' : historyState === 'loading' ? 'loading' : 'failed'}">${esc(historyStamp)}</span></div><div class="card-subtitle">Completed scans only. Each row is the scan's strongest fully filled quote and its execution gate. Quotes are estimates, not submitted trades or realized P&amp;L.</div><div id="route-observation-history" class="route-top-candidates">${historyUnavailable}</div></div>
         <div class="grid g-cols-4" style="margin-top:var(--sp-4)">
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
@@ -3720,11 +3790,12 @@
             return source.value;
           }
         };
-        const [status, obs, candidates, topCandidates, lock, reservations, held, current, terminal, runtime, routeConfig, lifetime] = await Promise.all([
+        const [status, obs, candidates, topCandidates, history, lock, reservations, held, current, terminal, runtime, routeConfig, lifetime] = await Promise.all([
           querySource('status', typeof anonymousActor.get_route_arb_status_v1 === 'function' ? () => anonymousActor.get_route_arb_status_v1() : null, 'route status'),
           querySource('observation', typeof anonymousActor.get_route_observation_v1 === 'function' ? () => anonymousActor.get_route_observation_v1() : null, 'route observation'),
           querySource('candidates', typeof anonymousActor.get_best_route_candidates_v1 === 'function' ? () => anonymousActor.get_best_route_candidates_v1() : null, 'route candidates'),
           querySource('topCandidates', typeof anonymousActor.get_top_route_candidates_v1 === 'function' ? () => anonymousActor.get_top_route_candidates_v1() : null, 'top route candidates'),
+          querySource('observationHistory', loadCompletedRouteObservationHistory, 'completed quote history'),
           querySource('lock', typeof anonymousActor.get_route_mutation_lock_v1 === 'function' ? () => anonymousActor.get_route_mutation_lock_v1() : null, 'route lock'),
           querySource('reservations', typeof anonymousActor.get_route_reservations_v1 === 'function' ? () => anonymousActor.get_route_reservations_v1(0n, 100n) : null, 'route reservations', true),
           querySource('heldPositions', typeof anonymousActor.get_held_positions_v1 === 'function' ? () => anonymousActor.get_held_positions_v1(0n, 100n) : null, 'held positions', true),
@@ -3741,6 +3812,7 @@
         latestRouteObservation = routeOpt(obs);
         latestRouteCandidates = candidates;
         latestTopRouteCandidates = topCandidates;
+        latestRouteObservationHistory = history || { entries: [], coverageComplete: false, loadedCount: 0 };
         latestRouteLock = routeOpt(lock);
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];
