@@ -499,6 +499,26 @@ fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
 }
 
 #[query]
+fn get_top_route_candidates_v1() -> route_arb::TopRouteCandidatesV1 {
+    state::read_state(|s| match &s.route_observation {
+        Some(observation) => route_arb::TopRouteCandidatesV1 {
+            observation_id: Some(observation.observation_id.clone()),
+            scan_complete: observation.scan_complete,
+            candidates: if observation.scan_complete {
+                observation.top_candidates.clone()
+            } else {
+                observation.provisional_top_candidates.clone()
+            },
+        },
+        None => route_arb::TopRouteCandidatesV1 {
+            observation_id: None,
+            scan_complete: false,
+            candidates: Vec::new(),
+        },
+    })
+}
+
+#[query]
 fn get_route_mutation_lock_v1() -> Option<route_arb::MutationLockV1> {
     state::get_mutation_lock()
 }

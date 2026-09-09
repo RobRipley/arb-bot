@@ -117,6 +117,37 @@ fn observation_accumulator_only_publishes_winners_after_complete_scan() {
 }
 
 #[test]
+fn observation_publishes_five_best_fully_quoted_routes_even_when_below_threshold() {
+    let mut state = ObservationAccumulatorV1::new("ranked".into(), 10, 0, 9, 18, true);
+    let mut smaller_size_of_same_route = report("same-route", CandidateClass::StablePar, 25, false);
+    smaller_size_of_same_route.size_ladder_index = 1;
+    let mut stronger_size_of_same_route = report("same-route", CandidateClass::StablePar, 26, false);
+    stronger_size_of_same_route.size_ladder_index = 2;
+    let mut unfilled = report("unfilled", CandidateClass::IcpReturning, 9_999, false);
+    unfilled.full_fill = false;
+
+    accumulate_observation_batch(&mut state, 0, vec![
+        report("sixth", CandidateClass::StablePar, 10, false),
+        report("first", CandidateClass::IcpReturning, 60, false),
+        report("third", CandidateClass::CkBtcReturning, 40, false),
+        smaller_size_of_same_route,
+        unfilled,
+        report("second", CandidateClass::CkEthReturning, 50, false),
+        report("fourth", CandidateClass::StableSettledCrossAsset, 30, false),
+        report("fifth", CandidateClass::StablePar, 20, false),
+        stronger_size_of_same_route,
+    ], 18, 1).unwrap();
+
+    assert!(state.scan_complete);
+    let ranked_ids: Vec<_> = state.top_candidates.iter().map(|candidate| candidate.route_id.as_str()).collect();
+    assert_eq!(ranked_ids, vec!["first", "second", "third", "fourth", "same-route"]);
+    assert!(state.top_candidates.iter().all(|candidate| candidate.full_fill));
+    assert!(state.top_candidates.iter().all(|candidate| !candidate.eligible));
+    assert_eq!(state.top_candidates.last().unwrap().size_ladder_index, 2);
+    assert_eq!(state.top_candidates.iter().filter(|candidate| candidate.route_id == "same-route").count(), 1);
+}
+
+#[test]
 fn insufficient_observation_budget_cannot_accumulate_quote_calls() {
     let mut state = ObservationAccumulatorV1::new("under-budget".into(), 10, 0, 2, 4, false);
     let error = accumulate_observation_batch(
