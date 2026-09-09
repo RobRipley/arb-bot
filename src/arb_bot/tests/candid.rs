@@ -48,6 +48,15 @@ fn route_execution_detail_query_exposes_additive_detail_shape() {
     }
 }
 
+#[test]
+fn top_route_candidates_query_exposes_read_only_ranked_quote_shape() {
+    let generated = arb_bot::generated_candid_interface();
+    assert!(generated.contains("get_top_route_candidates_v1"));
+    for field in ["TopRouteCandidatesV1", "candidates", "observation_id", "scan_complete"] {
+        assert!(generated.contains(field), "generated interface missing top-route field: {field}");
+    }
+}
+
 /// Convenience: prints the interface currently generated from the Rust
 /// signatures. Ignored by default; run with `--ignored` to dump it when
 /// reconciling drift against arb_bot.did.

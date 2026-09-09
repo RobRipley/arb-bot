@@ -707,12 +707,20 @@
   .route-gate .k { display:block; font-size:9px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); }
   .route-gate .v { display:block; font-family:var(--font-data); font-size:10.5px; margin-top:2px; }
   .route-empty { color:var(--text-tertiary); font-size:12px; line-height:1.6; padding:var(--sp-4) 0; }
+  .route-top-candidates { display:flex; flex-direction:column; }
+  .route-top-candidate { display:grid; grid-template-columns:28px minmax(190px,1.7fr) minmax(100px,.7fr) minmax(132px,.9fr); gap:var(--sp-3); align-items:center; padding:10px 0; border-bottom:1px solid var(--border); }
+  .route-top-candidate:last-child { border-bottom:none; }
+  .route-top-rank { font-family:var(--font-data); color:var(--text-muted); font-size:12px; }
+  .route-top-path { font-family:var(--font-data); font-size:12px; line-height:1.45; word-break:break-word; }
+  .route-top-meta { font-size:10.5px; line-height:1.5; color:var(--text-tertiary); margin-top:2px; }
+  .route-top-spread { font-family:var(--font-data); font-size:15px; font-weight:600; }
+  .route-top-state { font-size:11px; line-height:1.4; }
   .route-list { display:flex; flex-direction:column; gap:var(--sp-2); }
   .route-list-row { display:grid; grid-template-columns:minmax(140px,1.3fr) minmax(120px,1fr) auto; gap:var(--sp-3); align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:11.5px; }
   .route-list-row:last-child { border-bottom:none; }
   .route-disclosure { background:var(--info-dim); border:1px solid rgba(91,138,240,.25); border-radius:var(--radius-md); padding:var(--sp-3) var(--sp-4); color:var(--text-secondary); font-size:11.5px; line-height:1.6; }
   @media (max-width:1100px) { .route-wallet-grid { grid-template-columns:repeat(3,1fr); } .route-gates { grid-template-columns:repeat(3,1fr); } }
-  @media (max-width:600px) { .route-wallet-grid,.route-gates { grid-template-columns:1fr 1fr; } .route-list-row { grid-template-columns:1fr; } }
+  @media (max-width:600px) { .route-wallet-grid,.route-gates { grid-template-columns:1fr 1fr; } .route-list-row,.route-top-candidate { grid-template-columns:1fr; gap:var(--sp-1); } .route-top-rank { margin-bottom:calc(var(--sp-1) * -1); } }
 </style>
 </head>
 <body>
@@ -956,6 +964,8 @@
         provisional_best_ckbtc_candidate: I.Opt(RouteCandidateReportV1),
         best_cketh_candidate: I.Opt(RouteCandidateReportV1),
         provisional_best_cketh_candidate: I.Opt(RouteCandidateReportV1),
+        provisional_top_candidates: I.Vec(RouteCandidateReportV1),
+        top_candidates: I.Vec(RouteCandidateReportV1),
       });
       const ObservationStartV1 = I.Record({
         quote_call_budget_sufficient: I.Bool, observation_id: I.Text,
@@ -967,6 +977,10 @@
         icp: I.Opt(RouteCandidateReportV1), stable: I.Opt(RouteCandidateReportV1),
         ckbtc: I.Opt(RouteCandidateReportV1), cketh: I.Opt(RouteCandidateReportV1),
         observation_id: I.Opt(I.Text), scan_complete: I.Bool,
+      });
+      const TopRouteCandidatesV1 = I.Record({
+        observation_id: I.Opt(I.Text), scan_complete: I.Bool,
+        candidates: I.Vec(RouteCandidateReportV1),
       });
       const MutationOwnerV1 = I.Variant({ RouteExecution: I.Null, VolumeOperation: I.Null, GenericWithdrawal: I.Null, RetiredVenueRecovery: I.Null, LegacyMigration: I.Null });
       const MutationLockV1 = I.Record({ operation_id: I.Text, owner: MutationOwnerV1, acquired_at_ns: I.Nat64, reconciliation_required: I.Bool });
@@ -1090,6 +1104,7 @@
         get_route_observation_v1: I.Func([], [I.Opt(ObservationAccumulatorV1)], ['query']),
         get_route_observations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(ObservationAccumulatorV1), Err: I.Text })], ['query']),
         get_best_route_candidates_v1: I.Func([], [BestRouteCandidatesV1], ['query']),
+        get_top_route_candidates_v1: I.Func([], [TopRouteCandidatesV1], ['query']),
         get_route_mutation_lock_v1: I.Func([], [I.Opt(MutationLockV1)], ['query']),
         get_route_reservations_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(OwnershipReservationV1), Err: I.Text })], ['query']),
         get_held_positions_v1: I.Func([I.Nat64, I.Nat64], [I.Variant({ Ok: I.Vec(HeldPositionV1), Err: I.Text })], ['query']),
@@ -1589,6 +1604,7 @@
     let latestRouteWallet = [];
     let latestRouteObservation = null;
     let latestRouteCandidates = null;
+    let latestTopRouteCandidates = null;
     let latestRouteLock = null;
     let latestRouteReservations = [];
     let latestHeldPositions = [];
@@ -1693,6 +1709,7 @@
       status: createSourceState(),
       observation: createSourceState(),
       candidates: createSourceState(),
+      topCandidates: createSourceState(),
       lock: createSourceState(),
       reservations: createSourceState(),
       heldPositions: createSourceState(),
@@ -3000,11 +3017,15 @@
     }
     function routeAggregateState() {
       const quoteStaleAfterMs = routeQuoteStaleAfterMs();
-      const names = ['status', 'observation', 'candidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'lifetimeRouteSummary', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'snapshots'];
+      const names = ['status', 'observation', 'candidates', 'topCandidates', 'lock', 'reservations', 'heldPositions', 'currentExecution', 'terminalExecutions', 'lifetimeRouteSummary', 'runtime', 'health', 'config', 'routeArbConfig', 'summary', 'legacyBalances', 'volumeBalances', 'operatorBalances', 'volumeStats', 'snapshots'];
       if (authenticatedActor) names.push('wallet');
-      const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates') ? quoteStaleAfterMs : null));
+      const states = names.map(name => routeSourceState(name, name === 'runtime' ? ROUTE_RUNTIME_STALE_AFTER_MS : (name === 'observation' || name === 'candidates' || name === 'topCandidates') ? quoteStaleAfterMs : null));
       const candidates = routeSources.candidates.value;
-      const candidateQuotes = candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp), routeOpt(candidates.ckbtc), routeOpt(candidates.cketh)].filter(Boolean).map(routeCandidateQuoteState) : [];
+      const topCandidates = routeSources.topCandidates.value;
+      const candidateQuotes = [
+        ...(candidates ? [routeOpt(candidates.stable), routeOpt(candidates.icp), routeOpt(candidates.ckbtc), routeOpt(candidates.cketh)] : []),
+        ...(topCandidates && Array.isArray(topCandidates.candidates) ? topCandidates.candidates : []),
+      ].filter(Boolean).map(candidate => routeCandidateQuoteState(candidate));
       if (candidateQuotes.includes('stale')) states.push('stale');
       else if (candidateQuotes.includes('unknown')) states.push('unknown');
       if (states.includes('failed') || states.includes('unavailable')) return 'unavailable';
@@ -3058,6 +3079,36 @@
         </div>
         ${reason ? `<div class="negative" style="font-size:11px;margin-top:8px">Rejected: ${esc(reason)}</div>` : ''}
       </div>`;
+    }
+    function routeTopCandidateGate(candidate) {
+      if (candidate.eligible) return { label: 'Passes all gates', className: 'positive', detail: '' };
+      const reason = routeOpt(candidate.rejection_reason) || '';
+      const normalized = reason.toLowerCase();
+      if (normalized.includes('profit')) return { label: 'Below profit threshold', className: 'negative', detail: reason };
+      if (normalized.includes('inventory') || normalized.includes('balance')) return { label: 'Inventory blocked', className: 'negative', detail: reason };
+      if (normalized.includes('allowance')) return { label: 'Allowance blocked', className: 'negative', detail: reason };
+      return { label: 'Not eligible', className: 'negative', detail: reason || 'A route gate did not pass' };
+    }
+    function routeTopCandidateRowsHtml(report) {
+      const candidates = report && Array.isArray(report.candidates) ? report.candidates.slice(0, 5) : [];
+      if (!candidates.length) {
+        const scanState = report && report.scan_complete ? 'completed scan' : 'current scan';
+        return `<div class="route-empty">No fully filled route quotes are available from the ${scanState} yet.</div>`;
+      }
+      return candidates.map((candidate, index) => {
+        const quoteState = routeCandidateQuoteState(candidate);
+        const quoteAge = quoteState === 'stale' ? `Stale · ${routeAge(candidate.quote_timestamp_ns)} old`
+          : quoteState === 'unknown' ? 'Quote age unknown' : `Quoted ${routeAge(candidate.quote_timestamp_ns)} ago`;
+        const path = Array.isArray(candidate.asset_path) ? candidate.asset_path.map(routeAssetLabel).join(' → ') : 'Route path unavailable';
+        const spread = Number(candidate.net_profit_bps);
+        const gate = routeTopCandidateGate(candidate);
+        return `<div class="route-top-candidate">
+          <div class="route-top-rank">#${index + 1}</div>
+          <div><div class="route-top-path">${esc(path)}</div><div class="route-top-meta">${esc(routeNativeAmount(candidate.principal_native, candidate.start_asset))} ${esc(routeAssetLabel(candidate.start_asset))} quoted · ${esc(quoteAge)}</div></div>
+          <div class="route-top-spread ${spread >= 0 ? 'positive' : 'negative'}">${spread >= 0 ? '+' : ''}${spread} bps</div>
+          <div class="route-top-state ${gate.className}" title="${esc(gate.detail)}">${esc(gate.label)}</div>
+        </div>`;
+      }).join('');
     }
     function routeWalletHtml() {
       const byAsset = new Map(latestRouteWallet.map(row => [routeAssetKey(row.asset), row]));
@@ -3411,8 +3462,10 @@
         if (drain) await drain;
         latestRouteObservation = null;
         latestRouteCandidates = null;
+        latestTopRouteCandidates = null;
         markSourceUnavailable(routeSources.observation, 'Route policy changed; refreshing quotes');
         markSourceUnavailable(routeSources.candidates, 'Route policy changed; refreshing quotes');
+        markSourceUnavailable(routeSources.topCandidates, 'Route policy changed; refreshing quotes');
         renderRouteAutomationViews();
         await loadRouteData();
         toast(`Protect ck stables: ${protectedNow ? 'on' : 'off'} · confirmed by canister`, 'success');
@@ -3456,8 +3509,10 @@
         if (drain) await drain;
         latestRouteObservation = null;
         latestRouteCandidates = null;
+        latestTopRouteCandidates = null;
         markSourceUnavailable(routeSources.observation, 'Route policy changed; refreshing quotes');
         markSourceUnavailable(routeSources.candidates, 'Route policy changed; refreshing quotes');
+        markSourceUnavailable(routeSources.topCandidates, 'Route policy changed; refreshing quotes');
         renderRouteAutomationViews();
         await loadRouteData();
         const refreshedBook = routeOpt(refreshed[bookKey]);
@@ -3494,10 +3549,12 @@
       const statusState = routeSourceState('status');
       const observationState = routeSourceState('observation', quoteStaleAfterMs);
       const candidatesState = routeSourceState('candidates', quoteStaleAfterMs);
+      const topCandidatesState = routeSourceState('topCandidates', quoteStaleAfterMs);
       const stable = latestRouteCandidates ? routeOpt(latestRouteCandidates.stable) : null;
       const icp = latestRouteCandidates ? routeOpt(latestRouteCandidates.icp) : null;
       const ckbtc = latestRouteCandidates ? routeOpt(latestRouteCandidates.ckbtc) : null;
       const cketh = latestRouteCandidates ? routeOpt(latestRouteCandidates.cketh) : null;
+      const topCandidates = latestTopRouteCandidates;
       const scanText = observationState === 'loading' ? 'Loading observation…'
         : observationState === 'failed' || observationState === 'unavailable' ? 'Observation unavailable'
         : observationState === 'stale' ? `Stale · ${!obs ? 'no cached observation' : obs.scan_complete ? 'Complete' : `${bi(obs.candidates_evaluated)} / ${bi(obs.total_work_items)} candidates`}`
@@ -3510,6 +3567,14 @@
       const icpHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(icp, 'ICP-returning');
       const ckbtcHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(ckbtc, 'ckBTC-returning');
       const ckethHtml = candidateUnavailable || candidateSourceStamp + routeCandidateHtml(cketh, 'ckETH-returning');
+      const topCandidatesUnavailable = topCandidatesState === 'loading' ? '<div class="route-empty">Loading top quoted routes…</div>'
+        : topCandidatesState === 'failed' || topCandidatesState === 'unavailable' ? `<div class="route-empty negative">Top quoted routes unavailable${esc(routeSourceError(routeSources.topCandidates))}</div>`
+        : routeTopCandidateRowsHtml(topCandidates);
+      const topCandidateStamp = topCandidatesState === 'stale' ? `Stale · ${sourceLastSuccessLabel(routeSources.topCandidates)}`
+        : topCandidates && topCandidates.scan_complete ? 'Completed scan'
+          : topCandidates ? 'Partial scan so far' : 'No scan yet';
+      const topCandidateObservation = topCandidates && routeOpt(topCandidates.observation_id)
+        ? `Observation ${routeOpt(topCandidates.observation_id)}` : 'Observation ID unavailable';
       const statusText = statusState === 'loading' ? 'Loading route status…'
         : statusState === 'failed' || statusState === 'unavailable' ? `Route status unavailable${routeSourceError(routeSources.status)}`
         : status ? `${bi(status.route_count)} graph routes · config ${status.config_valid ? 'valid' : 'invalid'} · execution ${!status.execution_compiled_in ? 'not implemented' : status.live_execution_authorized ? 'authorized' : 'disabled'}`
@@ -3521,6 +3586,7 @@
           <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
         <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
+        <div class="card" style="margin-top:var(--sp-4)"><div class="card-header" style="display:flex;justify-content:space-between;gap:var(--sp-3);align-items:baseline"><span>Top five evaluated routes</span><span class="source-stamp ${topCandidatesState === 'fresh' ? 'fresh' : topCandidatesState === 'stale' ? 'stale' : topCandidatesState === 'loading' ? 'loading' : 'failed'}">${esc(topCandidateStamp)}</span></div><div class="card-subtitle">Fully filled quotes, ranked by estimated net spread. Below-threshold and otherwise blocked routes stay visible here; this is read-only evaluation, not an order list.</div><div id="route-top-candidates" class="route-top-candidates">${topCandidatesUnavailable}</div><div class="route-wallet-meta">${esc(topCandidateObservation)}</div></div>
         <div class="grid g-cols-4" style="margin-top:var(--sp-4)">
           <div class="card"><div class="card-header">Best stable-returning route</div><div id="route-stable-candidate">${stableHtml}</div></div>
           <div class="card"><div class="card-header">Best ICP-returning route</div><div id="route-icp-candidate">${icpHtml}</div></div>
@@ -3654,10 +3720,11 @@
             return source.value;
           }
         };
-        const [status, obs, candidates, lock, reservations, held, current, terminal, runtime, routeConfig, lifetime] = await Promise.all([
+        const [status, obs, candidates, topCandidates, lock, reservations, held, current, terminal, runtime, routeConfig, lifetime] = await Promise.all([
           querySource('status', typeof anonymousActor.get_route_arb_status_v1 === 'function' ? () => anonymousActor.get_route_arb_status_v1() : null, 'route status'),
           querySource('observation', typeof anonymousActor.get_route_observation_v1 === 'function' ? () => anonymousActor.get_route_observation_v1() : null, 'route observation'),
           querySource('candidates', typeof anonymousActor.get_best_route_candidates_v1 === 'function' ? () => anonymousActor.get_best_route_candidates_v1() : null, 'route candidates'),
+          querySource('topCandidates', typeof anonymousActor.get_top_route_candidates_v1 === 'function' ? () => anonymousActor.get_top_route_candidates_v1() : null, 'top route candidates'),
           querySource('lock', typeof anonymousActor.get_route_mutation_lock_v1 === 'function' ? () => anonymousActor.get_route_mutation_lock_v1() : null, 'route lock'),
           querySource('reservations', typeof anonymousActor.get_route_reservations_v1 === 'function' ? () => anonymousActor.get_route_reservations_v1(0n, 100n) : null, 'route reservations', true),
           querySource('heldPositions', typeof anonymousActor.get_held_positions_v1 === 'function' ? () => anonymousActor.get_held_positions_v1(0n, 100n) : null, 'held positions', true),
@@ -3673,6 +3740,7 @@
         }
         latestRouteObservation = routeOpt(obs);
         latestRouteCandidates = candidates;
+        latestTopRouteCandidates = topCandidates;
         latestRouteLock = routeOpt(lock);
         latestRouteReservations = reservations && reservations.Ok ? reservations.Ok : [];
         latestHeldPositions = held && held.Ok ? held.Ok : [];

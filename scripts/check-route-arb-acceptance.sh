@@ -42,6 +42,7 @@ node scripts/test-dashboard-public-route-balances.cjs
 node scripts/test-dashboard-health.cjs
 node scripts/test-dashboard-runtime.cjs
 node scripts/test-dashboard-observation.cjs
+node scripts/test-dashboard-top-candidates.cjs
 node scripts/test-dashboard-ledger.cjs
 node scripts/test-dashboard-final-fixes.cjs
 

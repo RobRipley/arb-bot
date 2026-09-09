@@ -1357,6 +1357,14 @@ pub struct ObservationAccumulatorV1 {
     pub best_ckbtc_candidate: Option<RouteCandidateReportV1>,
     #[serde(default)]
     pub best_cketh_candidate: Option<RouteCandidateReportV1>,
+    /// The five strongest full-fill quotes observed so far, ranked by net
+    /// spread rather than execution eligibility. This intentionally keeps
+    /// below-threshold candidates visible to an operator.
+    #[serde(default)]
+    pub provisional_top_candidates: Vec<RouteCandidateReportV1>,
+    /// The completed observation's published top-five quote-only candidates.
+    #[serde(default)]
+    pub top_candidates: Vec<RouteCandidateReportV1>,
     pub incident: Option<String>,
 }
 
@@ -1377,9 +1385,57 @@ impl ObservationAccumulatorV1 {
             provisional_best_stable_candidate: None, provisional_best_icp_candidate: None,
             provisional_best_ckbtc_candidate: None, provisional_best_cketh_candidate: None,
             best_stable_candidate: None, best_icp_candidate: None,
-            best_ckbtc_candidate: None, best_cketh_candidate: None, incident: None,
+            best_ckbtc_candidate: None, best_cketh_candidate: None,
+            provisional_top_candidates: Vec::new(), top_candidates: Vec::new(), incident: None,
         }
     }
+}
+
+const TOP_QUOTE_CANDIDATE_LIMIT: usize = 5;
+
+/// Sort quote-only candidates by their cross-book comparable net spread.
+/// Tie-breaking is deterministic so an unchanged observation has a stable
+/// operator-facing ordering.
+fn quote_candidate_precedes(left: &RouteCandidateReportV1, right: &RouteCandidateReportV1) -> bool {
+    if left.net_profit_bps != right.net_profit_bps {
+        return left.net_profit_bps > right.net_profit_bps;
+    }
+    if left.legs.len() != right.legs.len() {
+        return left.legs.len() < right.legs.len();
+    }
+    if left.route_id != right.route_id {
+        return left.route_id < right.route_id;
+    }
+    left.size_ladder_index < right.size_ladder_index
+}
+
+/// Retain one best size for each route identity. A full-fill quote is enough
+/// for observability; profitability, allowance, and inventory gates stay in
+/// the report instead of excluding the candidate from this diagnostic feed.
+fn retain_top_quote_candidate(
+    top_candidates: &mut Vec<RouteCandidateReportV1>,
+    candidate: &RouteCandidateReportV1,
+) {
+    if !candidate.full_fill {
+        return;
+    }
+    if let Some(existing) = top_candidates.iter_mut().find(|current| current.route_id == candidate.route_id) {
+        if quote_candidate_precedes(candidate, existing) {
+            *existing = candidate.clone();
+        }
+    } else {
+        top_candidates.push(candidate.clone());
+    }
+    top_candidates.sort_by(|left, right| {
+        if quote_candidate_precedes(left, right) {
+            std::cmp::Ordering::Less
+        } else if quote_candidate_precedes(right, left) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    });
+    top_candidates.truncate(TOP_QUOTE_CANDIDATE_LIMIT);
 }
 
 fn replace_best(slot: &mut Option<RouteCandidateReportV1>, candidate: &RouteCandidateReportV1) {
@@ -1430,6 +1486,7 @@ pub fn accumulate_observation_batch(
     state.full_fill_rejections = state.full_fill_rejections.checked_add(full_fill_rejections).ok_or("rejection counter overflow")?;
     state.candidates_evaluated = state.candidates_evaluated.checked_add(candidates.len() as u64).ok_or("candidate counter overflow")?;
     for candidate in &candidates {
+        retain_top_quote_candidate(&mut state.provisional_top_candidates, candidate);
         match candidate.candidate_class {
             CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => replace_best(&mut state.provisional_best_stable_candidate, candidate),
             CandidateClass::IcpReturning => replace_best(&mut state.provisional_best_icp_candidate, candidate),
@@ -1444,6 +1501,7 @@ pub fn accumulate_observation_batch(
             state.best_icp_candidate = state.provisional_best_icp_candidate.clone();
             state.best_ckbtc_candidate = state.provisional_best_ckbtc_candidate.clone();
             state.best_cketh_candidate = state.provisional_best_cketh_candidate.clone();
+            state.top_candidates = state.provisional_top_candidates.clone();
         } else {
             state.incident = Some("complete route-and-size universe exceeds configured quote-call budget".to_string());
         }
@@ -1475,6 +1533,16 @@ pub struct BestRouteCandidatesV1 {
     pub icp: Option<RouteCandidateReportV1>,
     pub ckbtc: Option<RouteCandidateReportV1>,
     pub cketh: Option<RouteCandidateReportV1>,
+}
+
+/// Read-only view of the strongest fully quoted route identities. Unlike the
+/// per-book execution candidates, this preserves routes that were rejected by
+/// the configured profit, allowance, or inventory gate.
+#[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub struct TopRouteCandidatesV1 {
+    pub observation_id: Option<String>,
+    pub scan_complete: bool,
+    pub candidates: Vec<RouteCandidateReportV1>,
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
