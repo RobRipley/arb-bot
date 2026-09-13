@@ -719,8 +719,63 @@
   .route-list-row { display:grid; grid-template-columns:minmax(140px,1.3fr) minmax(120px,1fr) auto; gap:var(--sp-3); align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:11.5px; }
   .route-list-row:last-child { border-bottom:none; }
   .route-disclosure { background:var(--info-dim); border:1px solid rgba(91,138,240,.25); border-radius:var(--radius-md); padding:var(--sp-3) var(--sp-4); color:var(--text-secondary); font-size:11.5px; line-height:1.6; }
+
+  /* Route policy is intentionally dense, but never cryptic. Thresholds are
+     grouped by the decision they affect, with exact current values and one
+     reusable, keyboard-accessible explanation pattern. */
+  .route-config-header { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--sp-4); margin-bottom:var(--sp-4); }
+  .route-config-header .card-subtitle { margin:0; }
+  .route-config-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--sp-3); }
+  .route-config-group { border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-input); overflow:visible; }
+  .route-config-group-title { padding:9px var(--sp-3); border-bottom:1px solid var(--border); font-size:11.5px; font-weight:600; color:var(--text-secondary); }
+  .route-config-row { display:grid; grid-template-columns:minmax(170px,1fr) minmax(150px,auto); align-items:start; gap:var(--sp-3); padding:8px var(--sp-3); border-bottom:1px solid var(--border); font-size:11.5px; }
+  .route-config-row:last-child { border-bottom:0; }
+  .route-config-label { display:flex; align-items:center; gap:6px; min-width:0; color:var(--text-tertiary); }
+  .route-config-value { font-family:var(--font-data); font-variant-numeric:tabular-nums; color:var(--text-primary); text-align:right; overflow-wrap:anywhere; }
+  .route-config-tip { position:relative; display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; flex:0 0 17px; border:1px solid var(--border-strong); border-radius:50%; background:transparent; color:var(--text-tertiary); font:600 10px/1 var(--font-ui); cursor:help; }
+  .route-config-tip:hover, .route-config-tip:focus-visible { color:var(--accent); border-color:var(--accent); outline:none; }
+  .route-config-tip::after { content:attr(data-tip); position:absolute; z-index:260; left:50%; bottom:calc(100% + 9px); width:max-content; max-width:min(330px,calc(100vw - 48px)); padding:9px 11px; border:1px solid var(--border-strong); border-radius:var(--radius-md); background:var(--surface-3); color:var(--text-primary); box-shadow:0 8px 26px rgba(0,0,0,.38); font:400 11.5px/1.5 var(--font-ui); text-align:left; white-space:normal; opacity:0; visibility:hidden; transform:translate(-50%,4px); transition:opacity .12s,transform .12s,visibility .12s; pointer-events:none; }
+  .route-config-tip:hover::after, .route-config-tip:focus-visible::after { opacity:1; visibility:visible; transform:translate(-50%,0); }
+
+  .route-config-overlay { position:fixed; inset:0; z-index:240; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(6,7,10,.76); backdrop-filter:blur(3px); }
+  .route-config-overlay.show { display:flex; }
+  .route-config-modal { width:min(1040px,100%); max-height:calc(100vh - 40px); display:flex; flex-direction:column; overflow:hidden; border:1px solid var(--border-strong); border-radius:var(--radius-lg); background:var(--surface-2); box-shadow:0 24px 80px rgba(0,0,0,.52); }
+  .route-config-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--sp-4); padding:var(--sp-5) var(--sp-6); border-bottom:1px solid var(--border); }
+  .route-config-modal-title { font-size:16px; font-weight:600; color:var(--text-primary); }
+  .route-config-modal-subtitle { max-width:760px; margin-top:4px; color:var(--text-tertiary); font-size:12px; line-height:1.5; }
+  .route-config-close { width:30px; height:30px; flex:0 0 30px; border:1px solid var(--border); border-radius:var(--radius-md); background:transparent; color:var(--text-secondary); cursor:pointer; font-size:17px; }
+  .route-config-close:hover, .route-config-close:focus-visible { border-color:var(--border-strong); color:var(--text-primary); outline:2px solid var(--border-focus); outline-offset:1px; }
+  .route-config-modal-body { overflow:auto; padding:var(--sp-5) var(--sp-6); }
+  .route-config-form-section { margin-bottom:var(--sp-5); }
+  .route-config-form-section:last-child { margin-bottom:0; }
+  .route-config-form-heading { display:flex; align-items:baseline; gap:var(--sp-2); padding-bottom:7px; margin-bottom:var(--sp-3); border-bottom:1px solid var(--border); font-size:13px; font-weight:600; color:var(--text-primary); }
+  .route-config-form-heading span { font-size:11px; font-weight:400; color:var(--text-tertiary); }
+  .route-config-form-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--sp-3) var(--sp-4); }
+  .route-config-field { min-width:0; }
+  .route-config-field label { display:flex; align-items:center; gap:6px; margin-bottom:6px; color:var(--text-secondary); text-transform:none; letter-spacing:0; font-size:11.5px; }
+  .route-config-input-wrap { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; overflow:hidden; border:1px solid var(--border); border-radius:var(--radius-md); background:var(--surface-input); }
+  .route-config-input-wrap:focus-within { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-dim); }
+  .route-config-input-wrap input { min-width:0; border:0; border-radius:0; box-shadow:none!important; }
+  .route-config-unit { padding:0 10px; color:var(--text-tertiary); font-family:var(--font-data); font-size:10.5px; white-space:nowrap; }
+  .route-config-field-help { min-height:17px; margin-top:4px; color:var(--text-muted); font-size:10px; line-height:1.45; }
+  .route-config-inventory { display:grid; grid-template-columns:minmax(110px,.55fr) repeat(2,minmax(0,1fr)); gap:var(--sp-2) var(--sp-3); align-items:center; }
+  .route-config-inventory-head { color:var(--text-muted); font-size:10px; }
+  .route-config-inventory-asset { display:flex; align-items:center; gap:6px; color:var(--text-secondary); font-size:11.5px; }
+  .route-config-modal-error { display:none; margin:0 var(--sp-6) var(--sp-3); padding:9px 11px; border:1px solid rgba(224,107,159,.35); border-radius:var(--radius-md); background:var(--loss-dim); color:var(--loss); font-size:11.5px; line-height:1.5; }
+  .route-config-modal-error.show { display:block; }
+  .route-config-modal-actions { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-3); padding:var(--sp-4) var(--sp-6); border-top:1px solid var(--border); }
+  .route-config-save-note { max-width:680px; color:var(--text-tertiary); font-size:10.5px; line-height:1.45; }
+  .route-config-action-buttons { display:flex; gap:var(--sp-2); flex-shrink:0; }
+  .route-config-action-buttons [hidden] { display:none; }
+  .route-config-review { display:flex; flex-direction:column; gap:0; border:1px solid var(--border); border-radius:var(--radius-md); overflow:hidden; }
+  .route-config-review-row { display:grid; grid-template-columns:minmax(180px,1fr) minmax(150px,auto) 18px minmax(150px,auto); gap:var(--sp-2); align-items:center; padding:9px var(--sp-3); border-bottom:1px solid var(--border); font-size:11.5px; }
+  .route-config-review-row:last-child { border-bottom:0; }
+  .route-config-review-row .before { color:var(--text-tertiary); font-family:var(--font-data); text-align:right; overflow-wrap:anywhere; }
+  .route-config-review-row .after { color:var(--accent); font-family:var(--font-data); overflow-wrap:anywhere; }
+  .route-config-review-note { margin-bottom:var(--sp-4); padding:var(--sp-3); border:1px solid rgba(240,178,50,.28); border-radius:var(--radius-md); background:var(--warning-dim); color:var(--text-secondary); font-size:11.5px; line-height:1.55; }
   @media (max-width:1100px) { .route-wallet-grid { grid-template-columns:repeat(3,1fr); } .route-gates { grid-template-columns:repeat(3,1fr); } }
-  @media (max-width:600px) { .route-wallet-grid,.route-gates { grid-template-columns:1fr 1fr; } .route-list-row,.route-top-candidate { grid-template-columns:1fr; gap:var(--sp-1); } .route-top-rank { margin-bottom:calc(var(--sp-1) * -1); } }
+  @media (max-width:760px) { .route-config-groups,.route-config-form-grid { grid-template-columns:1fr; } .route-config-modal-head,.route-config-modal-body,.route-config-modal-actions { padding-left:var(--sp-4); padding-right:var(--sp-4); } .route-config-modal-actions { align-items:stretch; flex-direction:column; } .route-config-action-buttons { justify-content:flex-end; } .route-config-review-row { grid-template-columns:1fr; gap:3px; } .route-config-review-row .before { text-align:left; } .route-config-review-row .arrow { display:none; } }
+  @media (max-width:600px) { .route-wallet-grid,.route-gates { grid-template-columns:1fr 1fr; } .route-list-row,.route-top-candidate { grid-template-columns:1fr; gap:var(--sp-1); } .route-top-rank { margin-bottom:calc(var(--sp-1) * -1); } .route-config-header { flex-direction:column; } .route-config-row { grid-template-columns:1fr; gap:3px; } .route-config-value { text-align:left; } .route-config-inventory { grid-template-columns:1fr; } .route-config-inventory-head { display:none; } }
 </style>
 </head>
 <body>
@@ -764,6 +819,28 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
       <button class="btn btn-primary" id="confirm-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div class="route-config-overlay" id="route-config-overlay" role="dialog" aria-modal="true" aria-labelledby="route-config-title" aria-describedby="route-config-subtitle">
+  <div class="route-config-modal">
+    <div class="route-config-modal-head">
+      <div>
+        <div class="route-config-modal-title" id="route-config-title">Edit route arbitrage thresholds</div>
+        <div class="route-config-modal-subtitle" id="route-config-subtitle">All values are the canister’s current effective configuration. Review explains every change before anything is saved.</div>
+      </div>
+      <button type="button" class="route-config-close" aria-label="Close threshold editor" onclick="closeRouteThresholdEditor()">×</button>
+    </div>
+    <div class="route-config-modal-body" id="route-config-modal-body"></div>
+    <div class="route-config-modal-error" id="route-config-modal-error" role="alert"></div>
+    <div class="route-config-modal-actions">
+      <div class="route-config-save-note" id="route-config-save-note">Changing a threshold invalidates the current quote scan. Trading authorization, book switches, asset switches, pool switches, and ck-stable protection are preserved.</div>
+      <div class="route-config-action-buttons">
+        <button type="button" class="btn btn-ghost" id="route-config-back" onclick="routeThresholdEditorBack()" hidden>Back</button>
+        <button type="button" class="btn btn-ghost" onclick="closeRouteThresholdEditor()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="route-config-primary" onclick="reviewRouteThresholdChanges(this)">Review changes</button>
+      </div>
     </div>
   </div>
 </div>
@@ -3594,14 +3671,494 @@
       if (!routeArbConfig) return `${esc(label)}: unavailable`;
       const book = routeReturnBook(bookKey);
       if (!book) return `${esc(label)}: not configured server-side yet`;
-      const ladderText = Array.isArray(book.size_ladder) && book.size_ladder.length
-        ? book.size_ladder.map(v => routeLedgerFormatAmount(v, decimals)).join(', ') : 'unavailable';
+      const ladder = book.size_ladder && typeof book.size_ladder[Symbol.iterator] === 'function'
+        ? Array.from(book.size_ladder) : [];
+      const ladderText = ladder.length
+        ? ladder.map(v => routeLedgerFormatAmount(v, decimals)).join(', ') : 'unavailable';
       const maxText = book.max_principal_native != null ? `${routeLedgerFormatAmount(book.max_principal_native, decimals)} ${label}` : 'unavailable';
       const minText = book.min_profit_native != null && book.min_profit_bps != null
-        ? `${routeLedgerFormatAmount(book.min_profit_native, decimals)} ${label} or ${(Number(book.min_profit_bps) / 100).toFixed(2)}%`
+        ? `${routeLedgerFormatAmount(book.min_profit_native, decimals)} ${label} and ${(Number(book.min_profit_bps) / 100).toFixed(2)}%`
         : 'unavailable';
       return `${esc(label)} size ladder: ${esc(ladderText)} · max principal: ${esc(maxText)} · min profit: ${esc(minText)}`;
     }
+
+    const ROUTE_CONFIG_BOUNDS = Object.freeze({
+      maxRouteLegs: 4,
+      maxSizeLadderEntries: 16,
+      maxConcurrentQuoteCalls: 16,
+      maxQuoteAgeSeconds: 60,
+      maxSettlementTimeoutSeconds: 86_400,
+      maxReconciliationQueriesPerCycle: 32,
+      maxOpenHeldPositions: 256,
+      maxOpenNonRouteReservations: 256,
+      maxTerminalExecutionRecords: 10_000,
+      maxExecutionRecordBytes: 65_536,
+      maxReconciliationEvidenceItems: 64,
+      maxNat16: 65_535,
+      maxNat64: 18_446_744_073_709_551_615n,
+    });
+    const ROUTE_CONFIG_ASSETS = Object.freeze([
+      { key: 'Icp', label: 'ICP', decimals: 8 },
+      { key: 'IcUsd', label: 'icUSD', decimals: 8 },
+      { key: 'CkUsdc', label: 'ckUSDC', decimals: 6 },
+      { key: 'CkUsdt', label: 'ckUSDT', decimals: 6 },
+      { key: 'CkBtc', label: 'ckBTC', decimals: 8 },
+      { key: 'CkEth', label: 'ckETH', decimals: 18 },
+    ]);
+    const ROUTE_CONFIG_TIPS = Object.freeze({
+      stableMinAbsolute: 'A stable-returning route must satisfy this absolute profit minimum and the relative minimum. Both the absolute minimum and the basis-point minimum must pass. Lowering this value admits smaller quoted dollar profits; setting it to zero disables only the absolute gate.',
+      stableMinBps: 'The quoted stable profit divided by the starting principal must reach this many basis points. Both the absolute minimum and the basis-point minimum must pass. 100 bps equals 1%. Lowering this value admits thinner percentage spreads.',
+      icpMinAbsolute: 'An ICP-returning route must earn at least this much ICP and also pass the ICP basis-point minimum. Lowering this value admits smaller absolute ICP profits; zero disables only the absolute gate.',
+      icpMinBps: 'The quoted ICP profit divided by the starting ICP principal must reach this many basis points. The absolute ICP minimum must also pass. 100 bps equals 1%.',
+      ckbtcMinAbsolute: 'A ckBTC-returning route must earn at least this much ckBTC and also pass the ckBTC basis-point minimum. Values are converted exactly to satoshis.',
+      ckbtcMinBps: 'The quoted ckBTC profit divided by the starting ckBTC principal must reach this many basis points. The absolute ckBTC minimum must also pass. 100 bps equals 1%.',
+      ckethMinAbsolute: 'A ckETH-returning route must earn at least this much ckETH and also pass the ckETH basis-point minimum. Values are converted exactly to wei without floating-point rounding.',
+      ckethMinBps: 'The quoted ckETH profit divided by the starting ckETH principal must reach this many basis points. The absolute ckETH minimum must also pass. 100 bps equals 1%.',
+      stableSizes: 'The router quotes each listed USD-sized principal for stable-returning routes. Enter 1 to 16 comma-separated values in increasing order. Every value must be greater than zero and no larger than the stable principal cap.',
+      stableCap: 'The largest USD-sized starting principal allowed for a stable-returning route. Every stable trade-size entry must be at or below this cap.',
+      icpSizes: 'The router quotes each listed ICP principal for ICP-returning routes. Enter 1 to 16 comma-separated values in increasing order. Every value must be greater than zero and no larger than the ICP principal cap.',
+      icpCap: 'The largest ICP starting principal allowed for an ICP-returning route. Every ICP trade-size entry must be at or below this cap.',
+      ckbtcSizes: 'The router quotes each listed ckBTC principal for ckBTC-returning routes. Enter 1 to 16 comma-separated values in increasing order. Every value must be greater than zero and no larger than the ckBTC principal cap.',
+      ckbtcCap: 'The largest ckBTC starting principal allowed for a ckBTC-returning route. Every ckBTC trade-size entry must be at or below this cap.',
+      ckethSizes: 'The router quotes each listed ckETH principal for ckETH-returning routes. Enter 1 to 16 comma-separated values in increasing order. Every value must be greater than zero and no larger than the ckETH principal cap.',
+      ckethCap: 'The largest ckETH starting principal allowed for a ckETH-returning route. Every ckETH trade-size entry must be at or below this cap.',
+      maxRouteLegs: 'The longest cycle the router may consider. A value of 2 allows direct two-pool arbitrage; 3 also allows triangular routes; 4 expands the search further. More legs increase quote work and execution risk.',
+      maxQuoteCalls: 'The total quote-call budget for one complete observation scan. When the budget is exhausted, remaining candidates are not quoted in that scan.',
+      concurrentQuotes: 'The maximum quote calls allowed in flight at once. Raising it can shorten scans but increases simultaneous canister-call load. The immutable maximum is 16.',
+      quoteAge: 'A candidate becomes ineligible when its quote is older than this many seconds at the execution gate. The immutable maximum is 60 seconds.',
+      settlementTimeout: 'How long a submitted route execution may wait for settlement evidence before the runtime treats it as timed out. The immutable maximum is 86,400 seconds, or 24 hours.',
+      reconciliationQueries: 'The maximum settlement-status queries performed for one execution during each reconciliation cycle. Raising it increases per-cycle call volume. The immutable maximum is 32.',
+      heldPositions: 'The maximum number of unresolved route positions that may be retained. New work fails closed when this capacity is exhausted. The immutable maximum is 256.',
+      nonRouteReservations: 'The maximum number of active reservations owned by operations outside the route executor. New reservations fail closed when this capacity is exhausted. The immutable maximum is 256.',
+      terminalRecords: 'The maximum completed, aborted, or otherwise terminal route executions retained in durable history. Older terminal records are pruned beyond this limit. The immutable maximum is 10,000.',
+      executionRecordBytes: 'The maximum encoded size of one durable route execution record. An execution that would exceed the limit fails closed. The immutable maximum is 65,536 bytes.',
+      evidenceItems: 'The maximum reconciliation evidence items retained on one route execution. Additional evidence cannot be appended beyond this limit. The immutable maximum is 64.',
+      inventoryFloor: 'The router will not approve a route whose projected balance would fall below this asset floor. Zero means no minimum reserve for that asset.',
+      inventoryCeiling: 'The router will not approve a route whose projected balance would rise above this asset ceiling. The floor cannot exceed the ceiling. The maximum representable value shown by the canister is effectively no practical ceiling.',
+    });
+
+    function routeConfigParseNativeAmount(text, decimals, label) {
+      const value = String(text == null ? '' : text).trim();
+      if (!/^(0|[1-9]\d*)(\.\d+)?$/.test(value)) throw new Error(`${label} must be a non-negative number`);
+      const [whole, fraction = ''] = value.split('.');
+      if (fraction.length > decimals) throw new Error(`${label} allows up to ${decimals} decimal places`);
+      const native = BigInt(whole) * (10n ** BigInt(decimals)) + BigInt((fraction + '0'.repeat(decimals)).slice(0, decimals) || '0');
+      if (native > ROUTE_CONFIG_BOUNDS.maxNat64) throw new Error(`${label} exceeds the maximum supported value`);
+      return native;
+    }
+    function routeConfigParseBoundedInteger(text, min, max, label) {
+      const value = String(text == null ? '' : text).trim();
+      if (!/^\d+$/.test(value)) throw new Error(`${label} must be a whole number`);
+      const parsed = BigInt(value);
+      if (parsed < BigInt(min) || parsed > BigInt(max)) throw new Error(`${label} must be between ${min.toLocaleString()} and ${max.toLocaleString()}`);
+      return Number(parsed);
+    }
+    function routeConfigParseLadder(text, decimals, maximum, label) {
+      const parts = String(text == null ? '' : text).split(',').map(part => part.trim()).filter(Boolean);
+      if (!parts.length || parts.length > ROUTE_CONFIG_BOUNDS.maxSizeLadderEntries) throw new Error(`${label} must contain 1 to ${ROUTE_CONFIG_BOUNDS.maxSizeLadderEntries} values`);
+      const values = parts.map(part => routeConfigParseNativeAmount(part, decimals, label));
+      if (values.some(value => value <= 0n)) throw new Error(`${label} values must be greater than zero`);
+      if (values.some(value => value > maximum)) throw new Error(`${label} contains a value above its principal cap`);
+      if (values.some((value, index) => index > 0 && value <= values[index - 1])) throw new Error(`${label} must be strictly increasing`);
+      return values;
+    }
+    function routeConfigParseDurationSeconds(text, maximumSeconds, label) {
+      const nanoseconds = routeConfigParseNativeAmount(text, 9, label);
+      if (nanoseconds < 1n || nanoseconds > BigInt(maximumSeconds) * 1_000_000_000n) {
+        throw new Error(`${label} must be between 0.000000001 and ${maximumSeconds.toLocaleString()} seconds`);
+      }
+      return nanoseconds;
+    }
+    function routeConfigFormatNative(value, decimals) { return routeLedgerFormatAmount(value, decimals); }
+    function routeConfigFormatBps(value) { return `${Number(value).toLocaleString()} bps (${(Number(value) / 100).toFixed(2)}%)`; }
+    function routeConfigFormatLadder(values, decimals) {
+      return values && typeof values[Symbol.iterator] === 'function'
+        ? Array.from(values, value => routeConfigFormatNative(value, decimals)).join(', ')
+        : 'Unavailable';
+    }
+    function routeConfigTooltipHtml(label, tip) {
+      return `<button type="button" class="route-config-tip" data-route-config-tooltip data-tip="${esc(tip)}" aria-label="How ${esc(label)} works" aria-description="${esc(tip)}">?</button>`;
+    }
+    function routeConfigSummaryRow(label, value, tip) {
+      return `<div class="route-config-row"><div class="route-config-label">${esc(label)} ${routeConfigTooltipHtml(label, tip)}</div><div class="route-config-value">${esc(value)}</div></div>`;
+    }
+    function routeConfigSummaryGroup(title, rows) {
+      return `<section class="route-config-group"><div class="route-config-group-title">${esc(title)}</div>${rows.join('')}</section>`;
+    }
+    function routeConfigSummaryEntries(config) {
+      if (!config) return [];
+      const ckbtc = routeOpt(config.ckbtc_book);
+      const cketh = routeOpt(config.cketh_book);
+      const entries = [
+        { group: 'Profit gates', label: 'Minimum stable profit (absolute)', value: `${routeConfigFormatNative(config.min_stable_profit_usd_6dec, 6)} USD`, tip: ROUTE_CONFIG_TIPS.stableMinAbsolute },
+        { group: 'Profit gates', label: 'Minimum stable profit (relative)', value: routeConfigFormatBps(config.min_stable_profit_bps), tip: ROUTE_CONFIG_TIPS.stableMinBps },
+        { group: 'Profit gates', label: 'Minimum ICP profit (absolute)', value: `${routeConfigFormatNative(config.min_icp_profit_e8s, 8)} ICP`, tip: ROUTE_CONFIG_TIPS.icpMinAbsolute },
+        { group: 'Profit gates', label: 'Minimum ICP profit (relative)', value: routeConfigFormatBps(config.min_icp_profit_bps), tip: ROUTE_CONFIG_TIPS.icpMinBps },
+      ];
+      if (ckbtc) entries.push(
+        { group: 'Profit gates', label: 'Minimum ckBTC profit (absolute)', value: `${routeConfigFormatNative(ckbtc.min_profit_native, 8)} ckBTC`, tip: ROUTE_CONFIG_TIPS.ckbtcMinAbsolute },
+        { group: 'Profit gates', label: 'Minimum ckBTC profit (relative)', value: routeConfigFormatBps(ckbtc.min_profit_bps), tip: ROUTE_CONFIG_TIPS.ckbtcMinBps },
+      );
+      if (cketh) entries.push(
+        { group: 'Profit gates', label: 'Minimum ckETH profit (absolute)', value: `${routeConfigFormatNative(cketh.min_profit_native, 18)} ckETH`, tip: ROUTE_CONFIG_TIPS.ckethMinAbsolute },
+        { group: 'Profit gates', label: 'Minimum ckETH profit (relative)', value: routeConfigFormatBps(cketh.min_profit_bps), tip: ROUTE_CONFIG_TIPS.ckethMinBps },
+      );
+      entries.push(
+        { group: 'Trade sizing', label: 'Stable trade sizes', value: `${routeConfigFormatLadder(config.stable_size_ladder, 6)} USD`, tip: ROUTE_CONFIG_TIPS.stableSizes },
+        { group: 'Trade sizing', label: 'Stable principal cap', value: `${routeConfigFormatNative(config.max_stable_principal_usd_6dec, 6)} USD`, tip: ROUTE_CONFIG_TIPS.stableCap },
+        { group: 'Trade sizing', label: 'ICP trade sizes', value: `${routeConfigFormatLadder(config.icp_size_ladder, 8)} ICP`, tip: ROUTE_CONFIG_TIPS.icpSizes },
+        { group: 'Trade sizing', label: 'ICP principal cap', value: `${routeConfigFormatNative(config.max_icp_principal_e8s, 8)} ICP`, tip: ROUTE_CONFIG_TIPS.icpCap },
+      );
+      if (ckbtc) entries.push(
+        { group: 'Trade sizing', label: 'ckBTC trade sizes', value: `${routeConfigFormatLadder(ckbtc.size_ladder, 8)} ckBTC`, tip: ROUTE_CONFIG_TIPS.ckbtcSizes },
+        { group: 'Trade sizing', label: 'ckBTC principal cap', value: `${routeConfigFormatNative(ckbtc.max_principal_native, 8)} ckBTC`, tip: ROUTE_CONFIG_TIPS.ckbtcCap },
+      );
+      if (cketh) entries.push(
+        { group: 'Trade sizing', label: 'ckETH trade sizes', value: `${routeConfigFormatLadder(cketh.size_ladder, 18)} ckETH`, tip: ROUTE_CONFIG_TIPS.ckethSizes },
+        { group: 'Trade sizing', label: 'ckETH principal cap', value: `${routeConfigFormatNative(cketh.max_principal_native, 18)} ckETH`, tip: ROUTE_CONFIG_TIPS.ckethCap },
+      );
+      entries.push(
+        { group: 'Quote and route limits', label: 'Maximum route length', value: `${config.max_route_legs} legs`, tip: ROUTE_CONFIG_TIPS.maxRouteLegs },
+        { group: 'Quote and route limits', label: 'Maximum quote calls per scan', value: Number(config.max_quote_calls_per_observation).toLocaleString(), tip: ROUTE_CONFIG_TIPS.maxQuoteCalls },
+        { group: 'Quote and route limits', label: 'Maximum concurrent quote calls', value: Number(config.max_concurrent_quote_calls).toLocaleString(), tip: ROUTE_CONFIG_TIPS.concurrentQuotes },
+        { group: 'Quote and route limits', label: 'Maximum quote age', value: `${routeConfigFormatNative(config.quote_max_age_ns, 9)} seconds`, tip: ROUTE_CONFIG_TIPS.quoteAge },
+        { group: 'Execution and storage limits', label: 'Settlement timeout', value: `${routeConfigFormatNative(config.settlement_timeout_ns, 9)} seconds`, tip: ROUTE_CONFIG_TIPS.settlementTimeout },
+        { group: 'Execution and storage limits', label: 'Reconciliation queries per cycle', value: Number(config.reconciliation_queries_per_cycle).toLocaleString(), tip: ROUTE_CONFIG_TIPS.reconciliationQueries },
+        { group: 'Execution and storage limits', label: 'Maximum held positions', value: Number(config.max_open_held_positions).toLocaleString(), tip: ROUTE_CONFIG_TIPS.heldPositions },
+        { group: 'Execution and storage limits', label: 'Maximum non-route reservations', value: Number(config.max_open_non_route_reservations).toLocaleString(), tip: ROUTE_CONFIG_TIPS.nonRouteReservations },
+        { group: 'Execution and storage limits', label: 'Terminal execution history limit', value: Number(config.max_terminal_execution_records).toLocaleString(), tip: ROUTE_CONFIG_TIPS.terminalRecords },
+        { group: 'Execution and storage limits', label: 'Maximum execution record size', value: `${Number(config.max_execution_record_bytes).toLocaleString()} bytes`, tip: ROUTE_CONFIG_TIPS.executionRecordBytes },
+        { group: 'Execution and storage limits', label: 'Reconciliation evidence limit', value: `${Number(config.max_reconciliation_evidence_items).toLocaleString()} items`, tip: ROUTE_CONFIG_TIPS.evidenceItems },
+      );
+      for (const asset of ROUTE_CONFIG_ASSETS) {
+        const band = config.inventory_bands.find(item => routeAssetKey(item.asset) === asset.key);
+        if (!band) continue;
+        entries.push(
+          { group: 'Inventory limits', label: `Inventory floor · ${asset.label}`, value: `${routeConfigFormatNative(band.floor_native, asset.decimals)} ${asset.label}`, tip: ROUTE_CONFIG_TIPS.inventoryFloor },
+          { group: 'Inventory limits', label: `Inventory ceiling · ${asset.label}`, value: `${routeConfigFormatNative(band.ceiling_native, asset.decimals)} ${asset.label}`, tip: ROUTE_CONFIG_TIPS.inventoryCeiling },
+        );
+      }
+      return entries;
+    }
+    function routeThresholdSummaryHtml(config) {
+      if (!config) return '<div class="route-empty">Route thresholds unavailable.</div>';
+      const entries = routeConfigSummaryEntries(config);
+      const groupOrder = ['Profit gates', 'Trade sizing', 'Quote and route limits', 'Inventory limits', 'Execution and storage limits'];
+      return `<div class="route-config-groups">${groupOrder.map(group => routeConfigSummaryGroup(group, entries.filter(entry => entry.group === group).map(entry => routeConfigSummaryRow(entry.label, entry.value, entry.tip)))).join('')}</div>`;
+    }
+    function routeConfigBuildUpdate(base, values) {
+      const ckbtc = routeOpt(base.ckbtc_book);
+      const cketh = routeOpt(base.cketh_book);
+      if (!ckbtc || !cketh) throw new Error('ckBTC and ckETH return-book configuration must exist before thresholds can be edited');
+
+      const stableMax = routeConfigParseNativeAmount(values.stableMaxPrincipal, 6, 'Stable principal cap');
+      const icpMax = routeConfigParseNativeAmount(values.icpMaxPrincipal, 8, 'ICP principal cap');
+      const ckbtcMax = routeConfigParseNativeAmount(values.ckbtcMaxPrincipal, 8, 'ckBTC principal cap');
+      const ckethMax = routeConfigParseNativeAmount(values.ckethMaxPrincipal, 18, 'ckETH principal cap');
+      if (stableMax <= 0n || icpMax <= 0n || ckbtcMax <= 0n || ckethMax <= 0n) throw new Error('Every principal cap must be greater than zero');
+
+      const nextBands = base.inventory_bands.map(band => {
+        const key = routeAssetKey(band.asset);
+        const asset = ROUTE_CONFIG_ASSETS.find(item => item.key === key);
+        const input = values.inventoryBands[key];
+        if (!asset || !input) throw new Error(`Inventory limits are missing for ${key || 'an asset'}`);
+        const floor = routeConfigParseNativeAmount(input.floor, asset.decimals, `${asset.label} inventory floor`);
+        const ceiling = routeConfigParseNativeAmount(input.ceiling, asset.decimals, `${asset.label} inventory ceiling`);
+        if (floor > ceiling) throw new Error(`${asset.label} inventory floor cannot exceed its ceiling`);
+        return { ...band, floor_native: floor, ceiling_native: ceiling };
+      });
+
+      return {
+        ...base,
+        stable_size_ladder: routeConfigParseLadder(values.stableSizeLadder, 6, stableMax, 'Stable trade sizes'),
+        max_stable_principal_usd_6dec: stableMax,
+        min_stable_profit_usd_6dec: routeConfigParseNativeAmount(values.stableMinProfit, 6, 'Minimum stable profit'),
+        min_stable_profit_bps: routeConfigParseBoundedInteger(values.stableMinProfitBps, 0, 4_294_967_295, 'Minimum stable profit bps'),
+        icp_size_ladder: routeConfigParseLadder(values.icpSizeLadder, 8, icpMax, 'ICP trade sizes'),
+        max_icp_principal_e8s: icpMax,
+        min_icp_profit_e8s: routeConfigParseNativeAmount(values.icpMinProfit, 8, 'Minimum ICP profit'),
+        min_icp_profit_bps: routeConfigParseBoundedInteger(values.icpMinProfitBps, 0, 4_294_967_295, 'Minimum ICP profit bps'),
+        ckbtc_book: [{
+          ...ckbtc,
+          size_ladder: routeConfigParseLadder(values.ckbtcSizeLadder, 8, ckbtcMax, 'ckBTC trade sizes'),
+          max_principal_native: ckbtcMax,
+          min_profit_native: routeConfigParseNativeAmount(values.ckbtcMinProfit, 8, 'Minimum ckBTC profit'),
+          min_profit_bps: routeConfigParseBoundedInteger(values.ckbtcMinProfitBps, 0, 4_294_967_295, 'Minimum ckBTC profit bps'),
+        }],
+        cketh_book: [{
+          ...cketh,
+          size_ladder: routeConfigParseLadder(values.ckethSizeLadder, 18, ckethMax, 'ckETH trade sizes'),
+          max_principal_native: ckethMax,
+          min_profit_native: routeConfigParseNativeAmount(values.ckethMinProfit, 18, 'Minimum ckETH profit'),
+          min_profit_bps: routeConfigParseBoundedInteger(values.ckethMinProfitBps, 0, 4_294_967_295, 'Minimum ckETH profit bps'),
+        }],
+        max_route_legs: routeConfigParseBoundedInteger(values.maxRouteLegs, 1, ROUTE_CONFIG_BOUNDS.maxRouteLegs, 'Maximum route length'),
+        max_quote_calls_per_observation: routeConfigParseBoundedInteger(values.maxQuoteCallsPerObservation, 1, ROUTE_CONFIG_BOUNDS.maxNat16, 'Maximum quote calls per scan'),
+        max_concurrent_quote_calls: routeConfigParseBoundedInteger(values.maxConcurrentQuoteCalls, 1, ROUTE_CONFIG_BOUNDS.maxConcurrentQuoteCalls, 'Maximum concurrent quote calls'),
+        quote_max_age_ns: routeConfigParseDurationSeconds(values.quoteMaxAgeSeconds, ROUTE_CONFIG_BOUNDS.maxQuoteAgeSeconds, 'Maximum quote age'),
+        settlement_timeout_ns: routeConfigParseDurationSeconds(values.settlementTimeoutSeconds, ROUTE_CONFIG_BOUNDS.maxSettlementTimeoutSeconds, 'Settlement timeout'),
+        reconciliation_queries_per_cycle: routeConfigParseBoundedInteger(values.reconciliationQueriesPerCycle, 1, ROUTE_CONFIG_BOUNDS.maxReconciliationQueriesPerCycle, 'Reconciliation queries per cycle'),
+        max_open_held_positions: routeConfigParseBoundedInteger(values.maxOpenHeldPositions, 1, ROUTE_CONFIG_BOUNDS.maxOpenHeldPositions, 'Maximum held positions'),
+        max_open_non_route_reservations: routeConfigParseBoundedInteger(values.maxOpenNonRouteReservations, 1, ROUTE_CONFIG_BOUNDS.maxOpenNonRouteReservations, 'Maximum non-route reservations'),
+        max_terminal_execution_records: routeConfigParseBoundedInteger(values.maxTerminalExecutionRecords, 1, ROUTE_CONFIG_BOUNDS.maxTerminalExecutionRecords, 'Terminal execution history limit'),
+        max_execution_record_bytes: routeConfigParseBoundedInteger(values.maxExecutionRecordBytes, 1, ROUTE_CONFIG_BOUNDS.maxExecutionRecordBytes, 'Maximum execution record size'),
+        max_reconciliation_evidence_items: routeConfigParseBoundedInteger(values.maxReconciliationEvidenceItems, 1, ROUTE_CONFIG_BOUNDS.maxReconciliationEvidenceItems, 'Reconciliation evidence limit'),
+        inventory_bands: nextBands,
+      };
+    }
+    // ═══════ Route arbitrage threshold controls end ═══════
+
+    function routeConfigEditorFieldHtml({ id, label, value, unit, tip, help, inputmode = 'decimal' }) {
+      return `<div class="route-config-field">
+        <label for="${id}">${esc(label)} ${routeConfigTooltipHtml(label, tip)}</label>
+        <div class="route-config-input-wrap"><input type="text" inputmode="${inputmode}" id="${id}" value="${esc(value)}" aria-describedby="${id}-help" autocomplete="off" spellcheck="false"><span class="route-config-unit">${esc(unit)}</span></div>
+        <div class="route-config-field-help" id="${id}-help">${esc(help)}</div>
+      </div>`;
+    }
+    function routeConfigEditorSectionHtml(title, subtitle, fields) {
+      return `<section class="route-config-form-section"><div class="route-config-form-heading">${esc(title)} <span>${esc(subtitle)}</span></div><div class="route-config-form-grid">${fields.join('')}</div></section>`;
+    }
+    function routeThresholdEditorHtml(config) {
+      const ckbtc = routeOpt(config.ckbtc_book);
+      const cketh = routeOpt(config.cketh_book);
+      if (!ckbtc || !cketh) return '<div class="route-empty negative">ckBTC and ckETH return-book configuration must exist before thresholds can be edited.</div>';
+      const integer = 'numeric';
+      const profit = [
+        routeConfigEditorFieldHtml({ id:'route-cfg-stable-min-profit', label:'Minimum stable profit (absolute)', value:routeConfigFormatNative(config.min_stable_profit_usd_6dec,6), unit:'USD', tip:ROUTE_CONFIG_TIPS.stableMinAbsolute, help:'Higher is stricter. This and the relative minimum must both pass.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-stable-min-bps', label:'Minimum stable profit (relative)', value:String(config.min_stable_profit_bps), unit:'bps', tip:ROUTE_CONFIG_TIPS.stableMinBps, help:'Higher is stricter. 50 bps means 0.50%.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-icp-min-profit', label:'Minimum ICP profit (absolute)', value:routeConfigFormatNative(config.min_icp_profit_e8s,8), unit:'ICP', tip:ROUTE_CONFIG_TIPS.icpMinAbsolute, help:'Higher is stricter. This and the relative minimum must both pass.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-icp-min-bps', label:'Minimum ICP profit (relative)', value:String(config.min_icp_profit_bps), unit:'bps', tip:ROUTE_CONFIG_TIPS.icpMinBps, help:'Higher is stricter. 50 bps means 0.50%.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-ckbtc-min-profit', label:'Minimum ckBTC profit (absolute)', value:routeConfigFormatNative(ckbtc.min_profit_native,8), unit:'ckBTC', tip:ROUTE_CONFIG_TIPS.ckbtcMinAbsolute, help:'Higher is stricter. Converted exactly to satoshis.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-ckbtc-min-bps', label:'Minimum ckBTC profit (relative)', value:String(ckbtc.min_profit_bps), unit:'bps', tip:ROUTE_CONFIG_TIPS.ckbtcMinBps, help:'Higher is stricter. The absolute minimum must also pass.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-cketh-min-profit', label:'Minimum ckETH profit (absolute)', value:routeConfigFormatNative(cketh.min_profit_native,18), unit:'ckETH', tip:ROUTE_CONFIG_TIPS.ckethMinAbsolute, help:'Higher is stricter. Converted exactly to wei.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-cketh-min-bps', label:'Minimum ckETH profit (relative)', value:String(cketh.min_profit_bps), unit:'bps', tip:ROUTE_CONFIG_TIPS.ckethMinBps, help:'Higher is stricter. The absolute minimum must also pass.', inputmode:integer }),
+      ];
+      const sizing = [
+        routeConfigEditorFieldHtml({ id:'route-cfg-stable-sizes', label:'Stable trade sizes', value:routeConfigFormatLadder(config.stable_size_ladder,6), unit:'USD list', tip:ROUTE_CONFIG_TIPS.stableSizes, help:'Comma-separated, smallest to largest. Each size is quoted.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-stable-cap', label:'Stable principal cap', value:routeConfigFormatNative(config.max_stable_principal_usd_6dec,6), unit:'USD', tip:ROUTE_CONFIG_TIPS.stableCap, help:'Higher allows larger trades. Every listed size must fit.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-icp-sizes', label:'ICP trade sizes', value:routeConfigFormatLadder(config.icp_size_ladder,8), unit:'ICP list', tip:ROUTE_CONFIG_TIPS.icpSizes, help:'Comma-separated, smallest to largest. Each size is quoted.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-icp-cap', label:'ICP principal cap', value:routeConfigFormatNative(config.max_icp_principal_e8s,8), unit:'ICP', tip:ROUTE_CONFIG_TIPS.icpCap, help:'Higher allows larger trades. Every listed size must fit.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-ckbtc-sizes', label:'ckBTC trade sizes', value:routeConfigFormatLadder(ckbtc.size_ladder,8), unit:'ckBTC list', tip:ROUTE_CONFIG_TIPS.ckbtcSizes, help:'Comma-separated, smallest to largest. Each size is quoted.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-ckbtc-cap', label:'ckBTC principal cap', value:routeConfigFormatNative(ckbtc.max_principal_native,8), unit:'ckBTC', tip:ROUTE_CONFIG_TIPS.ckbtcCap, help:'Higher allows larger trades. Every listed size must fit.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-cketh-sizes', label:'ckETH trade sizes', value:routeConfigFormatLadder(cketh.size_ladder,18), unit:'ckETH list', tip:ROUTE_CONFIG_TIPS.ckethSizes, help:'Comma-separated, smallest to largest. Each size is quoted.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-cketh-cap', label:'ckETH principal cap', value:routeConfigFormatNative(cketh.max_principal_native,18), unit:'ckETH', tip:ROUTE_CONFIG_TIPS.ckethCap, help:'Higher allows larger trades. Every listed size must fit.' }),
+      ];
+      const quoteLimits = [
+        routeConfigEditorFieldHtml({ id:'route-cfg-max-route-legs', label:'Maximum route length', value:String(config.max_route_legs), unit:'legs', tip:ROUTE_CONFIG_TIPS.maxRouteLegs, help:'2 enables direct arbitrage; 3 adds triangular routes; maximum 4.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-max-quote-calls', label:'Maximum quote calls per scan', value:String(config.max_quote_calls_per_observation), unit:'calls', tip:ROUTE_CONFIG_TIPS.maxQuoteCalls, help:'Higher explores more candidates but makes a full scan heavier.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-concurrent-quotes', label:'Maximum concurrent quote calls', value:String(config.max_concurrent_quote_calls), unit:'calls', tip:ROUTE_CONFIG_TIPS.concurrentQuotes, help:'Higher increases parallel quote load. Maximum 16.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-quote-age', label:'Maximum quote age', value:routeConfigFormatNative(config.quote_max_age_ns,9), unit:'seconds', tip:ROUTE_CONFIG_TIPS.quoteAge, help:'Lower is fresher and stricter. Maximum 60 seconds.' }),
+      ];
+      const executionLimits = [
+        routeConfigEditorFieldHtml({ id:'route-cfg-settlement-timeout', label:'Settlement timeout', value:routeConfigFormatNative(config.settlement_timeout_ns,9), unit:'seconds', tip:ROUTE_CONFIG_TIPS.settlementTimeout, help:'Higher waits longer for settlement evidence. Maximum 86,400 seconds.' }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-reconciliation-queries', label:'Reconciliation queries per cycle', value:String(config.reconciliation_queries_per_cycle), unit:'queries', tip:ROUTE_CONFIG_TIPS.reconciliationQueries, help:'Higher performs more settlement checks per cycle. Maximum 32.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-held-positions', label:'Maximum held positions', value:String(config.max_open_held_positions), unit:'positions', tip:ROUTE_CONFIG_TIPS.heldPositions, help:'Higher increases durable unresolved-position capacity. Maximum 256.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-non-route-reservations', label:'Maximum non-route reservations', value:String(config.max_open_non_route_reservations), unit:'reservations', tip:ROUTE_CONFIG_TIPS.nonRouteReservations, help:'Higher increases reservation capacity. Maximum 256.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-terminal-records', label:'Terminal execution history limit', value:String(config.max_terminal_execution_records), unit:'records', tip:ROUTE_CONFIG_TIPS.terminalRecords, help:'Higher retains more terminal history. Maximum 10,000.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-record-bytes', label:'Maximum execution record size', value:String(config.max_execution_record_bytes), unit:'bytes', tip:ROUTE_CONFIG_TIPS.executionRecordBytes, help:'Higher permits larger durable records. Maximum 65,536 bytes.', inputmode:integer }),
+        routeConfigEditorFieldHtml({ id:'route-cfg-evidence-items', label:'Reconciliation evidence limit', value:String(config.max_reconciliation_evidence_items), unit:'items', tip:ROUTE_CONFIG_TIPS.evidenceItems, help:'Higher retains more evidence per execution. Maximum 64.', inputmode:integer }),
+      ];
+      const inventoryRows = ROUTE_CONFIG_ASSETS.map(asset => {
+        const band = config.inventory_bands.find(item => routeAssetKey(item.asset) === asset.key);
+        if (!band) return '';
+        return `<div class="route-config-inventory-asset">${esc(asset.label)}</div>
+          <div class="route-config-input-wrap"><input type="text" inputmode="decimal" id="route-cfg-inventory-${asset.key}-floor" value="${esc(routeConfigFormatNative(band.floor_native,asset.decimals))}" aria-label="${esc(asset.label)} inventory floor" aria-description="${esc(ROUTE_CONFIG_TIPS.inventoryFloor)}" autocomplete="off" spellcheck="false"><span class="route-config-unit">${esc(asset.label)}</span></div>
+          <div class="route-config-input-wrap"><input type="text" inputmode="decimal" id="route-cfg-inventory-${asset.key}-ceiling" value="${esc(routeConfigFormatNative(band.ceiling_native,asset.decimals))}" aria-label="${esc(asset.label)} inventory ceiling" aria-description="${esc(ROUTE_CONFIG_TIPS.inventoryCeiling)}" autocomplete="off" spellcheck="false"><span class="route-config-unit">${esc(asset.label)}</span></div>`;
+      }).join('');
+      const inventory = `<section class="route-config-form-section"><div class="route-config-form-heading">Inventory limits <span>Projected post-route balances must remain inside both bounds.</span></div><div class="route-config-inventory"><div class="route-config-inventory-head">Asset</div><div class="route-config-inventory-head route-config-label">Inventory floor ${routeConfigTooltipHtml('Inventory floor',ROUTE_CONFIG_TIPS.inventoryFloor)}</div><div class="route-config-inventory-head route-config-label">Inventory ceiling ${routeConfigTooltipHtml('Inventory ceiling',ROUTE_CONFIG_TIPS.inventoryCeiling)}</div>${inventoryRows}</div></section>`;
+      return [
+        routeConfigEditorSectionHtml('Profit gates','Every route must pass both absolute and relative profit minimums.',profit),
+        routeConfigEditorSectionHtml('Trade sizing','The ladder controls what gets quoted; the cap is an independent hard limit.',sizing),
+        routeConfigEditorSectionHtml('Quote and route limits','These values control search breadth, parallel load, and quote freshness.',quoteLimits),
+        inventory,
+        routeConfigEditorSectionHtml('Execution and storage limits','These are fail-closed capacity and reconciliation boundaries.',executionLimits),
+      ].join('');
+    }
+    // ═══════ Route threshold editor DOM actions ═══════
+
+    function routeConfigEditableFingerprint(config) {
+      return JSON.stringify(routeConfigSummaryEntries(config).map(entry => [entry.label, entry.value]));
+    }
+    async function routeConfigCommitChanges(editorBase, values) {
+      const fresh = await authenticatedActor.get_route_arb_config_v1();
+      if (routeConfigEditableFingerprint(fresh) !== routeConfigEditableFingerprint(editorBase)) {
+        throw new Error('Route thresholds changed since this editor opened. Close and reopen the editor to review the current values before saving.');
+      }
+      const next = routeConfigBuildUpdate(fresh, values);
+      unwrapResult(await authenticatedActor.set_route_arb_config_v1(next));
+      const readback = await authenticatedActor.get_route_arb_config_v1();
+      if (routeConfigEditableFingerprint(readback) !== routeConfigEditableFingerprint(next)) {
+        throw new Error('The canister readback did not match the reviewed threshold changes');
+      }
+      routeArbConfig = readback;
+      markSourceFresh(routeSources.routeArbConfig, readback);
+      const drain = routeDataRequestPromise;
+      if (drain) await drain;
+      latestRouteObservation = null;
+      latestRouteCandidates = null;
+      latestTopRouteCandidates = null;
+      for (const name of ['observation', 'candidates', 'topCandidates']) {
+        if (routeSources[name]) markSourceUnavailable(routeSources[name], 'Route thresholds changed; refreshing quotes');
+      }
+      renderRouteAutomationViews();
+      await loadRouteData();
+      return readback;
+    }
+    function routeConfigInputValue(id) {
+      const input = document.getElementById(id);
+      if (!input) throw new Error(`Threshold editor field ${id} is unavailable`);
+      return input.value.trim();
+    }
+    function routeConfigReadEditorValues() {
+      const inventoryBands = {};
+      for (const asset of ROUTE_CONFIG_ASSETS) {
+        inventoryBands[asset.key] = {
+          floor: routeConfigInputValue(`route-cfg-inventory-${asset.key}-floor`),
+          ceiling: routeConfigInputValue(`route-cfg-inventory-${asset.key}-ceiling`),
+        };
+      }
+      return {
+        stableSizeLadder: routeConfigInputValue('route-cfg-stable-sizes'),
+        stableMaxPrincipal: routeConfigInputValue('route-cfg-stable-cap'),
+        stableMinProfit: routeConfigInputValue('route-cfg-stable-min-profit'),
+        stableMinProfitBps: routeConfigInputValue('route-cfg-stable-min-bps'),
+        icpSizeLadder: routeConfigInputValue('route-cfg-icp-sizes'),
+        icpMaxPrincipal: routeConfigInputValue('route-cfg-icp-cap'),
+        icpMinProfit: routeConfigInputValue('route-cfg-icp-min-profit'),
+        icpMinProfitBps: routeConfigInputValue('route-cfg-icp-min-bps'),
+        ckbtcSizeLadder: routeConfigInputValue('route-cfg-ckbtc-sizes'),
+        ckbtcMaxPrincipal: routeConfigInputValue('route-cfg-ckbtc-cap'),
+        ckbtcMinProfit: routeConfigInputValue('route-cfg-ckbtc-min-profit'),
+        ckbtcMinProfitBps: routeConfigInputValue('route-cfg-ckbtc-min-bps'),
+        ckethSizeLadder: routeConfigInputValue('route-cfg-cketh-sizes'),
+        ckethMaxPrincipal: routeConfigInputValue('route-cfg-cketh-cap'),
+        ckethMinProfit: routeConfigInputValue('route-cfg-cketh-min-profit'),
+        ckethMinProfitBps: routeConfigInputValue('route-cfg-cketh-min-bps'),
+        maxRouteLegs: routeConfigInputValue('route-cfg-max-route-legs'),
+        maxQuoteCallsPerObservation: routeConfigInputValue('route-cfg-max-quote-calls'),
+        maxConcurrentQuoteCalls: routeConfigInputValue('route-cfg-concurrent-quotes'),
+        quoteMaxAgeSeconds: routeConfigInputValue('route-cfg-quote-age'),
+        settlementTimeoutSeconds: routeConfigInputValue('route-cfg-settlement-timeout'),
+        reconciliationQueriesPerCycle: routeConfigInputValue('route-cfg-reconciliation-queries'),
+        maxOpenHeldPositions: routeConfigInputValue('route-cfg-held-positions'),
+        maxOpenNonRouteReservations: routeConfigInputValue('route-cfg-non-route-reservations'),
+        maxTerminalExecutionRecords: routeConfigInputValue('route-cfg-terminal-records'),
+        maxExecutionRecordBytes: routeConfigInputValue('route-cfg-record-bytes'),
+        maxReconciliationEvidenceItems: routeConfigInputValue('route-cfg-evidence-items'),
+        inventoryBands,
+      };
+    }
+    function routeConfigReviewRowsHtml(beforeConfig, afterConfig) {
+      const before = new Map(routeConfigSummaryEntries(beforeConfig).map(entry => [entry.label, entry.value]));
+      const changed = routeConfigSummaryEntries(afterConfig).filter(entry => before.get(entry.label) !== entry.value);
+      if (!changed.length) return '<div class="route-empty">No threshold values changed.</div>';
+      return `<div class="route-config-review">${changed.map(entry => `<div class="route-config-review-row"><span>${esc(entry.label)}</span><span class="before">${esc(before.get(entry.label) || 'Unavailable')}</span><span class="arrow" aria-hidden="true">→</span><span class="after">${esc(entry.value)}</span></div>`).join('')}</div>`;
+    }
+    let routeConfigEditorBase = null;
+    let routeConfigPendingValues = null;
+    let routeConfigPendingUpdate = null;
+    let routeConfigEditorSaving = false;
+
+    function routeConfigSetEditorError(message = '') {
+      const error = document.getElementById('route-config-modal-error');
+      if (!error) return;
+      error.textContent = message;
+      error.classList.toggle('show', Boolean(message));
+    }
+    function routeConfigSetEditorPhase(phase) {
+      const primary = document.getElementById('route-config-primary');
+      const back = document.getElementById('route-config-back');
+      const note = document.getElementById('route-config-save-note');
+      if (!primary || !back || !note) return;
+      const reviewing = phase === 'review';
+      primary.textContent = reviewing ? 'Save changes' : 'Review changes';
+      primary.onclick = reviewing ? function () { saveRouteThresholdChanges(primary); } : function () { reviewRouteThresholdChanges(primary); };
+      back.hidden = !reviewing;
+      note.textContent = reviewing
+        ? 'The save is atomic. Before writing, the dashboard re-reads the canister and refuses to overwrite any threshold changed since this editor opened.'
+        : 'Changing a threshold invalidates the current quote scan. Trading authorization, book switches, asset switches, pool switches, and ck-stable protection are preserved.';
+    }
+    window.openRouteThresholdEditor = function () {
+      if (!requireAuth()) return;
+      if (routeSourceState('routeArbConfig') !== 'fresh' || !routeArbConfig) {
+        toast(`Route policy ${sourceStateText('routeArbConfig')}; refresh before editing thresholds`, 'error');
+        return;
+      }
+      routeConfigEditorBase = routeArbConfig;
+      routeConfigPendingValues = null;
+      routeConfigPendingUpdate = null;
+      routeConfigEditorSaving = false;
+      const overlay = document.getElementById('route-config-overlay');
+      document.getElementById('route-config-modal-body').innerHTML = routeThresholdEditorHtml(routeConfigEditorBase);
+      routeConfigSetEditorError('');
+      routeConfigSetEditorPhase('edit');
+      overlay.classList.add('show');
+      const first = document.getElementById('route-cfg-stable-min-profit');
+      if (first) first.focus();
+    };
+    window.closeRouteThresholdEditor = function () {
+      if (routeConfigEditorSaving) return;
+      const overlay = document.getElementById('route-config-overlay');
+      if (overlay) overlay.classList.remove('show');
+      routeConfigEditorBase = null;
+      routeConfigPendingValues = null;
+      routeConfigPendingUpdate = null;
+      routeConfigSetEditorError('');
+    };
+    window.routeThresholdEditorBack = function () {
+      if (!routeConfigEditorBase || routeConfigEditorSaving) return;
+      document.getElementById('route-config-modal-body').innerHTML = routeThresholdEditorHtml(routeConfigPendingUpdate || routeConfigEditorBase);
+      routeConfigPendingValues = null;
+      routeConfigPendingUpdate = null;
+      routeConfigSetEditorError('');
+      routeConfigSetEditorPhase('edit');
+    };
+    window.reviewRouteThresholdChanges = function () {
+      if (!routeConfigEditorBase || routeConfigEditorSaving) return;
+      try {
+        const values = routeConfigReadEditorValues();
+        const next = routeConfigBuildUpdate(routeConfigEditorBase, values);
+        if (routeConfigEditableFingerprint(next) === routeConfigEditableFingerprint(routeConfigEditorBase)) {
+          throw new Error('No threshold values changed');
+        }
+        routeConfigPendingValues = values;
+        routeConfigPendingUpdate = next;
+        document.getElementById('route-config-modal-body').innerHTML = `<div class="route-config-review-note"><strong>Review the exact changes below.</strong> Profit gates use AND logic: every route must pass its absolute minimum and its basis-point minimum. No automation, book, asset, pool, or stable-exit switch will be changed.</div>${routeConfigReviewRowsHtml(routeConfigEditorBase, next)}`;
+        routeConfigSetEditorError('');
+        routeConfigSetEditorPhase('review');
+      } catch (error) {
+        routeConfigSetEditorError(error && error.message ? error.message : String(error));
+      }
+    };
+    window.saveRouteThresholdChanges = async function (button) {
+      if (!routeConfigEditorBase || !routeConfigPendingValues || routeConfigEditorSaving || !requireAuth()) return;
+      routeConfigEditorSaving = true;
+      routeConfigSetEditorError('');
+      btnLoading(button, 'Saving…');
+      try {
+        await routeConfigCommitChanges(routeConfigEditorBase, routeConfigPendingValues);
+        routeConfigEditorSaving = false;
+        closeRouteThresholdEditor();
+        toast('Route thresholds saved and confirmed by canister readback', 'success');
+      } catch (error) {
+        routeConfigSetEditorError(error && error.message ? error.message : String(error));
+      } finally {
+        routeConfigEditorSaving = false;
+        btnDone(button);
+      }
+    };
+    function bindRouteConfigEditorHandlers() {
+      const overlay = document.getElementById('route-config-overlay');
+      if (!overlay || overlay.__routeConfigBound) return;
+      overlay.__routeConfigBound = true;
+      overlay.addEventListener('click', event => {
+        if (event.target.id === 'route-config-overlay') closeRouteThresholdEditor();
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && overlay.classList.contains('show')) closeRouteThresholdEditor();
+      });
+    }
+
     function routeArbitrageHtml() {
       const status = latestRouteStatus;
       const obs = latestRouteObservation;
@@ -5586,6 +6143,16 @@
           <div class="stat-row"><span>Venues</span><span>Rumi 3pool + code-pinned ICPSwap pools</span></div>
           <div class="footnote">The router owns route discovery, quote observations, and durable reconciliation state. Pool identities and asset ledgers are code-pinned; there is no manual approval/setup action in this surface.</div>
         </div>
+        <div class="card" style="margin-bottom:var(--sp-4)" data-route-thresholds>
+          <div class="route-config-header">
+            <div>
+              <div class="card-header">Route arbitrage thresholds and limits</div>
+              <div class="card-subtitle">Every adjustable numeric route-policy value is shown below in its human unit. Use the question-mark tooltips for the exact eligibility rule, direction of effect, and immutable bound.</div>
+            </div>
+            <button type="button" class="btn btn-primary" onclick="openRouteThresholdEditor()" ${routeArbConfigState === 'fresh' && routeArbConfig ? '' : 'disabled'}>Edit all thresholds and limits</button>
+          </div>
+          ${routeThresholdSummaryHtml(routeArbConfig)}
+        </div>
         <div class="card" style="margin-bottom:var(--sp-4)" data-ops-volume-actions>
           <div class="card-header">Volume engine ${sourceStampHtml('volumeStats')}</div>
           <div class="card-subtitle">Operational volume actions and cost-center accounting live here. They are separate from route-arbitrage ranking.</div>
@@ -6339,6 +6906,7 @@
     // ═══════ Init ═══════
 
     async function init() {
+      bindRouteConfigEditorHandlers();
       paintFromCache(); // never throws (see try/catch inside) — safe before actors exist
       startProgress();
       try {
