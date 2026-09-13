@@ -25,6 +25,11 @@ type BestRouteCandidatesV1 = record {
   observation_id : opt text;
   scan_complete : bool;
 };
+type TopRouteCandidatesV1 = record {
+  candidates : vec RouteCandidateReportV1;
+  observation_id : opt text;
+  scan_complete : bool;
+};
 // Which of the two Strategy S pools a stranded BOB balance entered through.
 // Internal to BotState (not part of any candid method signature yet).
 type BobPool = variant {
@@ -511,6 +516,8 @@ type ObservationAccumulatorV1 = record {
   best_cketh_candidate : opt RouteCandidateReportV1;
   provisional_best_ckbtc_candidate : opt RouteCandidateReportV1;
   provisional_best_cketh_candidate : opt RouteCandidateReportV1;
+  provisional_top_candidates : vec RouteCandidateReportV1;
+  top_candidates : vec RouteCandidateReportV1;
   scan_complete : bool;
 };
 type ObservationBatchResultV1 = record {
@@ -965,6 +972,7 @@ service : (InitArgs) -> {
   get_route_observations_v1 : (nat64, nat64) -> (Result_4) query;
   get_route_reservations_v1 : (nat64, nat64) -> (Result_5) query;
   get_route_runtime_status_v1 : () -> (Result_6) query;
+  get_top_route_candidates_v1 : () -> (TopRouteCandidatesV1) query;
   get_route_wallet_balances_v1 : () -> (vec WalletAssetBalanceV1);
   get_snapshots : (nat64, nat64) -> (vec CycleSnapshot) query;
   get_summary : () -> (TradeSummary) query;
