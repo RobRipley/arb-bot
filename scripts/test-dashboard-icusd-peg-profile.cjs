@@ -16,6 +16,7 @@ const vmContext = vm.createContext({
   latestRouteObservation: { observation_id: 'old-observation' },
   latestRouteStatus: { icusd_peg_trades_profile_active: true },
   latestRouteRuntime: { enabled: false, dry_run: true, live_authorized: false },
+  routeArbConfig: { icusd_price_usd6: [970000n], stable_size_ladder: [1000000n] },
   routeSources: { status: {}, observation: {} },
   statusState: 'fresh',
   routeOpt: value => Array.isArray(value) && value.length ? value[0] : null,
@@ -45,7 +46,7 @@ vm.runInContext(html.slice(start, end), vmContext);
 
 assert.equal(
   vm.runInContext("icusdPegTradesProfileStatusHtml('fresh', {icusd_peg_trades_profile_active:true, observation_interval_secs:600, next_observation_eligible_at_ns:[123n]}, {enabled:false,dry_run:true})", vmContext),
-  '<div class="route-list-row"><strong>Profile active · execution stopped · dry-run</strong><span>Configured interval: 600 seconds · next eligible time: time:123</span></div><div class="route-wallet-meta">The scheduler checks this profile only while route execution is authorized and enabled, with dry-run off. Exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades are in scope; terminal stable profit is accounted at $1 after fees. Activating this profile does not authorize live trades. No automatic drain runs; stranded ICP remains held until separately resolved. An already durable execution may still be serviced and reconciled.</div>',
+  '<div class="route-list-row"><strong>Profile active · execution stopped · dry-run</strong><span>Configured interval: 600 seconds · next eligible time: time:123</span></div><div class="route-wallet-meta">The scheduler checks this profile only while route execution is authorized and enabled, with dry-run off. Exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades are in scope. Stable route sizing and profit comparisons use the configured icUSD accounting value of $0.97 and ckUSDC/ckUSDT at $1.00 after fees; actual route amounts and proceeds come from pool quotes. Activating this profile does not authorize live trades. No automatic drain runs; stranded ICP remains held until separately resolved. An already durable execution may still be serviced and reconciled.</div>',
   'an active profile must disclose its cadence, stopped execution, fixed scope, and held-ICP behavior',
 );
 assert.match(
@@ -70,6 +71,13 @@ assert.match(vmContext.modal.body, /600 seconds/);
 assert.match(vmContext.modal.body, /authorized and enabled, with dry-run off/);
 assert.match(vmContext.modal.body, /after fees/);
 assert.match(vmContext.modal.body, /stranded ICP remains held/);
+assert.match(vmContext.modal.body, /icUSD accounting value of \$0\.97/);
+assert.match(vmContext.modal.body, /actual route amounts and proceeds come from pool quotes/);
+assert.match(
+  vm.runInContext('icusdPegTradesProfileSummaryHtml(routeArbConfig)', vmContext),
+  /Configured scope: exactly four.*authorized and enabled, with dry-run off.*configured icUSD accounting value of \$0\.97.*zero absolute and relative thresholds/i,
+  'the Ops profile summary must keep its route/gate/threshold promises while displaying the configured icUSD value',
+);
 assert.equal(vmContext.calls.length, 0, 'opening the confirmation must not call the canister');
 (async () => {
   let releaseRead;

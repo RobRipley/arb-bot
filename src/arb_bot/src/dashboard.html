@@ -997,6 +997,8 @@
         max_execution_record_bytes: I.Nat32, max_reconciliation_evidence_items: I.Nat8,
         // ckBTC/ckETH-returning books.
         ckbtc_book: I.Opt(AssetReturnBookConfigV1), cketh_book: I.Opt(AssetReturnBookConfigV1),
+        // USD6 accounting value for icUSD; absent legacy state resolves to $1.00.
+        icusd_price_usd6: I.Opt(I.Nat64),
         // Separate opt-in profile for bounded icUSD peg observations/trades.
         icusd_peg_trades_profile: I.Opt(I.Bool),
       });
@@ -1179,6 +1181,7 @@
         set_route_arb_config_v1: I.Func([RouteArbConfigV1], [I.Variant({ Ok: I.Null, Err: I.Text })], []),
         set_wrapped_stable_to_icusd_allowed_v1: I.Func([I.Bool], [I.Variant({ Ok: RouteArbConfigV1, Err: I.Text })], []),
         set_icusd_peg_trades_profile_v1: I.Func([I.Bool], [I.Variant({ Ok: RouteArbConfigV1, Err: I.Text })], []),
+        set_icusd_price_usd6_v1: I.Func([I.Nat64], [I.Variant({ Ok: RouteArbConfigV1, Err: I.Text })], []),
         get_route_arb_status_v1: I.Func([], [RouteArbStatusV1], ['query']),
         get_route_wallet_balances_v1: I.Func([], [I.Vec(WalletAssetBalanceV1)], []),
         start_route_observation_v1: I.Func([], [I.Variant({ Ok: ObservationStartV1, Err: I.Text })], []),
@@ -1705,6 +1708,7 @@
     let routeLedgerRequestPromise = null;
     let routeLedgerRequestPage = null;
     let routeDataRequestPromise = null;
+    let routeIcusdPriceMutationInFlight = false;
     let balanceRequestGeneration = 0;
     let balanceRequestPromise = null;
     let routeRuntimeQueryGeneration = 0;
@@ -3549,6 +3553,123 @@
       else if (typeof renderOps === 'function') renderOps();
     }
     // ═══════ icUSD peg trades profile UI ═══════
+    // ═══════ icUSD accounting price UI ═══════
+    const ICUSD_PRICE_USD6_DEFAULT = 1000000n;
+    const ICUSD_PRICE_USD6_MAX_NAT64 = 18446744073709551615n;
+    function icusdPriceCurrentUsd6(config) {
+      const configured = routeOpt(config && config.icusd_price_usd6);
+      return configured == null ? ICUSD_PRICE_USD6_DEFAULT : BigInt(configured);
+    }
+    function icusdPriceFormatUsd6(value, includeDollar = true) {
+      const amount = BigInt(value);
+      const whole = amount / 1000000n;
+      const fraction = (amount % 1000000n).toString().padStart(6, '0').replace(/0+$/, '').padEnd(2, '0');
+      return (includeDollar ? '$' : '') + whole.toString() + '.' + fraction;
+    }
+    function icusdPriceParseUsd6(input, config) {
+      const text = String(input == null ? '' : input).trim();
+      if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(text)) throw new Error('Enter a valid USD amount with up to 6 decimal places');
+      const [wholeText, fractionText = ''] = text.split('.');
+      const amount = BigInt(wholeText) * 1000000n + BigInt((fractionText + '000000').slice(0, 6));
+      if (amount <= 0n) throw new Error('icUSD price must be positive and must produce a nonzero native amount for the smallest stable size');
+      const ladder = config && config.stable_size_ladder ? Array.from(config.stable_size_ladder, BigInt) : [];
+      if (!ladder.length || ladder.some(value => value <= 0n)) throw new Error('Stable size ladder is unavailable for icUSD price validation');
+      const smallestStableSize = ladder.reduce((smallest, value) => value < smallest ? value : smallest);
+      const maximum = smallestStableSize * 100000000n;
+      if (maximum > ICUSD_PRICE_USD6_MAX_NAT64 || amount > maximum) {
+        throw new Error('icUSD price must be positive and must produce a nonzero native amount for the smallest stable size');
+      }
+      return amount;
+    }
+    function icusdPriceInputValue(config) { return icusdPriceFormatUsd6(icusdPriceCurrentUsd6(config), false); }
+    function icusdAccountingPriceDisclosure(config) {
+      if (!config) return 'Configured icUSD accounting value unavailable; refresh route policy before relying on sizing or profit comparisons. ckUSDC and ckUSDT remain valued at $1.00. Actual route amounts and proceeds come from pool quotes.';
+      return 'Stable route sizing and profit comparisons use the configured icUSD accounting value of ' + icusdPriceFormatUsd6(icusdPriceCurrentUsd6(config)) + ' and ckUSDC/ckUSDT at $1.00 after fees; actual route amounts and proceeds come from pool quotes.';
+    }
+    function icusdPegTradesProfileSummaryHtml(config) {
+      return 'Configured scope: exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades. When route execution is authorized and enabled, with dry-run off, the scheduler checks this profile every 600 seconds. Profile setup leaves route execution disabled in dry-run, so background scans do not run until all three conditions are met. ' + icusdAccountingPriceDisclosure(config) + ' Zero absolute and relative thresholds; profile setup never authorizes live trading.';
+    }
+    function icusdPegMarketDisclosureHtml(config) {
+      return '<div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ' + esc(routeTradingLabel()) + '</span> · ' + esc(icusdAccountingPriceDisclosure(config)) + ' Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo(\'ops\')">Manage in Ops →</button></div>';
+    }
+    function icusdPriceEditorHtml(config, executionState, currentExecution) {
+      if (!config) return '<div class="route-wallet-meta">icUSD accounting value unavailable.</div>';
+      const ready = executionState === 'fresh' && !currentExecution && state.levers.icUsdPrice !== 'applying';
+      const value = icusdPriceCurrentUsd6(config);
+      return '<div class="icusd-price-control"><label for="icusd-price-usd6">icUSD value</label><div class="route-config-input-wrap"><input id="icusd-price-usd6" type="text" inputmode="decimal" value="' + esc(icusdPriceInputValue(config)) + '" autocomplete="off" spellcheck="false"><span class="route-config-unit">USD</span></div><button type="button" class="btn btn-sm btn-primary" onclick="saveIcusdAccountingPrice()"' + (ready ? '' : ' disabled') + '>Save icUSD value</button><div class="route-wallet-meta">Configured icUSD accounting value: ' + esc(icusdPriceFormatUsd6(value)) + '. ' + esc(icusdAccountingPriceDisclosure(config)) + '</div></div>';
+    }
+    function resetManualQuoteScanAfterPolicyChange(reason) {
+      manualQuoteScanGeneration += 1;
+      manualQuoteScan = { phase: 'ready', observationId: null, cursor: null, batchCount: 0, error: null, startedAtNs: null };
+      latestRouteObservation = null;
+      if (routeSources.observation) markSourceUnavailable(routeSources.observation, reason);
+    }
+    window.saveIcusdAccountingPrice = function() {
+      if (state.levers.icUsdPrice === 'applying' || !requireAuth()) return;
+      if (routeSourceState('routeArbConfig') !== 'fresh' || !routeArbConfig) {
+        toast('icUSD accounting configuration ' + sourceStateText('routeArbConfig') + '; refresh before changing it', 'error');
+        return;
+      }
+      if (routeSourceState('currentExecution') !== 'fresh') {
+        toast('Current execution status is ' + sourceStateText('currentExecution') + '; refresh before changing icUSD value', 'error');
+        return;
+      }
+      if (latestRouteExecution) {
+        toast('Wait for the current route execution to finish before changing icUSD accounting price', 'error');
+        return;
+      }
+      const input = document.getElementById('icusd-price-usd6');
+      let price;
+      try { price = icusdPriceParseUsd6(input && input.value, routeArbConfig); }
+      catch (error) { toast(error.message, 'error'); return; }
+      const current = icusdPriceCurrentUsd6(routeArbConfig);
+      if (price === current) { toast('icUSD accounting value is already ' + icusdPriceFormatUsd6(price), 'success'); return; }
+      openModal({
+        title: 'Change icUSD accounting value',
+        body: 'Change the configured icUSD accounting value from ' + icusdPriceFormatUsd6(current) + ' to ' + icusdPriceFormatUsd6(price) + '? This value affects sizing and profit comparisons. Actual route amounts and proceeds still come from pool quotes; ckUSDC and ckUSDT remain $1.00.',
+        confirmLabel: 'Save accounting value',
+        onConfirm: async () => {
+          state.levers.icUsdPrice = 'applying';
+          renderRouteAutomationViews();
+          try {
+            const drain = routeDataRequestPromise;
+            if (drain) await drain;
+            routeIcusdPriceMutationInFlight = true;
+            const [currentResult, configResult] = await Promise.all([
+              authenticatedActor.get_current_route_execution_v1(),
+              authenticatedActor.get_route_arb_config_v1(),
+            ]);
+            const currentExecution = routeOpt(currentResult);
+            if (currentExecution) throw new Error('Wait for the current route execution to finish before changing icUSD accounting price');
+            const freshConfig = configResult;
+            const freshPrice = icusdPriceParseUsd6(input && input.value, freshConfig);
+            if (freshPrice === icusdPriceCurrentUsd6(freshConfig)) {
+              routeArbConfig = freshConfig;
+              if (routeSources.routeArbConfig) markSourceFresh(routeSources.routeArbConfig, freshConfig);
+              routeIcusdPriceMutationInFlight = false;
+              await loadRouteData();
+              toast('icUSD accounting value is already ' + icusdPriceFormatUsd6(freshPrice), 'success');
+              return;
+            }
+            const updated = unwrapResult(await authenticatedActor.set_icusd_price_usd6_v1(freshPrice));
+            routeArbConfig = updated;
+            if (routeSources.routeArbConfig) markSourceFresh(routeSources.routeArbConfig, updated);
+            resetManualQuoteScanAfterPolicyChange('icUSD accounting value changed; refreshing observation');
+            routeIcusdPriceMutationInFlight = false;
+            await loadRouteData();
+            toast('icUSD accounting value saved as ' + icusdPriceFormatUsd6(icusdPriceCurrentUsd6(routeArbConfig)), 'success');
+          } catch (error) {
+            routeIcusdPriceMutationInFlight = false;
+            toast(error.message || String(error), 'error');
+            await loadRouteData();
+          } finally {
+            delete state.levers.icUsdPrice;
+            renderRouteAutomationViews();
+          }
+        },
+      });
+    };
+    // ═══════ icUSD accounting price UI end ═══════
     function icusdPegTradesProfileStatusHtml(statusState, status, runtime) {
       if (statusState === 'loading') return '<div class="route-wallet-meta">Profile status loading…</div>';
       if (statusState === 'failed' || statusState === 'unavailable') return '<div class="route-wallet-meta">Profile status unavailable' + routeSourceError(routeSources.status) + '</div>';
@@ -3561,7 +3682,7 @@
       const execution = !runtime ? 'execution state unavailable'
         : runtime.live_authorized && runtime.enabled && !runtime.dry_run ? 'separate route execution is on'
           : 'execution stopped · dry-run';
-      return '<div class="route-list-row"><strong>Profile active · ' + esc(execution) + '</strong><span>Configured interval: ' + esc(interval) + ' seconds · next eligible time: ' + esc(nextText) + stale + '</span></div><div class="route-wallet-meta">The scheduler checks this profile only while route execution is authorized and enabled, with dry-run off. Exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades are in scope; terminal stable profit is accounted at $1 after fees. Activating this profile does not authorize live trades. No automatic drain runs; stranded ICP remains held until separately resolved. An already durable execution may still be serviced and reconciled.</div>';
+      return '<div class="route-list-row"><strong>Profile active · ' + esc(execution) + '</strong><span>Configured interval: ' + esc(interval) + ' seconds · next eligible time: ' + esc(nextText) + stale + '</span></div><div class="route-wallet-meta">The scheduler checks this profile only while route execution is authorized and enabled, with dry-run off. Exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades are in scope. ' + esc(icusdAccountingPriceDisclosure(routeArbConfig)) + ' Activating this profile does not authorize live trades. No automatic drain runs; stranded ICP remains held until separately resolved. An already durable execution may still be serviced and reconciled.</div>';
     }
     window.setIcusdPegTradesProfile = function(active) {
       const key = 'pegTradesProfile';
@@ -3573,7 +3694,7 @@
       openModal({
         title: active ? 'Activate icUSD peg trades profile' : 'Stop icUSD peg trades profile',
         body: active
-          ? 'Activate a quote profile for exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades. When route execution is authorized and enabled, with dry-run off, the scheduler checks it every 600 seconds and counts stable profit at $1 after fees. Activation leaves execution disabled in dry-run; it does not authorize live trades. It never automatically drains ICP, so stranded ICP remains held for separate resolution.'
+          ? 'Activate a quote profile for exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades. When route execution is authorized and enabled, with dry-run off, the scheduler checks it every 600 seconds. ' + icusdAccountingPriceDisclosure(routeArbConfig) + ' Activation leaves execution disabled in dry-run; it does not authorize live trades. It never automatically drains ICP, so stranded ICP remains held for separate resolution.'
           : 'Stop future observations for this profile. This does not drain or move any held ICP; stranded ICP remains held for separate resolution.',
         confirmLabel: active ? 'Activate stopped profile' : 'Stop profile',
         danger: !active,
@@ -3585,12 +3706,8 @@
             if (drain) await drain;
             unwrapResult(await authenticatedActor.set_icusd_peg_trades_profile_v1(active));
             // The backend selector clears its observation and advances the
-            // scan generation. Drop any failed/resumable cursor from the old
-            // generation before the next manual scan can reuse it.
-            manualQuoteScanGeneration += 1;
-            manualQuoteScan = { phase: 'ready', observationId: null, cursor: null, batchCount: 0, error: null, startedAtNs: null };
-            latestRouteObservation = null;
-            if (routeSources.observation) markSourceUnavailable(routeSources.observation, 'Peg profile changed; refreshing observation');
+            // scan generation, so drop any resumable cursor from the old one.
+            resetManualQuoteScanAfterPolicyChange('Peg profile changed; refreshing observation');
             await loadRouteData();
             toast(active ? 'icUSD peg profile activated; execution remains stopped' : 'icUSD peg profile stopped', 'success');
           } catch (e) {
@@ -4272,7 +4389,7 @@
       return `<div id="route-arb-panel">
         <div class="route-toolbar" style="margin-bottom:var(--sp-4)"><div><h2 style="font-size:18px">Route arbitrage</h2><div class="card-subtitle" style="margin:4px 0 0">One router across Rumi 3pool and pinned ICPSwap pools. Routes begin and end in the same asset: a stablecoin, ICP, ckBTC, or ckETH return book. Start observation runs bounded quote batches automatically.</div></div>
           <div class="btn-group">${isAdmin ? observationProgressHtml(obs, observationState) : '<span class="badge badge-unconfigured">Log in for wallet and quote controls</span>'}</div></div>
-        <div class="route-disclosure"><span id="route-arbitrage-status">Automatic arbitrage: ${esc(routeTradingLabel())}</span> · icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting. Every intermediate amount—including ICP, ckBTC, and ckETH—is valued by the live pool quotes on that route. Quote-only mode cannot move funds. Automatic arbitrage requires the Ops control and working settlement support at every venue. <button type="button" class="btn btn-sm btn-ghost" onclick="goTo('ops')">Manage in Ops →</button></div>
+        ${icusdPegMarketDisclosureHtml(routeArbConfig)}
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header">Six-asset wallet</div><div id="route-wallet-grid" class="route-wallet-grid">${routeWalletHtml()}</div></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header" style="display:flex;justify-content:space-between;gap:var(--sp-3);align-items:baseline"><span>Top five evaluated routes</span><span class="source-stamp ${topCandidatesState === 'fresh' ? 'fresh' : topCandidatesState === 'stale' ? 'stale' : topCandidatesState === 'loading' ? 'loading' : 'failed'}">${esc(topCandidateStamp)}</span></div><div class="card-subtitle">Fully filled quotes, ranked by estimated net spread. Below-threshold and otherwise blocked routes stay visible here; this is read-only evaluation, not an order list.</div><div id="route-top-candidates" class="route-top-candidates">${topCandidatesUnavailable}</div><div class="route-wallet-meta">${esc(topCandidateObservation)}</div></div>
         <div class="card" style="margin-top:var(--sp-4)"><div class="card-header" style="display:flex;justify-content:space-between;gap:var(--sp-3);align-items:baseline"><span>Quote history · last 48 hours</span><span class="source-stamp ${historyState === 'fresh' ? 'fresh' : historyState === 'stale' ? 'stale' : historyState === 'loading' ? 'loading' : 'failed'}">${esc(historyStamp)}</span></div><div class="card-subtitle">Completed scans only. Each row is the scan's strongest fully filled quote and its execution gate. Quotes are estimates, not submitted trades or realized P&amp;L.</div><div id="route-observation-history" class="route-top-candidates">${historyUnavailable}</div></div>
@@ -4378,6 +4495,7 @@
 
     async function loadRouteData() {
       if (typeof routeRuntimeAuthoritativeRefreshPromise !== 'undefined' && routeRuntimeAuthoritativeRefreshPromise) return routeRuntimeAuthoritativeRefreshPromise;
+      if (routeIcusdPriceMutationInFlight) return routeDataRequestPromise;
       if (!anonymousActor || routeDataRequestPromise) return routeDataRequestPromise;
       const requestGeneration = typeof routeRuntimeQueryGeneration === 'number' ? ++routeRuntimeQueryGeneration : null;
       routeDataRequestPromise = (async () => {
@@ -6203,8 +6321,9 @@
         <div data-ops-automatic-control aria-label="Automatic arbitrage" data-automation-states="On Off Applying Blocked Unknown Starting Stopping Stopped">${routeRuntimeHtml()}</div>
         <div class="card" style="margin-bottom:var(--sp-4)" data-icusd-peg-trades-profile>
           <div class="card-header">icUSD peg trades profile</div>
-          <div class="card-subtitle">Configured scope: exactly four icUSD↔ICP↔ckUSDC/ckUSDT trades. When route execution is authorized and enabled, with dry-run off, the scheduler checks this profile every 600 seconds. Profile setup leaves route execution disabled in dry-run, so background scans do not run until all three conditions are met. Stable terminal profit uses $1 accounting after fees, with zero absolute and relative thresholds; profile setup never authorizes live trading.</div>
+          <div class="card-subtitle">${esc(icusdPegTradesProfileSummaryHtml(routeArbConfigState === 'fresh' ? routeArbConfig : null))}</div>
           ${icusdPegTradesProfileStatusHtml(routeSourceState('status'), routeStatus, latestRouteRuntime)}
+          ${icusdPriceEditorHtml(routeArbConfigState === 'fresh' ? routeArbConfig : null, routeSourceState('currentExecution'), latestRouteExecution)}
           <div class="route-wallet-meta">No automatic drain runs, even if a trade strands ICP. Held ICP remains in place for separate resolution; existing full-fill, fee, and settlement safeguards still apply.</div>
           <button type="button" class="btn ${pegProfileActive ? 'btn-danger' : 'btn-primary'}" onclick="setIcusdPegTradesProfile(${!pegProfileActive})" ${!pegProfileCanChange || pegProfileApplying ? 'disabled' : ''}>${pegProfileApplying ? 'Applying…' : pegProfileActive ? 'Stop profile observations' : 'Activate stopped profile'}</button>
         </div>

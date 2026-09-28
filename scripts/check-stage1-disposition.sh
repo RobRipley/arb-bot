@@ -152,6 +152,12 @@ PROFILE_CONFIG='
 set_icusd_peg_trades_profile_v1
 '
 
+# icUSD valuation is an accounting/sizing policy setting. It cannot change
+# wrapped-stable valuation or authorize route execution.
+ACCOUNTING_CONFIG='
+set_icusd_price_usd6_v1
+'
+
 # ── Route-observation updates: query-only inter-canister calls, no mutation ──
 ROUTE_OBSERVATION='
 start_route_observation_v1
@@ -187,7 +193,7 @@ set_route_runtime_authorized_v1
 
 all_classified() {
   printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$PROFILE_CONFIG" "$ROUTE_OBSERVATION" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" "$ROUTE_EXECUTION" "$RUNTIME_CONFIG" \
+    "$FAIL_CLOSED" "$READ_ONLY" "$VOLUME_CONFIG" "$PROFILE_CONFIG" "$ACCOUNTING_CONFIG" "$ROUTE_OBSERVATION" "$VOLUME_OPERATION" "$GENERIC_RECOVERY" "$ROUTE_EXECUTION" "$RUNTIME_CONFIG" \
     | grep -v '^[[:space:]]*$' | sort -u
 }
 
@@ -214,7 +220,7 @@ fi
 
 if [[ "$fail" -eq 0 ]]; then
   n=$(printf '%s\n' "$ACTUAL" | grep -c .)
-  echo "PASS: all $n public methods have an exact Stage-1 disposition (fail-closed: $(printf '%s\n' "$FAIL_CLOSED" | grep -c .), read-only: $(printf '%s\n' "$READ_ONLY" | grep -c .), volume-config: $(printf '%s\n' "$VOLUME_CONFIG" | grep -c .), profile-config: $(printf '%s\n' "$PROFILE_CONFIG" | grep -c .), route-observation: $(printf '%s\n' "$ROUTE_OBSERVATION" | grep -c .), volume-op: $(printf '%s\n' "$VOLUME_OPERATION" | grep -c .), generic-recovery: $(printf '%s\n' "$GENERIC_RECOVERY" | grep -c .))."
+  echo "PASS: all $n public methods have an exact Stage-1 disposition (fail-closed: $(printf '%s\n' "$FAIL_CLOSED" | grep -c .), read-only: $(printf '%s\n' "$READ_ONLY" | grep -c .), volume-config: $(printf '%s\n' "$VOLUME_CONFIG" | grep -c .), profile-config: $(printf '%s\n' "$PROFILE_CONFIG" | grep -c .), accounting-config: $(printf '%s\n' "$ACCOUNTING_CONFIG" | grep -c .), route-observation: $(printf '%s\n' "$ROUTE_OBSERVATION" | grep -c .), volume-op: $(printf '%s\n' "$VOLUME_OPERATION" | grep -c .), generic-recovery: $(printf '%s\n' "$GENERIC_RECOVERY" | grep -c .))."
 fi
 
 exit "$fail"

@@ -109,8 +109,16 @@ fn full_route_config_writer_preserves_the_field_with_a_dedicated_setter() {
     let source = include_str!("../src/lib.rs");
     let tail = source.split("fn set_route_arb_config_v1").nth(1).unwrap();
     let body = tail.split("\n#[").next().unwrap();
-    assert!(body.contains(
-        "config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd"
+    assert!(body.contains("store_route_arb_config(s, config, route_execution_active)"));
+    let writer = source
+        .split("fn store_route_arb_config")
+        .nth(1)
+        .unwrap()
+        .split("\nfn pinned")
+        .next()
+        .unwrap();
+    assert!(writer.contains(
+        "config.allow_wrapped_stable_to_icusd = state.route_arb.allow_wrapped_stable_to_icusd"
     ));
 }
 

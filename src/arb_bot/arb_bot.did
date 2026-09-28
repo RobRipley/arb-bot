@@ -666,6 +666,8 @@ type RouteArbConfigV1 = record {
   // Explicitly selected fixed icUSD/ICP/ckUSDC/ckUSDT restoration profile.
   // `None` is the pre-profile shape and resolves to inactive.
   icusd_peg_trades_profile : opt bool;
+  // Accounting valuation for icUSD in USD6; absent legacy state resolves to $1.00.
+  icusd_price_usd6 : opt nat64;
   asset_controls : vec AssetControlV1;
   quote_max_age_ns : nat64;
   max_stable_principal_usd_6dec : nat64;
@@ -728,6 +730,8 @@ type RouteCandidateReportV1 = record {
   candidate_class : CandidateClass;
   canonical_cycle_id : opt text;
   quote_timestamp_ns : nat64;
+  // Price captured with the quote/execution; legacy records default to $1.00.
+  accounting_icusd_price_usd6 : nat64;
   eligible : bool;
   rejection_reason : opt text;
   inventory_effect : text;
@@ -1100,6 +1104,7 @@ service : (InitArgs) -> {
   // an invalid intermediate state (e.g. floor temporarily above ceiling).
   set_icp_inventory_band : (nat64, nat64) -> (Result_1);
   set_icusd_peg_trades_profile_v1 : (bool) -> (Result_10);
+  set_icusd_price_usd6_v1 : (nat64) -> (Result_10);
   set_route_arb_config_v1 : (RouteArbConfigV1) -> (Result_1);
   set_route_runtime_authorized_v1 : (bool) -> (Result_6);
   // Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R

@@ -22,7 +22,8 @@ fn dashboard_exposes_the_consolidated_six_asset_route_surface() {
         "route-reservations",
         "route-execution-state",
         "route-held-positions",
-        "icUSD, ckUSDT, and ckUSDC are valued at $1 only for terminal profit accounting",
+        "Stable route sizing and profit comparisons use the configured icUSD accounting value",
+        "ckUSDC/ckUSDT at $1.00 after fees",
         "ckBTC",
         "ckETH",
         "Full fill",
@@ -81,6 +82,10 @@ fn dashboard_does_not_render_retired_lettered_strategy_actions() {
         "function routeArbitrageHtml()",
         "async function loadRouteData",
     );
+    let market_disclosure = rendered_region(
+        "function icusdPegMarketDisclosureHtml(",
+        "function icusdPriceEditorHtml(",
+    );
 
     // Check the code that builds the live DOM templates, rather than a prefix
     // that happens to end before the IDL/legacy compatibility section.
@@ -115,7 +120,8 @@ fn dashboard_does_not_render_retired_lettered_strategy_actions() {
         assert!(!ops.contains(retired), "retired control is rendered by Ops: {retired}");
     }
     assert!(route_panel.contains("Start observation"));
-    assert!(route_panel.contains("Quote-only mode cannot move funds"));
+    assert!(market_disclosure.contains("Quote-only mode cannot move funds"));
+    assert!(route_panel.contains("icusdPegMarketDisclosureHtml(routeArbConfig)"));
     assert!(!route_panel.contains("Legacy A-S/T activity is historical only"), "legacy disclosure belongs in Diagnostics");
 }
 
@@ -157,9 +163,14 @@ fn automatic_arbitrage_control_is_ops_only_and_native() {
     );
     let ops = rendered_region("function renderOps()", "// ═══════ Ledger");
     let runtime = rendered_region("function routeRuntimeHtml()", "window.setRouteTrading");
+    let market_disclosure = rendered_region(
+        "function icusdPegMarketDisclosureHtml(",
+        "function icusdPriceEditorHtml(",
+    );
 
-    assert!(route_panel.contains("route-arbitrage-status") || route_panel.contains("routeTradingLabel"));
-    assert!(route_panel.contains("goTo('ops')") || route_panel.contains("Ops"));
+    assert!(market_disclosure.contains("route-arbitrage-status") || market_disclosure.contains("routeTradingLabel"));
+    assert!(market_disclosure.contains("goTo(\\'ops\\')") || market_disclosure.contains("Ops"));
+    assert!(route_panel.contains("icusdPegMarketDisclosureHtml(routeArbConfig)"));
     assert!(!route_panel.contains("setRouteTrading("), "route panel must not mutate automatic arbitrage");
 
     assert!(ops.contains("data-ops-automatic-control"));

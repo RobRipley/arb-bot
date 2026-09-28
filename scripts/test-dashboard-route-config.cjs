@@ -70,6 +70,7 @@ const baseConfig = {
   icp_book_enabled: true,
   allow_wrapped_stable_to_icusd: [false],
   icusd_peg_trades_profile: [true],
+  icusd_price_usd6: [970000n],
   asset_controls: [
     { asset: { Icp: null }, enabled: true },
     { asset: { IcUsd: null }, enabled: true },
@@ -167,6 +168,7 @@ assert.deepEqual(next.pool_controls, baseConfig.pool_controls, 'threshold edits 
 assert.equal(next.enabled, true, 'threshold edits must not change live automation state');
 assert.equal(next.allow_wrapped_stable_to_icusd[0], false, 'threshold edits must preserve stable-exit protection');
 assert.equal(next.icusd_peg_trades_profile[0], true, 'threshold edits must preserve the independently stored peg-trades profile');
+assert.equal(next.icusd_price_usd6[0], 970000n, 'threshold edits must preserve the configured icUSD accounting value');
 context.tooOldQuoteValues = { ...context.values, quoteMaxAgeSeconds: '60.000000001' };
 assert.throws(
   () => vm.runInContext('routeConfigBuildUpdate(baseConfig, tooOldQuoteValues)', context),

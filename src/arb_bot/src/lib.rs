@@ -178,6 +178,30 @@ fn require_admin() {
     }
 }
 
+fn store_route_arb_config(
+    state: &mut state::BotState,
+    mut config: route_arb::RouteArbConfigV1,
+    route_execution_active: bool,
+) -> Result<route_arb::RouteArbConfigV1, String> {
+    config.allow_wrapped_stable_to_icusd = state.route_arb.allow_wrapped_stable_to_icusd;
+    config = route_arb::resolve_incoming_book_fields(config, &state.route_arb);
+    config = route_arb::resolve_incoming_profile_field(config, &state.route_arb);
+    config = route_arb::resolve_incoming_icusd_price_field(config, &state.route_arb);
+    route_arb::validate_profile_transition(&config, &state.route_arb)?;
+    route_arb::validate_route_config(&config)?;
+    route_arb::validate_icusd_price_change(
+        state.route_arb.icusd_price_usd6_resolved(),
+        config.icusd_price_usd6_resolved(),
+        route_execution_active,
+    )?;
+    state.route_arb_config_generation = state.route_arb_config_generation.checked_add(1)
+        .ok_or_else(|| "route config generation exhausted".to_string())?;
+    state.route_arb = config.clone();
+    state.route_observation = None;
+    state.route_observation_config_generation = None;
+    Ok(config)
+}
+
 fn pinned(text: &str) -> Principal {
     Principal::from_text(text).expect("compile-time principal must be valid")
 }
@@ -314,29 +338,30 @@ fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
         if config.cketh_book.is_none() {
             config.cketh_book = Some(config.cketh_book_resolved());
         }
+        if config.icusd_price_usd6.is_none() {
+            config.icusd_price_usd6 = Some(config.icusd_price_usd6_resolved());
+        }
         config
     })
 }
 
 #[update]
-fn set_route_arb_config_v1(mut config: route_arb::RouteArbConfigV1) -> Result<(), String> {
+fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
     require_admin();
-    state::mutate_state(|s| {
-        // This field has a dedicated setter so a stale full-record client
-        // cannot silently undo the inventory-protection policy.
-        config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd;
-        config = route_arb::resolve_incoming_book_fields(config, &s.route_arb);
-        config = route_arb::resolve_incoming_profile_field(config, &s.route_arb);
-        route_arb::validate_profile_transition(&config, &s.route_arb)?;
-        route_arb::validate_route_config(&config)?;
-        s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
-            .ok_or_else(|| "route config generation exhausted".to_string())?;
-        s.route_arb = config;
-        s.route_observation = None;
-        s.route_observation_config_generation = None;
-        Ok::<(), String>(())
-    })?;
+    let route_execution_active = route_runtime::has_current()?;
+    state::mutate_state(|s| store_route_arb_config(s, config, route_execution_active))?;
     Ok(())
+}
+
+#[update]
+fn set_icusd_price_usd6_v1(price_usd6: u64) -> Result<route_arb::RouteArbConfigV1, String> {
+    require_admin();
+    let route_execution_active = route_runtime::has_current()?;
+    state::mutate_state(|s| {
+        let mut next = s.route_arb.clone();
+        next.icusd_price_usd6 = Some(price_usd6);
+        store_route_arb_config(s, next, route_execution_active)
+    })
 }
 
 #[update]
@@ -2361,4 +2386,49 @@ fn http_request(_req: HttpRequest) -> HttpResponse {
 pub fn generated_candid_interface() -> String {
     candid::export_service!();
     __export_service()
+}
+
+#[cfg(test)]
+mod icusd_config_tests {
+    use super::*;
+
+    #[test]
+    fn price_write_preserves_old_client_omission_and_cadence_while_invalidating_observation() {
+        let mut state = state::BotState::default();
+        state.route_arb = route_arb::icusd_peg_trades_profile_config(state.route_arb);
+        state.route_arb.icusd_price_usd6 = Some(970_000);
+        state.route_arb.allow_wrapped_stable_to_icusd = Some(true);
+        state.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "stale".into(), 1, 2, 3, 4, true,
+        ));
+        state.route_observation_config_generation = Some(0);
+        state.route_observation_last_started_ns = Some(123_456);
+
+        let mut wire = serde_json::to_value(&state.route_arb).unwrap();
+        wire.as_object_mut().unwrap().remove("icusd_price_usd6");
+        wire.as_object_mut()
+            .unwrap()
+            .remove("allow_wrapped_stable_to_icusd");
+        let incoming: route_arb::RouteArbConfigV1 = serde_json::from_value(wire).unwrap();
+        let stored = store_route_arb_config(&mut state, incoming, false).unwrap();
+
+        assert_eq!(stored.icusd_price_usd6_resolved(), 970_000);
+        assert_eq!(stored.allow_wrapped_stable_to_icusd, Some(true));
+        assert_eq!(state.route_arb_config_generation, 1);
+        assert!(state.route_observation.is_none());
+        assert_eq!(state.route_observation_config_generation, None);
+        assert_eq!(state.route_observation_last_started_ns, Some(123_456));
+    }
+
+    #[test]
+    fn price_write_rejects_active_execution_without_mutating_config_or_generation() {
+        let mut state = state::BotState::default();
+        let mut incoming = state.route_arb.clone();
+        incoming.icusd_price_usd6 = Some(970_000);
+        let error = store_route_arb_config(&mut state, incoming, true).unwrap_err();
+
+        assert!(error.contains("route execution is active"));
+        assert_eq!(state.route_arb.icusd_price_usd6_resolved(), 1_000_000);
+        assert_eq!(state.route_arb_config_generation, 0);
+    }
 }
