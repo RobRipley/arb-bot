@@ -2185,8 +2185,13 @@
       btn.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
       overlay.classList.add('show');
       btn.onclick = async function () {
-        if (opts.onConfirm) { btnLoading(btn); try { await opts.onConfirm(); } finally { btnDone(btn); } }
-        closeConfirm();
+        if (opts.onConfirm) {
+          btnLoading(btn);
+          try {
+            const closeAfterConfirm = await opts.onConfirm();
+            if (closeAfterConfirm !== false) closeConfirm();
+          } finally { btnDone(btn); }
+        } else closeConfirm();
       };
     }
     window.closeConfirm = function () { document.getElementById('confirm-overlay').classList.remove('show'); };
@@ -5968,11 +5973,25 @@
           <div class="modal-kv"><span class="k">Amount</span><span class="v">${esc(amountStr)}</span></div>
           <div class="modal-kv"><span class="k">From</span><span class="v">arb main</span></div>
           <div class="modal-kv"><span class="k">Destination</span><span class="v">${esc(to)}</span></div>
-          <div style="margin-top:10px">This leaves the canister. There is no undo.</div>`,
+          <div style="margin-top:10px">This leaves the canister. There is no undo.</div>
+          <div id="withdraw-error" class="negative" role="alert" hidden style="margin-top:10px;overflow-wrap:anywhere"></div>`,
         confirmLabel: `Withdraw ${amountStr} ${info.label}`,
         onConfirm: async () => {
-          await authenticatedActor.withdraw(Principal.fromText(info.getLedger()), toPrincipal, humanToRaw(amountStr, info.decimals));
+          try {
+            await authenticatedActor.withdraw(Principal.fromText(info.getLedger()), toPrincipal, humanToRaw(amountStr, info.decimals));
+          } catch (e) {
+            const message = e && e.message ? e.message : String(e);
+            const errorEl = document.getElementById('withdraw-error');
+            if (errorEl) {
+              errorEl.textContent = `Withdrawal failed: ${message}`;
+              errorEl.hidden = false;
+            }
+            console.error('withdraw failed:', e);
+            return false;
+          }
           toast(`Withdrew ${amountStr} ${info.label}`, 'success');
+          state.withdrawalForm.amount = '';
+          state.withdrawalForm.destination = '';
           document.getElementById('w-to').value = ''; document.getElementById('w-amount').value = '';
           loadAll();
         },
