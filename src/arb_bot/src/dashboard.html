@@ -1672,6 +1672,7 @@
       chartFamily: 'icpswap-internal',
       chartOffSeries: new Set(),
       moneyTab: 'arb',
+      withdrawalForm: { token: 'icp', amount: '', destination: '' },
       coldPainted: false,
       liveLoaded: false,
       levers: {}, // key -> 'applying' while a toggle call is in flight
@@ -2184,8 +2185,19 @@
       btn.className = 'btn ' + (opts.danger ? 'btn-danger' : 'btn-primary');
       overlay.classList.add('show');
       btn.onclick = async function () {
-        if (opts.onConfirm) { btnLoading(btn); try { await opts.onConfirm(); } finally { btnDone(btn); } }
-        closeConfirm();
+        if (opts.onConfirm) {
+          btnLoading(btn);
+          let result;
+          try {
+            result = await opts.onConfirm();
+            if (result?.keepOpen !== true && result !== false) closeConfirm();
+          } finally {
+            if (result?.disableConfirm === true) {
+              btn.disabled = true;
+              btn.textContent = result.buttonLabel || 'Check status before retrying';
+            } else btnDone(btn);
+          }
+        } else closeConfirm();
       };
     }
     window.closeConfirm = function () { document.getElementById('confirm-overlay').classList.remove('show'); };
@@ -5336,6 +5348,15 @@
 
     function renderMarkets() {
       const el = document.getElementById('view-markets');
+      // Markets is rebuilt by every loadAll() poll. Capture the in-progress
+      // withdrawal before replacing the DOM so a refresh cannot reset the
+      // selected token or clear text the admin is entering.
+      const withdrawalToken = document.getElementById('w-token');
+      const withdrawalAmount = document.getElementById('w-amount');
+      const withdrawalDestination = document.getElementById('w-to');
+      if (withdrawalToken) state.withdrawalForm.token = withdrawalToken.value;
+      if (withdrawalAmount) state.withdrawalForm.amount = withdrawalAmount.value;
+      if (withdrawalDestination) state.withdrawalForm.destination = withdrawalDestination.value;
       el.innerHTML = `
         ${routeArbitrageHtml()}
         <div class="card" id="markets-wallet-readiness" style="margin-top:var(--sp-4)"></div>
@@ -5720,10 +5741,10 @@
             </div>
             <label>Withdraw</label>
             <div class="fund-vol-grid" style="margin-bottom:var(--sp-3)">
-              <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}">${t.sym}</option>`).join('')}</select></div>
-              <div><input type="number" id="w-amount" placeholder="Amount"></div>
+              <div><select id="w-token">${MONEY_TOKENS.map(t => `<option value="${t.key}"${t.key === state.withdrawalForm.token ? ' selected' : ''}>${t.sym}</option>`).join('')}</select></div>
+              <div><input type="number" id="w-amount" placeholder="Amount" value="${esc(state.withdrawalForm.amount)}"></div>
             </div>
-            <input type="text" id="w-to" placeholder="Destination principal" style="margin-bottom:var(--sp-3)">
+            <input type="text" id="w-to" placeholder="Destination principal" value="${esc(state.withdrawalForm.destination)}" style="margin-bottom:var(--sp-3)">
             <button class="btn btn-danger btn-block" onclick="confirmWithdraw()">Withdraw</button>
             <div class="footnote">Manual Rumi/3pool swaps are retired. Quote-only route arbitrage is available from the Markets view; wallet deposits and withdrawals remain separate administrative operations.</div>
           </div>
@@ -5958,11 +5979,25 @@
           <div class="modal-kv"><span class="k">Amount</span><span class="v">${esc(amountStr)}</span></div>
           <div class="modal-kv"><span class="k">From</span><span class="v">arb main</span></div>
           <div class="modal-kv"><span class="k">Destination</span><span class="v">${esc(to)}</span></div>
-          <div style="margin-top:10px">This leaves the canister. There is no undo.</div>`,
+          <div style="margin-top:10px">This leaves the canister. There is no undo.</div>
+          <div id="withdraw-error" class="negative" role="alert" hidden style="margin-top:10px;overflow-wrap:anywhere"></div>`,
         confirmLabel: `Withdraw ${amountStr} ${info.label}`,
         onConfirm: async () => {
-          await authenticatedActor.withdraw(Principal.fromText(info.getLedger()), toPrincipal, humanToRaw(amountStr, info.decimals));
+          try {
+            await authenticatedActor.withdraw(Principal.fromText(info.getLedger()), toPrincipal, humanToRaw(amountStr, info.decimals));
+          } catch (e) {
+            const message = e && e.message ? e.message : String(e);
+            const errorEl = document.getElementById('withdraw-error');
+            if (errorEl) {
+              errorEl.textContent = `The withdrawal result was not confirmed. Check account activity and the token balance before trying again. Details: ${message}`;
+              errorEl.hidden = false;
+            }
+            console.error('withdraw failed:', e);
+            return { keepOpen: true, disableConfirm: true, buttonLabel: 'Check status before retrying' };
+          }
           toast(`Withdrew ${amountStr} ${info.label}`, 'success');
+          state.withdrawalForm.amount = '';
+          state.withdrawalForm.destination = '';
           document.getElementById('w-to').value = ''; document.getElementById('w-amount').value = '';
           loadAll();
         },
