@@ -58,6 +58,62 @@ fn stable_exit_protection_can_be_explicitly_enabled() {
 }
 
 #[test]
+fn icusd_peg_profile_contains_only_the_four_two_leg_icp_stable_routes() {
+    // Injecting the future additive profile marker keeps this behavior test
+    // runnable against the pre-feature binary: old serde ignores the field,
+    // exposing the broad route universe and failing the exact-scope assertion.
+    let mut profile_json = serde_json::to_value(RouteArbConfigV1::default()).unwrap();
+    let object = profile_json.as_object_mut().unwrap();
+    object.insert("icusd_peg_trades_profile".to_string(), serde_json::Value::Bool(true));
+    object.insert("max_route_legs".to_string(), serde_json::json!(2));
+    object.insert("max_quote_calls_per_observation".to_string(), serde_json::json!(20));
+    object.insert("max_concurrent_quote_calls".to_string(), serde_json::json!(2));
+    object.insert("stable_size_ladder".to_string(), serde_json::json!([5_000_000, 20_000_000]));
+    object.insert("max_stable_principal_usd_6dec".to_string(), serde_json::json!(40_000_000));
+    object.insert("min_stable_profit_usd_6dec".to_string(), serde_json::json!(0));
+    object.insert("min_stable_profit_bps".to_string(), serde_json::json!(0));
+    object.insert("icp_book_enabled".to_string(), serde_json::json!(false));
+    object.insert("allow_wrapped_stable_to_icusd".to_string(), serde_json::json!(true));
+    for pool in object.get_mut("pool_controls").unwrap().as_array_mut().unwrap() {
+        let id = pool.get("pool_id").and_then(serde_json::Value::as_str).unwrap();
+        pool["enabled"] = serde_json::json!(matches!(id,
+            "icpswap-icp-icusd" | "icpswap-icp-ckusdc" | "icpswap-icp-ckusdt"));
+    }
+    for asset in object.get_mut("asset_controls").unwrap().as_array_mut().unwrap() {
+        let symbol = asset.get("asset").and_then(serde_json::Value::as_str).unwrap();
+        asset["enabled"] = serde_json::json!(matches!(symbol, "IcUsd" | "CkUsdc" | "CkUsdt" | "Icp"));
+    }
+    let config: RouteArbConfigV1 = serde_json::from_value(profile_json).unwrap();
+    let universe = build_work_universe(&config).unwrap();
+    let mut route_ids: Vec<_> = universe
+        .items
+        .iter()
+        .map(|item| item.route.route_id.as_str())
+        .collect();
+    route_ids.sort_unstable();
+    route_ids.dedup();
+
+    assert_eq!(route_ids.len(), 4);
+    assert!(universe.items.iter().all(|item| {
+        item.route.asset_path.len() == 3
+            && item.route.asset_path[1] == Asset::Icp
+            && matches!(item.route.start_asset(), Asset::IcUsd | Asset::CkUsdc | Asset::CkUsdt)
+            && matches!(item.route.end_asset(), Asset::IcUsd | Asset::CkUsdc | Asset::CkUsdt)
+            && item.route.start_asset() != item.route.end_asset()
+    }));
+    assert_eq!(universe.items.len(), 8, "two quote sizes per route stay under the 20-call ceiling");
+    assert_eq!(universe.required_quote_calls, 16, "four two-leg routes × two sizes = 16 pool quotes");
+    assert_eq!(config.max_quote_calls_per_observation, 20);
+    assert_eq!(config.max_concurrent_quote_calls, 2);
+    assert_eq!(config.stable_size_ladder, vec![5_000_000, 20_000_000]);
+    assert_eq!(config.max_stable_principal_usd_6dec, 40_000_000);
+    assert_eq!(config.min_stable_profit_usd_6dec, 0);
+    assert_eq!(config.min_stable_profit_bps, 0);
+    assert!(!config.enabled);
+    assert!(config.dry_run);
+}
+
+#[test]
 fn adapters_are_explicitly_full_fill_and_rumi_uses_native_indices() {
     let edges = arb_bot::route_arb::directed_edges();
     let rumi = edges.iter().find(|edge| edge.pool_id == "rumi-3pool" && edge.from == Asset::CkUsdc && edge.to == Asset::IcUsd).unwrap();

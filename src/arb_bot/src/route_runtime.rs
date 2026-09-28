@@ -814,6 +814,19 @@ pub async fn prepare_with<I: RuntimeIo>(
     io: &I,
     route_id: &str,
 ) -> Result<ExecutionRecordV1, String> {
+    let (config, generation) = config();
+    crate::route_arb::validate_icusd_peg_profile_route(&config, route_id)?;
+    let observation_generation = state::read_state(|s| s.route_observation_config_generation);
+    if observation_generation != Some(generation) {
+        return Err("selected route observation belongs to a stale policy generation".to_string());
+    }
+    prepare_with_validated(io, route_id).await
+}
+
+async fn prepare_with_validated<I: RuntimeIo>(
+    io: &I,
+    route_id: &str,
+) -> Result<ExecutionRecordV1, String> {
     let _busy = BusyGuard::enter()?;
     authorized()?;
     let mut s = load()?;
@@ -997,7 +1010,10 @@ fn finish(ex: &mut RuntimeExecution, now: u64) -> Result<(), String> {
     s.last_served_book = Some(book_for_class(ex.original.candidate_class));
     s.last_terminal = Some(runtime_snapshot(ex));
     save(&s)?;
-    state::mutate_state(|s| s.route_observation = None);
+    state::mutate_state(|s| {
+        s.route_observation = None;
+        s.route_observation_config_generation = None;
+    });
     Ok(())
 }
 pub fn has_current() -> Result<bool, String> {
@@ -1142,7 +1158,10 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
     ex.record.submission_started_at_ns = Some(submitted_at_ns);
     ex.record.updated_at_ns = io.now();
     persist(&ex)?;
-    state::mutate_state(|s| s.route_observation = None);
+    state::mutate_state(|s| {
+        s.route_observation = None;
+        s.route_observation_config_generation = None;
+    });
     let response = io
         .submit(ex.intent.as_ref().ok_or("prepared intent missing")?)
         .await;
@@ -1381,6 +1400,30 @@ fn best_candidate_for_book(
     }
 }
 
+fn profile_candidate_for_execution(
+    config: &RouteArbConfigV1,
+    config_generation: u64,
+    observation_generation: Option<u64>,
+    observation: Option<&ObservationAccumulatorV1>,
+    last_served: Option<RouteBookKind>,
+) -> Result<Option<String>, String> {
+    if !config.icusd_peg_trades_profile_active()
+        || observation_generation != Some(config_generation)
+    {
+        return Ok(None);
+    }
+    let allowed_routes = crate::route_arb::icusd_peg_profile_route_ids(config)?;
+    let Some(observation) = observation.filter(|observation| observation.scan_complete) else {
+        return Ok(None);
+    };
+    let order = rotated_book_order(last_served);
+    Ok(order
+        .iter()
+        .find_map(|book| best_candidate_for_book(observation, *book))
+        .filter(|candidate| allowed_routes.contains(&candidate.route_id))
+        .map(|candidate| candidate.route_id.clone()))
+}
+
 /// The rotation cursor to actually use for this tick: the N-way cursor once
 /// any execution has completed under N-way-aware code, otherwise the
 /// two-way legacy cursor translated 1:1 ("was ICP last served" is exactly
@@ -1406,19 +1449,21 @@ pub async fn service_tick() -> Result<(), String> {
     let result = if let Some(ex) = s.current {
         advance(&ex.record.execution_id).await.map(|_| ())
     } else if authorized().is_ok() {
-        let order = rotated_book_order(effective_last_served_book(&s));
-        let selected = state::read_state(|s| {
-            s.route_observation
-                .as_ref()
-                .filter(|o| o.scan_complete)
-                .and_then(|o| order.iter().find_map(|book| best_candidate_for_book(o, *book)))
-                .map(|q| q.route_id.clone())
-        });
+        let (config, generation) = config();
+        let (observation, observation_generation) = state::read_state(|s| (
+            s.route_observation.clone(), s.route_observation_config_generation,
+        ));
+        let selected = profile_candidate_for_execution(
+            &config, generation, observation_generation, observation.as_ref(), effective_last_served_book(&s),
+        )?;
         match selected {
             Some(id) => {
                 let result = prepare(&id).await.map(|_| ());
                 if result.is_err() {
-                    state::mutate_state(|s| s.route_observation = None);
+                    state::mutate_state(|s| {
+                        s.route_observation = None;
+                        s.route_observation_config_generation = None;
+                    });
                 }
                 result
             }
@@ -1488,6 +1533,27 @@ mod tests {
         assert_eq!(book_for_class(CandidateClass::IcpReturning), RouteBookKind::Icp);
         assert_eq!(book_for_class(CandidateClass::CkBtcReturning), RouteBookKind::CkBtc);
         assert_eq!(book_for_class(CandidateClass::CkEthReturning), RouteBookKind::CkEth);
+    }
+
+    #[test]
+    fn automatic_selection_requires_current_profile_generation_and_allowlisted_route() {
+        let config = crate::route_arb::icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+        let allowed = crate::route_arb::icusd_peg_profile_route_ids(&config)
+            .unwrap().into_iter().next().unwrap();
+        let mut observation = ObservationAccumulatorV1::new("selection".into(), 0, 0, 1, 2, true);
+        observation.scan_complete = true;
+        observation.best_stable_candidate = Some(RouteCandidateReportV1::fixture(
+            &allowed, CandidateClass::StableSettledCrossAsset, 10, true,
+        ));
+
+        assert_eq!(profile_candidate_for_execution(&RouteArbConfigV1::default(), 7, Some(7), Some(&observation), None).unwrap(), None);
+        assert_eq!(profile_candidate_for_execution(&config, 7, Some(6), Some(&observation), None).unwrap(), None);
+        assert_eq!(profile_candidate_for_execution(&config, 7, Some(7), Some(&observation), None).unwrap(), Some(allowed.clone()));
+
+        observation.best_stable_candidate = Some(RouteCandidateReportV1::fixture(
+            "icpswap-ckusdt-ckusdc:CkUsdc>CkUsdt", CandidateClass::StablePar, 10, true,
+        ));
+        assert_eq!(profile_candidate_for_execution(&config, 7, Some(7), Some(&observation), None).unwrap(), None);
     }
 
     /// A stable-state blob saved before `last_served_book` existed carries
@@ -1753,15 +1819,77 @@ mod tests {
             ObservationAccumulatorV1::new("fixture-selection".into(), 1, 1, 1, 1, true);
         observation.scan_complete = true;
         observation.best_stable_candidate = Some(q);
-        state::mutate_state(|s| s.route_observation = Some(observation));
+        state::mutate_state(|s| {
+            s.route_observation = Some(observation);
+            s.route_observation_config_generation = Some(s.route_arb_config_generation);
+        });
         let io = Double::default();
         io.now.set(100_000_000_000); // old hint deliberately outside TTL
         (io, item.route.route_id)
     }
+
+    #[test]
+    fn inactive_profile_rejects_stale_generic_direct_execution_before_any_quote() {
+        let (io, route) = setup(1);
+        let error = block_on(prepare_with(&io, &route)).unwrap_err();
+        assert!(error.contains("profile"));
+        assert_eq!(io.quotes.get(), 0);
+        assert_eq!(io.submissions.get(), 0);
+        assert!(!has_current().unwrap());
+        assert!(state::get_mutation_lock().is_none());
+    }
+
+    #[test]
+    fn active_profile_rejects_allowed_route_from_stale_observation_generation() {
+        state::init_state(state::BotState::default());
+        state::release_mutation_lock_for_test();
+        save(&DurableRuntime::default()).unwrap();
+        state::mutate_state(|s| {
+            s.route_arb = crate::route_arb::icusd_peg_trades_profile_config(s.route_arb.clone());
+            s.route_arb.enabled = true;
+            s.route_arb.dry_run = false;
+            s.route_arb_config_generation = 1;
+        });
+        set_authorized(true).unwrap();
+        let config = config().0;
+        let item = build_work_universe(&config).unwrap().items.remove(0);
+        let candidate = quoted(&item, 1);
+        let mut observation = ObservationAccumulatorV1::new("stale-profile-policy".into(), 1, 1, 1, 2, true);
+        observation.scan_complete = true;
+        observation.best_stable_candidate = Some(candidate);
+        state::mutate_state(|s| {
+            s.route_observation = Some(observation);
+            s.route_observation_config_generation = Some(0);
+        });
+
+        let io = Double::default();
+        io.now.set(100_000_000_000);
+        let error = block_on(prepare_with(&io, &item.route.route_id)).unwrap_err();
+        assert!(error.contains("stale policy generation"));
+        assert_eq!(io.quotes.get(), 0);
+        assert_eq!(io.submissions.get(), 0);
+        assert!(state::get_mutation_lock().is_none());
+    }
+
+    #[test]
+    fn active_profile_rejects_cached_route_outside_its_fixed_allowlist() {
+        let (io, route) = setup(1);
+        state::mutate_state(|s| {
+            s.route_arb = crate::route_arb::icusd_peg_trades_profile_config(s.route_arb.clone());
+            s.route_arb.enabled = true;
+            s.route_arb.dry_run = false;
+            s.route_arb_config_generation += 1;
+        });
+        let error = block_on(prepare_with(&io, &route)).unwrap_err();
+        assert!(error.contains("not in the active icUSD peg-trades profile"));
+        assert_eq!(io.quotes.get(), 0);
+        assert_eq!(io.submissions.get(), 0);
+        assert!(state::get_mutation_lock().is_none());
+    }
     #[test]
     fn real_flow_stable_restart_lost_response_no_replay_and_completion() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         assert_eq!(io.quotes.get(), 1);
         assert_eq!(io.submissions.get(), 0);
         assert_eq!(ex.phase, ExecutionPhaseV1::LegPrepared);
@@ -1790,7 +1918,7 @@ mod tests {
     #[test]
     fn accepted_submission_persists_awaiting_settlement_leg_status() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         io.accepted.set(true);
         assert_eq!(
             block_on(advance_with(&io, &ex.execution_id)).unwrap().phase,
@@ -1816,7 +1944,7 @@ mod tests {
     #[test]
     fn pre_detail_runtime_json_decodes_without_inferred_leg_facts() {
         let (io, route) = setup(1);
-        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
         let mut old_runtime: serde_json::Value =
             serde_json::from_slice(&state::runtime_bytes()).unwrap();
         old_runtime["current"]
@@ -1835,7 +1963,7 @@ mod tests {
     #[test]
     fn pre_detail_runtime_continues_submission_and_reconciliation_after_upgrade() {
         let (io, route) = setup(1);
-        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
         let mut old_runtime: serde_json::Value =
             serde_json::from_slice(&state::runtime_bytes()).unwrap();
         old_runtime["current"]
@@ -1870,7 +1998,7 @@ mod tests {
     #[test]
     fn pre_detail_completed_without_settlement_stays_unavailable_and_unarchived() {
         let (io, route) = setup(1);
-        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
         let mut old_runtime: serde_json::Value =
             serde_json::from_slice(&state::runtime_bytes()).unwrap();
         let current = old_runtime["current"].as_object_mut().unwrap();
@@ -1896,7 +2024,7 @@ mod tests {
     #[test]
     fn pre_detail_out_of_range_leg_index_fails_closed_without_route_indexing() {
         let (io, route) = setup(1);
-        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
         let mut old_runtime: serde_json::Value =
             serde_json::from_slice(&state::runtime_bytes()).unwrap();
         let current = old_runtime["current"].as_object_mut().unwrap();
@@ -1913,7 +2041,7 @@ mod tests {
     #[test]
     fn traced_terminal_without_settlement_stays_unarchived() {
         let (io, route) = setup(1);
-        let record = block_on(prepare_with(&io, &route)).unwrap();
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
         let mut old_runtime: serde_json::Value =
             serde_json::from_slice(&state::runtime_bytes()).unwrap();
         let current = old_runtime["current"].as_object_mut().unwrap();
@@ -1939,7 +2067,7 @@ mod tests {
     fn runtime_snapshot_survives_detail_projection_failure_at_creation_boundary() {
         let (io, route) = setup(1);
         state::fail_next_route_execution_detail_for_test();
-        let error = block_on(prepare_with(&io, &route)).unwrap_err();
+        let error = block_on(prepare_with_validated(&io, &route)).unwrap_err();
         assert!(error.contains("projection failure"));
         let durable = load().unwrap().current.unwrap();
         let expected = durable.detail.clone().expect("runtime detail snapshot");
@@ -1956,7 +2084,7 @@ mod tests {
     fn changed_generation_during_whole_quote_aborts_and_releases_unused_lock() {
         let (io, route) = setup(1);
         io.change_generation.set(true);
-        assert!(block_on(prepare_with(&io, &route))
+        assert!(block_on(prepare_with_validated(&io, &route))
             .unwrap_err()
             .contains("generation"));
         assert_eq!(io.submissions.get(), 0);
@@ -1966,7 +2094,7 @@ mod tests {
     #[test]
     fn stale_prepared_quote_does_not_submit() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         io.now.set(io.now.get() + config().0.quote_max_age_ns + 1);
         assert_eq!(
             block_on(advance_with(&io, &ex.execution_id)).unwrap().phase,
@@ -1979,7 +2107,7 @@ mod tests {
     fn definitive_predebit_rejection_aborts_without_receipt_wait() {
         let (io, route) = setup(1);
         io.reject.set(true);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         assert_eq!(
             block_on(advance_with(&io, &ex.execution_id)).unwrap().phase,
             ExecutionPhaseV1::Aborted
@@ -1991,7 +2119,7 @@ mod tests {
     #[test]
     fn partial_fill_reserves_both_lots_before_terminal_release() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         io.partial.set(true);
         assert_eq!(
@@ -2019,7 +2147,7 @@ mod tests {
     #[test]
     fn settled_tail_requotes_original_basis_and_holds_on_quote_failure() {
         let (io, route) = setup(2);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         block_on(reconcile_with(&io, &ex.execution_id)).unwrap();
         let minimum = load().unwrap().current.unwrap().minimum_final_native;
@@ -2037,7 +2165,7 @@ mod tests {
     #[test]
     fn complete_multileg_flow_requotes_and_preserves_original_basis() {
         let (io, route) = setup(2);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         let original_min = load().unwrap().current.unwrap().minimum_final_native;
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         block_on(reconcile_with(&io, &ex.execution_id)).unwrap();
@@ -2067,7 +2195,7 @@ mod tests {
     #[test]
     fn authenticated_full_refund_aborts_with_actual_fee_loss() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         io.refunded.set(true);
         assert_eq!(
@@ -2083,7 +2211,7 @@ mod tests {
     #[test]
     fn changed_generation_after_settlement_holds_before_second_submission() {
         let (io, route) = setup(2);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         block_on(reconcile_with(&io, &ex.execution_id)).unwrap();
         state::mutate_state(|s| s.route_arb_config_generation += 1);
@@ -2098,7 +2226,7 @@ mod tests {
     #[test]
     fn terminal_checkpoint_retry_does_not_duplicate_archive_or_submit() {
         let (io, route) = setup(1);
-        let ex = block_on(prepare_with(&io, &route)).unwrap();
+        let ex = block_on(prepare_with_validated(&io, &route)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
         block_on(reconcile_with(&io, &ex.execution_id)).unwrap();
         block_on(advance_with(&io, &ex.execution_id)).unwrap();
@@ -2130,7 +2258,7 @@ mod tests {
         assert!(status().unwrap().dry_run);
         let (io, route) = setup(1);
         state::mutate_state(|s| s.route_arb.max_open_held_positions = 0);
-        assert!(block_on(prepare_with(&io, &route)).is_err());
+        assert!(block_on(prepare_with_validated(&io, &route)).is_err());
         assert_eq!(io.submissions.get(), 0);
         assert!(state::get_mutation_lock().is_none());
     }

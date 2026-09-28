@@ -1,5 +1,5 @@
 use arb_bot::route_arb::{
-    validate_route_config, wallet_rows_from_results, Asset, LedgerReadResult, RouteArbConfigV1,
+    resolve_incoming_profile_field, validate_profile_transition, validate_route_config, wallet_rows_from_results, Asset, LedgerReadResult, RouteArbConfigV1,
     HARD_MAX_CONCURRENT_QUOTES, HARD_MAX_QUOTE_AGE_NS, HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE,
     HARD_MAX_ROUTE_LEGS, HARD_MAX_SETTLEMENT_TIMEOUT_NS, HARD_MAX_SIZE_LADDER_ENTRIES,
 };
@@ -16,6 +16,48 @@ fn policy_defaults_are_observable_but_execution_inert() {
     assert!(config.asset_controls.iter().all(|item| item.enabled));
     assert!(config.pool_controls.iter().all(|item| item.enabled));
     validate_route_config(&config).expect("defaults valid");
+}
+
+#[test]
+fn legacy_full_config_update_cannot_erase_selected_peg_profile() {
+    let mut current = RouteArbConfigV1::default();
+    current.icusd_peg_trades_profile = Some(true);
+    let incoming = RouteArbConfigV1::default();
+    let resolved = resolve_incoming_profile_field(incoming, &current);
+    assert_eq!(resolved.icusd_peg_trades_profile, Some(true));
+    validate_profile_transition(&resolved, &current).expect("ordinary active-profile edits stay in profile mode");
+}
+
+#[test]
+fn generic_full_config_update_cannot_activate_or_deactivate_the_fixed_profile() {
+    let inactive = RouteArbConfigV1::default();
+    let mut unsafe_activation = RouteArbConfigV1::default();
+    unsafe_activation.icusd_peg_trades_profile = Some(true);
+    unsafe_activation.enabled = true;
+    unsafe_activation.dry_run = false;
+    let unsafe_activation = resolve_incoming_profile_field(unsafe_activation, &inactive);
+    assert!(validate_profile_transition(&unsafe_activation, &inactive)
+        .unwrap_err().contains("dedicated profile"));
+
+    let mut active = RouteArbConfigV1::default();
+    active.icusd_peg_trades_profile = Some(true);
+    let mut generic_deactivation = active.clone();
+    generic_deactivation.icusd_peg_trades_profile = Some(false);
+    assert!(validate_profile_transition(&generic_deactivation, &active)
+        .unwrap_err().contains("dedicated profile"));
+}
+
+#[test]
+fn active_peg_profile_rejects_expanded_quote_caps_and_unrelated_size_ladders() {
+    let mut profile = arb_bot::route_arb::icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+    assert!(validate_route_config(&profile).is_ok());
+
+    profile.max_quote_calls_per_observation = 21;
+    assert!(validate_route_config(&profile).unwrap_err().contains("fixed route, quote, size, or break-even bounds"));
+
+    let mut size_profile = arb_bot::route_arb::icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+    size_profile.stable_size_ladder.push(30_000_000);
+    assert!(validate_route_config(&size_profile).unwrap_err().contains("fixed route, quote, size, or break-even bounds"));
 }
 
 #[test]

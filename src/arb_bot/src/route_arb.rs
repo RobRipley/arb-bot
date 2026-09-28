@@ -842,6 +842,10 @@ pub struct RouteArbConfigV1 {
     /// `None` preserves the protected default for pre-field configurations.
     #[serde(default)]
     pub allow_wrapped_stable_to_icusd: Option<bool>,
+    /// Explicitly selected fixed icUSD/ICP/ckUSDC/ckUSDT restoration profile.
+    /// `None` is the pre-profile shape and resolves to inactive.
+    #[serde(default)]
+    pub icusd_peg_trades_profile: Option<bool>,
     pub asset_controls: Vec<AssetControlV1>,
     pub pool_controls: Vec<PoolControlV1>,
     pub stable_size_ladder: Vec<u64>,
@@ -878,6 +882,7 @@ impl Default for RouteArbConfigV1 {
             ckbtc_book: Some(AssetReturnBookConfigV1::default()),
             cketh_book: Some(AssetReturnBookConfigV1::default_cketh()),
             allow_wrapped_stable_to_icusd: None,
+            icusd_peg_trades_profile: None,
             asset_controls: Asset::ALL.into_iter().map(|asset| AssetControlV1 { asset, enabled: true }).collect(),
             pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
             stable_size_ladder: vec![1_000_000, 5_000_000, 10_000_000, 40_000_000],
@@ -922,6 +927,41 @@ impl RouteArbConfigV1 {
     pub fn cketh_book_resolved(&self) -> AssetReturnBookConfigV1 {
         self.cketh_book.clone().unwrap_or_else(AssetReturnBookConfigV1::default_cketh)
     }
+
+    pub fn icusd_peg_trades_profile_active(&self) -> bool {
+        self.icusd_peg_trades_profile.unwrap_or(false)
+    }
+}
+
+/// Apply the explicitly selected, bounded icUSD/ICP peg-trading profile.
+/// Selection never authorizes a trade: it leaves the scheduler disabled and
+/// dry-run enabled until an administrator separately changes those controls.
+pub fn icusd_peg_trades_profile_config(mut config: RouteArbConfigV1) -> RouteArbConfigV1 {
+    config.icusd_peg_trades_profile = Some(true);
+    config.enabled = false;
+    config.dry_run = true;
+    config.stable_book_enabled = true;
+    config.icp_book_enabled = false;
+    config.ckbtc_book = Some(AssetReturnBookConfigV1 { enabled: false, ..config.ckbtc_book_resolved() });
+    config.cketh_book = Some(AssetReturnBookConfigV1 { enabled: false, ..config.cketh_book_resolved() });
+    config.allow_wrapped_stable_to_icusd = Some(true);
+    for control in &mut config.asset_controls {
+        control.enabled = matches!(control.asset, Asset::IcUsd | Asset::CkUsdc | Asset::CkUsdt | Asset::Icp);
+    }
+    for control in &mut config.pool_controls {
+        control.enabled = matches!(
+            control.pool_id.as_str(),
+            "icpswap-icp-icusd" | "icpswap-icp-ckusdc" | "icpswap-icp-ckusdt"
+        );
+    }
+    config.stable_size_ladder = vec![5_000_000, 20_000_000];
+    config.max_stable_principal_usd_6dec = 40_000_000;
+    config.max_route_legs = 2;
+    config.max_quote_calls_per_observation = 20;
+    config.max_concurrent_quote_calls = 2;
+    config.min_stable_profit_usd_6dec = 0;
+    config.min_stable_profit_bps = 0;
+    config
 }
 
 /// Merge an incoming `set_route_arb_config_v1` request against the
@@ -939,6 +979,28 @@ pub fn resolve_incoming_book_fields(
     incoming.ckbtc_book = Some(incoming.ckbtc_book.unwrap_or_else(|| current.ckbtc_book_resolved()));
     incoming.cketh_book = Some(incoming.cketh_book.unwrap_or_else(|| current.cketh_book_resolved()));
     incoming
+}
+
+pub fn resolve_incoming_profile_field(
+    mut incoming: RouteArbConfigV1,
+    current: &RouteArbConfigV1,
+) -> RouteArbConfigV1 {
+    incoming.icusd_peg_trades_profile = Some(
+        incoming.icusd_peg_trades_profile.unwrap_or_else(|| current.icusd_peg_trades_profile_active()),
+    );
+    incoming
+}
+
+/// Generic full-record edits may tune an already selected profile, but only
+/// the dedicated profile action may cross the inactive/active boundary.
+pub fn validate_profile_transition(
+    incoming: &RouteArbConfigV1,
+    current: &RouteArbConfigV1,
+) -> Result<(), String> {
+    if incoming.icusd_peg_trades_profile_active() != current.icusd_peg_trades_profile_active() {
+        return Err("use the dedicated profile action set_icusd_peg_trades_profile_v1 to change the fixed profile selection".to_string());
+    }
+    Ok(())
 }
 
 fn exact_asset_set<T>(items: &[T], asset_of: impl Fn(&T) -> Asset) -> bool {
@@ -986,6 +1048,38 @@ pub fn validate_route_config(config: &RouteArbConfigV1) -> Result<(), String> {
     }
     if !(1..=HARD_MAX_RECONCILIATION_QUERIES_PER_CYCLE).contains(&config.reconciliation_queries_per_cycle) {
         return Err("reconciliation_queries_per_cycle outside immutable bounds".to_string());
+    }
+    if config.icusd_peg_trades_profile_active()
+        && (config.max_route_legs != 2
+            || config.max_quote_calls_per_observation > 20
+            || config.max_concurrent_quote_calls > 2
+            || config.stable_size_ladder.len() > 2
+            || !config.stable_book_enabled
+            || config.icp_book_enabled
+            || config.ckbtc_book_resolved().enabled
+            || config.cketh_book_resolved().enabled
+            || config.allow_wrapped_stable_to_icusd != Some(true)
+            || config.max_stable_principal_usd_6dec > 40_000_000
+            || config.min_stable_profit_usd_6dec != 0
+            || config.min_stable_profit_bps != 0)
+    {
+        return Err("active icUSD peg-trades profile exceeds its fixed route, quote, size, or break-even bounds".to_string());
+    }
+    if config.icusd_peg_trades_profile_active() {
+        let enabled_assets: std::collections::BTreeSet<_> = config.asset_controls.iter()
+            .filter(|item| item.enabled).map(|item| item.asset).collect();
+        if ![Asset::IcUsd, Asset::CkUsdc, Asset::CkUsdt, Asset::Icp]
+            .into_iter().all(|asset| enabled_assets.contains(&asset))
+        {
+            return Err("active icUSD peg-trades profile must keep all four route assets enabled".to_string());
+        }
+        let enabled_pools: std::collections::BTreeSet<_> = config.pool_controls.iter()
+            .filter(|item| item.enabled).map(|item| item.pool_id.as_str()).collect();
+        if !["icpswap-icp-icusd", "icpswap-icp-ckusdc", "icpswap-icp-ckusdt"]
+            .into_iter().all(|pool| enabled_pools.contains(pool))
+        {
+            return Err("active icUSD peg-trades profile must keep all three pinned ICP/stable pools enabled".to_string());
+        }
     }
     if config.max_open_held_positions == 0 || config.max_open_held_positions > HARD_MAX_OPEN_HELD_POSITIONS
         || config.max_open_non_route_reservations == 0 || config.max_open_non_route_reservations > HARD_MAX_OPEN_NON_ROUTE_RESERVATIONS
@@ -1070,6 +1164,9 @@ pub struct RouteArbStatusV1 {
     pub execution_compiled_in: bool,
     pub live_execution_authorized: bool,
     pub route_count: u32,
+    pub icusd_peg_trades_profile_active: bool,
+    pub observation_interval_secs: u64,
+    pub next_observation_eligible_at_ns: Option<u64>,
 }
 
 pub fn route_status(config: &RouteArbConfigV1) -> RouteArbStatusV1 {
@@ -1080,6 +1177,9 @@ pub fn route_status(config: &RouteArbConfigV1) -> RouteArbStatusV1 {
         execution_compiled_in: false,
         live_execution_authorized: false,
         route_count: enumerate_routes(config.max_route_legs).map(|routes| routes.len() as u32).unwrap_or(0),
+        icusd_peg_trades_profile_active: config.icusd_peg_trades_profile_active(),
+        observation_interval_secs: if config.icusd_peg_trades_profile_active() { 600 } else { 0 },
+        next_observation_eligible_at_ns: None,
     }
 }
 
@@ -1167,6 +1267,7 @@ pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, St
         .into_iter()
         .filter(|route| route.asset_path.iter().all(|asset| enabled_assets.contains(asset)))
         .filter(|route| route.edges.iter().all(|edge| enabled_pools.contains(edge.pool_id)))
+        .filter(|route| !config.icusd_peg_trades_profile_active() || is_icusd_peg_trade_route(route))
         .filter(|route| {
             config.allow_wrapped_stable_to_icusd.unwrap_or(false)
                 || !(matches!(route.start_asset(), Asset::CkUsdc | Asset::CkUsdt)
@@ -1210,6 +1311,38 @@ pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, St
     items.sort_by(|left, right| left.work_id.cmp(&right.work_id));
     let required_quote_calls = items.iter().map(|item| item.route.edges.len() as u64).sum();
     Ok(WorkUniverse { route_count, required_quote_calls, items })
+}
+
+/// Return the exact executable route IDs admitted by the selected peg profile.
+/// This lets the execution boundary revalidate a cached observation against
+/// the current config before preparing a new debit.
+pub fn icusd_peg_profile_route_ids(config: &RouteArbConfigV1) -> Result<std::collections::BTreeSet<String>, String> {
+    if !config.icusd_peg_trades_profile_active() {
+        return Err("select the fixed icUSD peg-trades profile before new execution".to_string());
+    }
+    let universe = build_work_universe(config)?;
+    Ok(universe.items.into_iter().map(|item| item.route.route_id).collect())
+}
+
+pub fn validate_icusd_peg_profile_route(config: &RouteArbConfigV1, route_id: &str) -> Result<(), String> {
+    let allowed = icusd_peg_profile_route_ids(config)?;
+    if allowed.contains(route_id) {
+        Ok(())
+    } else {
+        Err("selected route is not in the active icUSD peg-trades profile".to_string())
+    }
+}
+
+fn is_icusd_peg_trade_route(route: &Route) -> bool {
+    use Asset::*;
+    matches!(
+        route.asset_path.as_slice(),
+        [IcUsd, Icp, CkUsdc]
+            | [CkUsdc, Icp, IcUsd]
+            | [IcUsd, Icp, CkUsdt]
+            | [CkUsdt, Icp, IcUsd]
+    ) && route.edges.len() == 2
+        && route.edges.iter().all(|edge| edge.pool_id.starts_with("icpswap-icp-"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -27,6 +27,41 @@ fn old_state_without_band_fields_decodes_with_defaults() {
 }
 
 #[test]
+fn observation_cadence_timestamp_survives_restart_and_defaults_for_old_state() {
+    let mut state = BotState::default();
+    state.route_observation_last_started_ns = Some(1_234_567);
+    state.route_observation_batch_in_flight = true;
+    state.route_observation_reserved_quote_calls = 16;
+    let bytes = serde_json::to_vec(&state).expect("serialize current state");
+    let restored: BotState = serde_json::from_slice(&bytes).expect("restore current state");
+    assert_eq!(restored.route_observation_last_started_ns, Some(1_234_567));
+    assert!(restored.route_observation_batch_in_flight);
+    assert_eq!(restored.route_observation_reserved_quote_calls, 16,
+        "the worst-case batch budget is durable across restart");
+
+    let mut old_shape = serde_json::to_value(BotState::default()).expect("serialize old-shape fixture");
+    assert!(old_shape
+        .as_object_mut()
+        .expect("state object")
+        .remove("route_observation_last_started_ns")
+        .is_some());
+    assert!(old_shape
+        .as_object_mut()
+        .expect("state object")
+        .remove("route_observation_config_generation")
+        .is_some());
+    assert!(old_shape.as_object_mut().expect("state object")
+        .remove("route_observation_batch_in_flight").is_some());
+    assert!(old_shape.as_object_mut().expect("state object")
+        .remove("route_observation_reserved_quote_calls").is_some());
+    let decoded: BotState = serde_json::from_value(old_shape).expect("decode pre-cadence state");
+    assert_eq!(decoded.route_observation_last_started_ns, None);
+    assert_eq!(decoded.route_observation_config_generation, None);
+    assert!(!decoded.route_observation_batch_in_flight);
+    assert_eq!(decoded.route_observation_reserved_quote_calls, 0);
+}
+
+#[test]
 fn raw_legacy_migration_shape_preserves_pending_bob_exit() {
     let mut state = BotState::default();
     state.pending_bob_exit = Some(PendingBobExit {

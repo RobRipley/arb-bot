@@ -56,6 +56,10 @@ fn pre_upgrade() {
 #[post_upgrade]
 fn post_upgrade() {
     state::load_from_stable_memory();
+    // An in-flight inter-canister quote batch is interrupted by upgrade;
+    // release its admission lock and abandon the reserved cursor while
+    // retaining the durable cadence timestamp.
+    state::mutate_state(reset_interrupted_route_observation_batch);
     // Folds any terminal route executions already durable on this upgrade
     // (including every one that predates the lifetime-summary feature)
     // into the summary immediately, so the very first post-upgrade read
@@ -65,6 +69,17 @@ fn post_upgrade() {
     setup_timer();
     setup_volume_timer();
     setup_route_runtime_timer();
+}
+
+fn reset_interrupted_route_observation_batch(s: &mut state::BotState) {
+    if s.route_observation_batch_in_flight {
+        // Some read-only quotes may have completed before the upgrade. Never
+        // replay this observation cursor after clearing the transient lock.
+        s.route_observation = None;
+        s.route_observation_config_generation = None;
+    }
+    s.route_observation_batch_in_flight = false;
+    s.route_observation_reserved_quote_calls = 0;
 }
 
 /// Retired under Stage-1 of the six-asset route-arbitrage policy: the
@@ -311,11 +326,14 @@ fn set_route_arb_config_v1(mut config: route_arb::RouteArbConfigV1) -> Result<()
         // cannot silently undo the inventory-protection policy.
         config.allow_wrapped_stable_to_icusd = s.route_arb.allow_wrapped_stable_to_icusd;
         config = route_arb::resolve_incoming_book_fields(config, &s.route_arb);
+        config = route_arb::resolve_incoming_profile_field(config, &s.route_arb);
+        route_arb::validate_profile_transition(&config, &s.route_arb)?;
         route_arb::validate_route_config(&config)?;
         s.route_arb_config_generation = s.route_arb_config_generation.checked_add(1)
             .ok_or_else(|| "route config generation exhausted".to_string())?;
         s.route_arb = config;
         s.route_observation = None;
+        s.route_observation_config_generation = None;
         Ok::<(), String>(())
     })?;
     Ok(())
@@ -336,6 +354,33 @@ fn set_wrapped_stable_to_icusd_allowed_v1(
             .ok_or_else(|| "route config generation exhausted".to_string())?;
         s.route_arb = next.clone();
         s.route_observation = None;
+        s.route_observation_config_generation = None;
+        Ok(next)
+    })
+}
+
+#[update]
+fn set_icusd_peg_trades_profile_v1(active: bool) -> Result<route_arb::RouteArbConfigV1, String> {
+    require_admin();
+    state::mutate_state(|s| {
+        let mut next = if active {
+            route_arb::icusd_peg_trades_profile_config(s.route_arb.clone())
+        } else {
+            let mut config = s.route_arb.clone();
+            config.icusd_peg_trades_profile = Some(false);
+            config.enabled = false;
+            config.dry_run = true;
+            config
+        };
+        next.icusd_peg_trades_profile = Some(active);
+        route_arb::validate_route_config(&next)?;
+        s.route_arb_config_generation = s
+            .route_arb_config_generation
+            .checked_add(1)
+            .ok_or_else(|| "route config generation exhausted".to_string())?;
+        s.route_arb = next.clone();
+        s.route_observation = None;
+        s.route_observation_config_generation = None;
         Ok(next)
     })
 }
@@ -343,6 +388,10 @@ fn set_wrapped_stable_to_icusd_allowed_v1(
 #[query]
 fn get_route_arb_status_v1() -> route_arb::RouteArbStatusV1 {
     let mut status=state::read_state(|s| route_arb::route_status(&s.route_arb));
+    status.next_observation_eligible_at_ns = state::read_state(|s| {
+        s.route_observation_last_started_ns
+            .and_then(|last| last.checked_add(route_scheduler::ICUSD_PEG_OBSERVATION_INTERVAL_NS))
+    });
     match route_runtime::status() {
         Ok(runtime) => {status.execution_compiled_in=runtime.compiled_support;status.live_execution_authorized=runtime.live_authorized;},
         Err(error) => {status.config_valid=false;status.config_incident=Some(error);}
@@ -363,7 +412,24 @@ fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String>
 }
 
 pub(crate) fn start_route_observation_internal() -> Result<route_arb::ObservationStartV1, String> {
-    let (config, generation) = state::read_state(|s| (s.route_arb.clone(), s.route_arb_config_generation));
+    let (config, generation, last_started_ns, batch_in_flight) = state::read_state(|s| (
+        s.route_arb.clone(), s.route_arb_config_generation, s.route_observation_last_started_ns,
+        s.route_observation_batch_in_flight,
+    ));
+    if batch_in_flight {
+        return Err("an observation quote batch is already in flight".to_string());
+    }
+    if !config.icusd_peg_trades_profile_active() {
+        return Err("select the fixed icUSD peg-trades profile before starting an observation".to_string());
+    }
+    if let Some(last_started) = last_started_ns {
+        let eligible_at = last_started
+            .checked_add(route_scheduler::ICUSD_PEG_OBSERVATION_INTERVAL_NS)
+            .ok_or_else(|| "observation cadence timestamp overflow".to_string())?;
+        if ic_cdk::api::time() < eligible_at {
+            return Err(format!("next observation is eligible at {eligible_at}"));
+        }
+    }
     let universe = route_arb::build_work_universe(&config)?;
     let now = ic_cdk::api::time();
     let observation_id = format!("route-observation-{}-{}", generation, now);
@@ -381,8 +447,97 @@ pub(crate) fn start_route_observation_internal() -> Result<route_arb::Observatio
         quote_call_budget_sufficient: accumulator.quote_call_budget_sufficient,
         next_cursor: 0,
     };
-    state::mutate_state(|s| s.route_observation = Some(accumulator));
+    state::mutate_state(|s| {
+        if s.route_arb_config_generation != generation || !s.route_arb.icusd_peg_trades_profile_active() {
+            return Err("route profile changed while observation was being prepared".to_string());
+        }
+        if s.route_observation_batch_in_flight {
+            return Err("an observation quote batch is already in flight".to_string());
+        }
+        if let Some(last_started) = s.route_observation_last_started_ns {
+            let eligible_at = last_started.checked_add(route_scheduler::ICUSD_PEG_OBSERVATION_INTERVAL_NS)
+                .ok_or_else(|| "observation cadence timestamp overflow".to_string())?;
+            if now < eligible_at {
+                return Err(format!("next observation is eligible at {eligible_at}"));
+            }
+        }
+        s.route_observation = Some(accumulator);
+        s.route_observation_last_started_ns = Some(now);
+        s.route_observation_config_generation = Some(generation);
+        s.route_observation_reserved_quote_calls = 0;
+        Ok::<(), String>(())
+    })?;
     Ok(result)
+}
+
+#[cfg(test)]
+mod route_observation_batch_admission_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_cursor_admission_is_rejected_while_first_batch_owns_global_quote_fanout() {
+        let generation = 9;
+        let observation = route_arb::ObservationAccumulatorV1::new(
+            "admission-fixture".to_string(), 100, 0, 4, 8, true,
+        );
+        let mut fixture = state::BotState::default();
+        fixture.route_arb = route_arb::icusd_peg_trades_profile_config(fixture.route_arb);
+        fixture.route_arb_config_generation = generation;
+        fixture.route_observation_config_generation = Some(generation);
+        fixture.route_observation = Some(observation);
+        state::init_state(fixture);
+
+        reserve_route_observation_batch(generation, "admission-fixture", 0, 8, 20)
+            .expect("first caller reserves cursor before awaiting quotes");
+        let duplicate = reserve_route_observation_batch(generation, "admission-fixture", 0, 8, 20)
+            .expect_err("timer/manual duplicate must not start a second buffered quote batch");
+        assert!(duplicate.contains("already in flight"));
+        let (locked, reserved, cursor) = state::read_state(|s| (
+            s.route_observation_batch_in_flight,
+            s.route_observation_reserved_quote_calls,
+            s.route_observation.as_ref().map(|o| o.next_cursor),
+        ));
+        assert!(locked);
+        assert_eq!(reserved, 8, "worst-case budget is durable before the await");
+        assert_eq!(cursor, Some(0), "the cursor remains owned until the first batch commits");
+    }
+
+    #[test]
+    fn interrupted_reserved_batch_is_abandoned_without_resetting_scan_cadence() {
+        let mut fixture = state::BotState::default();
+        fixture.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "interrupted".to_string(), 100, 0, 4, 8, true,
+        ));
+        fixture.route_observation_config_generation = Some(4);
+        fixture.route_observation_last_started_ns = Some(100);
+        fixture.route_observation_batch_in_flight = true;
+        fixture.route_observation_reserved_quote_calls = 8;
+
+        reset_interrupted_route_observation_batch(&mut fixture);
+        assert!(fixture.route_observation.is_none(), "interrupted quote cursors cannot be replayed");
+        assert_eq!(fixture.route_observation_config_generation, None);
+        assert_eq!(fixture.route_observation_last_started_ns, Some(100), "600-second cadence remains durable");
+        assert!(!fixture.route_observation_batch_in_flight);
+        assert_eq!(fixture.route_observation_reserved_quote_calls, 0);
+    }
+
+    #[test]
+    fn inactive_profile_rejects_cached_legacy_batch_before_any_quote_io() {
+        let mut fixture = state::BotState::default();
+        fixture.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "legacy-generic".to_string(), 100, 0, 1, 2, true,
+        ));
+        // Simulates an observation retained from before the profile and
+        // generation markers existed in stable state.
+        fixture.route_observation_config_generation = None;
+        state::init_state(fixture);
+
+        let error = futures::executor::block_on(quote_route_observation_batch_internal(0, 1))
+            .expect_err("inactive profile cannot continue cached generic quote work");
+        assert!(error.contains("select the fixed icUSD peg-trades profile"));
+        let persisted = state::read_state(|s| s.route_observation.clone());
+        assert!(persisted.is_some(), "rejection is read-only and does not mutate cached history");
+    }
 }
 
 #[update]
@@ -395,10 +550,20 @@ pub(crate) async fn quote_route_observation_batch_internal(cursor: u64, limit: u
     if limit == 0 || limit > route_arb::HARD_MAX_PAGE_SIZE {
         return Err("limit must be between 1 and 100".to_string());
     }
-    let (config, generation, active) = state::read_state(|s| {
-        (s.route_arb.clone(), s.route_arb_config_generation, s.route_observation.clone())
+    let (config, generation, active, observation_generation, batch_in_flight) = state::read_state(|s| {
+        (s.route_arb.clone(), s.route_arb_config_generation, s.route_observation.clone(), s.route_observation_config_generation,
+            s.route_observation_batch_in_flight)
     });
+    if batch_in_flight {
+        return Err("an observation quote batch is already in flight".to_string());
+    }
+    if !config.icusd_peg_trades_profile_active() {
+        return Err("select the fixed icUSD peg-trades profile before quoting an observation".to_string());
+    }
     let active = active.ok_or_else(|| "no active route observation".to_string())?;
+    if observation_generation != Some(generation) {
+        return Err("route observation belongs to a different policy generation".to_string());
+    }
     if active.scan_complete {
         return Err("route observation is already complete".to_string());
     }
@@ -430,6 +595,17 @@ pub(crate) async fn quote_route_observation_batch_internal(cursor: u64, limit: u
         ));
     }
     let reservations = current_route_reservation_totals();
+    // Reserve the cursor before the first await. Since canister messages run
+    // synchronously until suspension, this closes the timer/manual and
+    // duplicate-admin race across every entry point. The per-batch buffered
+    // quote fanout is therefore also the global fanout.
+    reserve_route_observation_batch(
+        generation,
+        &active.observation_id,
+        cursor,
+        requested_quote_calls,
+        u64::from(config.max_quote_calls_per_observation),
+    )?;
     let quoted = route_arb::quote_observation_items(
         &config,
         &universe.items[start..end],
@@ -440,14 +616,27 @@ pub(crate) async fn quote_route_observation_batch_internal(cursor: u64, limit: u
     let full_fill_rejections = quoted.iter().filter(|(_, _, rejected)| *rejected).count() as u64;
     let completed_at = ic_cdk::api::time();
     let observation = state::mutate_state(|s| -> Result<_, String> {
-        if s.route_arb_config_generation != generation {
+        s.route_observation_batch_in_flight = false;
+        s.route_observation_reserved_quote_calls = 0;
+        if s.route_arb_config_generation != generation || s.route_observation_config_generation != Some(generation) {
+            s.route_observation = None;
+            s.route_observation_config_generation = None;
             return Err("route config changed while batch was quoting; results discarded".to_string());
         }
-        let current = s.route_observation.as_mut().ok_or_else(|| "route observation disappeared while batch was quoting".to_string())?;
+        let Some(current) = s.route_observation.as_mut() else {
+            s.route_observation_config_generation = None;
+            return Err("route observation disappeared while batch was quoting".to_string());
+        };
         if current.observation_id != active.observation_id || current.next_cursor != cursor {
+            s.route_observation = None;
+            s.route_observation_config_generation = None;
             return Err("route observation advanced concurrently; results discarded".to_string());
         }
-        route_arb::accumulate_observation_batch(current, cursor, candidates.clone(), quote_calls, full_fill_rejections)?;
+        if let Err(error) = route_arb::accumulate_observation_batch(current, cursor, candidates.clone(), quote_calls, full_fill_rejections) {
+            s.route_observation = None;
+            s.route_observation_config_generation = None;
+            return Err(error);
+        }
         if current.scan_complete {
             current.completed_at_ns = Some(completed_at);
         }
@@ -457,6 +646,37 @@ pub(crate) async fn quote_route_observation_batch_internal(cursor: u64, limit: u
         state::append_route_observation(observation.clone())?;
     }
     Ok(route_arb::ObservationBatchResultV1 { observation, candidates })
+}
+
+fn reserve_route_observation_batch(
+    generation: u64,
+    observation_id: &str,
+    cursor: u64,
+    requested_quote_calls: u64,
+    quote_call_budget: u64,
+) -> Result<(), String> {
+    state::mutate_state(|s| -> Result<(), String> {
+        if s.route_observation_batch_in_flight {
+            return Err("an observation quote batch is already in flight".to_string());
+        }
+        if s.route_arb_config_generation != generation
+            || s.route_observation_config_generation != Some(generation)
+        {
+            return Err("route policy changed before quote batch admission".to_string());
+        }
+        let current = s.route_observation.as_ref().ok_or_else(|| "no active route observation".to_string())?;
+        if current.observation_id != observation_id || current.next_cursor != cursor {
+            return Err("route observation advanced before quote batch admission".to_string());
+        }
+        let remaining = quote_call_budget.checked_sub(current.quote_calls_made)
+            .ok_or_else(|| "route observation has already exceeded its configured quote-call budget".to_string())?;
+        if requested_quote_calls > remaining {
+            return Err("quote batch exceeds the remaining observation quote-call budget".to_string());
+        }
+        s.route_observation_batch_in_flight = true;
+        s.route_observation_reserved_quote_calls = requested_quote_calls;
+        Ok(())
+    })
 }
 
 fn current_route_reservation_totals() -> route_arb::ReservationTotals {
@@ -483,7 +703,7 @@ fn get_route_observations_v1(offset: u64, limit: u64) -> Result<Vec<route_arb::O
 
 #[query]
 fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
-    state::read_state(|s| match &s.route_observation {
+    state::read_state(|s| match &s.route_observation.clone().filter(|_| s.route_observation_config_generation == Some(s.route_arb_config_generation)) {
         Some(observation) => route_arb::BestRouteCandidatesV1 {
             observation_id: Some(observation.observation_id.clone()),
             scan_complete: observation.scan_complete,
@@ -500,7 +720,7 @@ fn get_best_route_candidates_v1() -> route_arb::BestRouteCandidatesV1 {
 
 #[query]
 fn get_top_route_candidates_v1() -> route_arb::TopRouteCandidatesV1 {
-    state::read_state(|s| match &s.route_observation {
+    state::read_state(|s| match &s.route_observation.clone().filter(|_| s.route_observation_config_generation == Some(s.route_arb_config_generation)) {
         Some(observation) => route_arb::TopRouteCandidatesV1 {
             observation_id: Some(observation.observation_id.clone()),
             scan_complete: observation.scan_complete,
