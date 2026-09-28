@@ -411,6 +411,16 @@
   .price-axis-label { display: flex; align-items: center; gap: 8px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-bottom: var(--sp-2); }
   .price-axis-label .price-axis-note { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--text-muted); }
   .price-badge-row-stable { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stable-route-column { display: grid; grid-template-rows: auto 30px auto auto; min-width: 0; }
+  .stable-route-column .price-badge { min-height: 73px; }
+  .stable-path-toggle { justify-self: center; align-self: center; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); color: var(--text-tertiary); font: 500 10px var(--font-ui); cursor: pointer; }
+  .stable-path-toggle:hover, .stable-path-toggle[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .stable-path-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stable-path-result { margin-top: var(--sp-2); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-input); font-size: 11px; line-height: 1.5; color: var(--text-secondary); }
+  .stable-path-result strong { color: var(--text-primary); font-weight: 600; }
+  .stable-path-result .estimate-note { color: var(--text-tertiary); font-size: 10px; }
+  .stable-path-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-3); align-items: start; }
+  @media (max-width: 560px) { .stable-path-row { grid-template-columns: 1fr; } }
   @media (max-width: 560px) { .price-badge-row { grid-template-columns: 1fr; } }
 
   /* ═══════════════════ MARKETS ═══════════════════ */
@@ -1384,6 +1394,11 @@
       { input: 'icusd', output: 'ckusdc' },
       { input: 'ckusdt', output: 'ckusdc' },
     ];
+    const STABLE_ROUTE_LINKS = [
+      { key: 'icusd-ckusdt', topId: 'icpswap-icusd-ckusdt', bottomId: 'rumi-3pool-icusd-ckusdt' },
+      { key: 'icusd-ckusdc', topId: 'icpswap-icusd-ckusdc', bottomId: 'rumi-3pool-icusd-ckusdc' },
+      { key: 'ckusdt-ckusdc', topId: 'icpswap-ckusdt-ckusdc', bottomId: 'rumi-3pool-ckusdt-ckusdc' },
+    ];
     const ACTIVE_ROUTE_PRICE_REFRESH_MS = 30_000;
     const ACTIVE_ROUTE_PROBE_NATIVE = {
       icp: 100_000_000n,
@@ -1661,6 +1676,7 @@
       liveLoaded: false,
       levers: {}, // key -> 'applying' while a toggle call is in flight
       activePriceInverted: new Set(),
+      linkedStablePairs: new Set(),
     };
 
     let tradesPage = 0, activityPage = 0;
@@ -2946,10 +2962,156 @@
 
     window.toggleActiveRoutePrice = function(priceId) {
       const id = String(priceId);
-      if (state.activePriceInverted.has(id)) state.activePriceInverted.delete(id);
-      else state.activePriceInverted.add(id);
+      const inverted = !state.activePriceInverted.has(id);
+      const linked = STABLE_ROUTE_LINKS.find(pair => state.linkedStablePairs.has(pair.key) && (pair.topId === id || pair.bottomId === id));
+      if (linked) {
+        const prices = routeSources.activePrices.value || [];
+        const top = prices.find(price => price.id === linked.topId);
+        const bottom = prices.find(price => price.id === linked.bottomId);
+        if (!stableRoutePricesCompatible(top, bottom)) return;
+        const topInverted = id === linked.topId ? inverted : (inverted ? bottom.output : bottom.input) === top.input;
+        setStableRouteDirections(linked, top, bottom, topInverted);
+      } else if (inverted) state.activePriceInverted.add(id);
+      else state.activePriceInverted.delete(id);
       if (state.activeView === 'cockpit') renderCockpit();
     };
+
+    function stableRoutePricesCompatible(top, bottom) {
+      return Boolean(top && bottom && [top.input, top.output].sort().join('|') === [bottom.input, bottom.output].sort().join('|'));
+    }
+
+    function setStableRouteDirections(pair, top, bottom, topInverted) {
+      const topOutput = topInverted ? top.input : top.output;
+      const bottomInverted = bottom.output === topOutput;
+      if (topInverted) state.activePriceInverted.add(pair.topId);
+      else state.activePriceInverted.delete(pair.topId);
+      if (bottomInverted) state.activePriceInverted.add(pair.bottomId);
+      else state.activePriceInverted.delete(pair.bottomId);
+    }
+
+    window.toggleStableRouteLink = function(pairKey) {
+      const pair = STABLE_ROUTE_LINKS.find(item => item.key === String(pairKey));
+      const prices = routeSources.activePrices.value || [];
+      const top = prices.find(price => price.id === pair?.topId);
+      const bottom = prices.find(price => price.id === pair?.bottomId);
+      if (!pair || !stableRoutePricesCompatible(top, bottom)) return;
+      if (state.linkedStablePairs.has(pair.key)) {
+        state.linkedStablePairs.delete(pair.key);
+      } else {
+        state.linkedStablePairs.add(pair.key);
+        // The ICPSwap card sets the shared direction when a pair is linked.
+        setStableRouteDirections(pair, top, bottom, state.activePriceInverted.has(pair.topId));
+      }
+      if (state.activeView === 'cockpit') renderCockpit();
+    };
+
+    function estimateRouteOutputNative(price, inverted, inputNative) {
+      if (!price || price.error || !price.inputNative || !price.outputNative) return null;
+      const numerator = BigInt(inputNative) * BigInt(inverted ? price.inputNative : price.outputNative);
+      const denominator = BigInt(inverted ? price.outputNative : price.inputNative);
+      if (denominator <= 0n) return null;
+      return (numerator + denominator / 2n) / denominator;
+    }
+
+    function formatEstimateNative(amountNative, decimals) {
+      if (amountNative == null) return '—';
+      const amount = BigInt(amountNative);
+      const places = Math.min(Number(decimals), 6);
+      const base = 10n ** BigInt(decimals);
+      const shownBase = 10n ** BigInt(places);
+      const shown = (amount * shownBase) / base;
+      const whole = shown / shownBase;
+      const fraction = (shown % shownBase).toString().padStart(places, '0').replace(/0+$/, '');
+      return `${whole}${fraction ? '.' + fraction : ''}`;
+    }
+
+    function stableRouteEvaluation(pair, top, bottom) {
+      if (!state.linkedStablePairs.has(pair.key) || !stableRoutePricesCompatible(top, bottom) || top.error || bottom.error) return null;
+      const inverted = state.activePriceInverted.has(pair.topId);
+      const topInput = inverted ? top.output : top.input;
+      const topOutput = inverted ? top.input : top.output;
+      const inputDecimals = inverted ? top.outputDecimals : top.inputDecimals;
+      const outputDecimals = inverted ? top.inputDecimals : top.outputDecimals;
+      const bottomInverted = bottom.output === topOutput;
+      const bottomOutputDecimals = bottomInverted ? bottom.inputDecimals : bottom.outputDecimals;
+      const startingInput = 10n ** BigInt(inputDecimals);
+      const topOutputNative = estimateRouteOutputNative(top, inverted, startingInput);
+      if (topOutputNative == null) return null;
+      const bottomOutput = estimateRouteOutputNative(bottom, bottomInverted, topOutputNative);
+      if (bottomOutput == null) return null;
+      const change = bottomOutput - startingInput;
+      return { inverted, topInput, topOutput, inputDecimals, outputDecimals, bottomOutputDecimals, startingInput, topOutputNative, bottomOutput, change };
+    }
+
+    function stableRouteEstimateHtml(pair, top, bottom) {
+      if (!state.linkedStablePairs.has(pair.key)) return '';
+      const evaluation = stableRouteEvaluation(pair, top, bottom);
+      if (!evaluation) return `<div class="stable-path-result" role="status">Linked route estimate unavailable until both pool probes are available.</div>`;
+      const { topInput, topOutput, inputDecimals, outputDecimals, bottomOutputDecimals, startingInput, topOutputNative, bottomOutput, change } = evaluation;
+      const sign = change > 0n ? '+' : change < 0n ? '−' : '';
+      const changeLabel = `${sign}${formatEstimateNative(change < 0n ? -change : change, inputDecimals)} ${TOKEN_INFO[topInput].label}`;
+      return `<div class="stable-path-result" role="status">
+        <div><strong>${formatEstimateNative(startingInput, inputDecimals)} ${TOKEN_INFO[topInput].label}</strong> → ${formatEstimateNative(topOutputNative, outputDecimals)} ${TOKEN_INFO[topOutput].label} → <strong>${formatEstimateNative(bottomOutput, bottomOutputDecimals)} ${TOKEN_INFO[topInput].label}</strong></div>
+        <div>Estimated round trip: <strong class="${change > 0n ? 'positive' : change < 0n ? 'negative' : 'text-muted'}">${changeLabel}</strong></div>
+        <div class="estimate-note">Estimated from each pool’s fixed 1-token probe and scaled amounts; not a fresh quote or executable return.</div>
+      </div>`;
+    }
+
+    function stableLinkedBottomPriceBadge(pair, top, bottom) {
+      if (!state.linkedStablePairs.has(pair.key)) return activeRoutePriceBadge(bottom);
+      const evaluation = stableRouteEvaluation(pair, top, bottom);
+      if (!evaluation) return activeRoutePriceBadge(bottom);
+      const { topOutput, outputDecimals, topOutputNative, bottomOutput, bottomOutputDecimals } = evaluation;
+      const amountIn = formatEstimateNative(topOutputNative, outputDecimals);
+      const amountOut = formatEstimateNative(bottomOutput, bottomOutputDecimals);
+      const inputLabel = TOKEN_INFO[topOutput].label;
+      const outputLabel = TOKEN_INFO[evaluation.topInput].label;
+      const bottomInverted = state.activePriceInverted.has(pair.bottomId);
+      return priceBadge({
+        token: `${inputLabel} → ${outputLabel}`,
+        venueKey: 'rumi',
+        venueName: 'Rumi 3pool',
+        hue: 'var(--v-rumi)',
+        value: `${amountIn} ${inputLabel} = ${amountOut} ${outputLabel}`,
+        sub: 'Connected estimate · scaled from 1-token pool probes',
+        interactive: true,
+        pressed: bottomInverted,
+        ariaLabel: `Invert the linked Rumi 3pool ${inputLabel} to ${outputLabel} direction`,
+        onClick: `window.toggleActiveRoutePrice('${esc(bottom.id)}')`,
+      });
+    }
+
+    function stableLinkedTopPriceBadge(pair, top, bottom) {
+      if (!state.linkedStablePairs.has(pair.key)) return activeRoutePriceBadge(top);
+      const evaluation = stableRouteEvaluation(pair, top, bottom);
+      if (!evaluation) return activeRoutePriceBadge(top);
+      const { topInput, topOutput, inputDecimals, outputDecimals, startingInput, topOutputNative, inverted } = evaluation;
+      const inputLabel = TOKEN_INFO[topInput].label;
+      const outputLabel = TOKEN_INFO[topOutput].label;
+      return priceBadge({
+        token: `${inputLabel} → ${outputLabel}`,
+        venueKey: 'icpswap',
+        venueName: 'ICPSwap',
+        hue: 'var(--v-icpswap)',
+        value: `${formatEstimateNative(startingInput, inputDecimals)} ${inputLabel} = ${formatEstimateNative(topOutputNative, outputDecimals)} ${outputLabel}`,
+        sub: 'Connected · exact fixed-size pool probe',
+        interactive: true,
+        pressed: inverted,
+        ariaLabel: `Invert the linked ICPSwap ${inputLabel} to ${outputLabel} direction`,
+        onClick: `window.toggleActiveRoutePrice('${esc(top.id)}')`,
+      });
+    }
+
+    function stableRouteColumnHtml(pair, top, bottom) {
+      const linked = state.linkedStablePairs.has(pair.key);
+      const compatible = stableRoutePricesCompatible(top, bottom);
+      return `<div class="stable-route-column">
+        ${stableLinkedTopPriceBadge(pair, top, bottom)}
+        <button type="button" class="stable-path-toggle" aria-pressed="${linked ? 'true' : 'false'}" aria-label="${linked ? 'Disconnect' : 'Connect'} ${esc(TOKEN_INFO[top.input].label)} and ${esc(TOKEN_INFO[top.output].label)} route quotes" ${compatible ? '' : 'disabled'} onclick="window.toggleStableRouteLink('${esc(pair.key)}')"><span aria-hidden="true">↓</span>${linked ? 'Connected' : 'Connect'}</button>
+        ${stableLinkedBottomPriceBadge(pair, top, bottom)}
+        ${stableRouteEstimateHtml(pair, top, bottom)}
+      </div>`;
+    }
 
     function activeRoutePriceBadge(price) {
       const input = TOKEN_INFO[price.input];
@@ -2994,9 +3156,16 @@
         ? groups.map(group => {
             const groupPrices = prices.filter(price => price.group === group);
             if (!groupPrices.length) return '';
+            const stableColumns = group === 'Stable routes' ? STABLE_ROUTE_LINKS.map(pair => {
+              const top = groupPrices.find(price => price.id === pair.topId);
+              const bottom = groupPrices.find(price => price.id === pair.bottomId);
+              return top && bottom ? stableRouteColumnHtml(pair, top, bottom) : '';
+            }).join('') : '';
             return `<div class="price-axis-group">
               <div class="price-axis-label">${esc(group)}</div>
-              <div class="price-badge-row${group === 'Stable routes' ? ' price-badge-row-stable' : ''}">${groupPrices.map(activeRoutePriceBadge).join('')}</div>
+              ${group === 'Stable routes'
+                ? `<div class="stable-path-row">${stableColumns}</div>`
+                : `<div class="price-badge-row">${groupPrices.map(activeRoutePriceBadge).join('')}</div>`}
             </div>`;
           }).join('')
         : `<div class="route-empty${status === 'failed' || status === 'unavailable' ? ' negative' : ''}">${sourceStateLabel('activePrices', ACTIVE_ROUTE_PRICE_REFRESH_MS * 2)}</div>`;
