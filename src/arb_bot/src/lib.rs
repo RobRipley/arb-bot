@@ -202,6 +202,24 @@ fn store_route_arb_config(
     Ok(config)
 }
 
+fn store_icusd_price_config(
+    state: &mut state::BotState,
+    price_usd6: u64,
+    route_execution_active: bool,
+) -> Result<route_arb::RouteArbConfigV1, String> {
+    route_arb::validate_icusd_price_usd6(price_usd6, &state.route_arb)?;
+    if state.route_arb.icusd_price_usd6_resolved() == price_usd6 {
+        let mut current = state.route_arb.clone();
+        current = route_arb::resolve_incoming_book_fields(current, &state.route_arb);
+        current = route_arb::resolve_incoming_profile_field(current, &state.route_arb);
+        current.icusd_price_usd6 = Some(price_usd6);
+        return Ok(current);
+    }
+    let mut next = state.route_arb.clone();
+    next.icusd_price_usd6 = Some(price_usd6);
+    store_route_arb_config(state, next, route_execution_active)
+}
+
 fn pinned(text: &str) -> Principal {
     Principal::from_text(text).expect("compile-time principal must be valid")
 }
@@ -357,11 +375,7 @@ fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), St
 fn set_icusd_price_usd6_v1(price_usd6: u64) -> Result<route_arb::RouteArbConfigV1, String> {
     require_admin();
     let route_execution_active = route_runtime::has_current()?;
-    state::mutate_state(|s| {
-        let mut next = s.route_arb.clone();
-        next.icusd_price_usd6 = Some(price_usd6);
-        store_route_arb_config(s, next, route_execution_active)
-    })
+    state::mutate_state(|s| store_icusd_price_config(s, price_usd6, route_execution_active))
 }
 
 #[update]
@@ -2423,12 +2437,81 @@ mod icusd_config_tests {
     #[test]
     fn price_write_rejects_active_execution_without_mutating_config_or_generation() {
         let mut state = state::BotState::default();
-        let mut incoming = state.route_arb.clone();
-        incoming.icusd_price_usd6 = Some(970_000);
-        let error = store_route_arb_config(&mut state, incoming, true).unwrap_err();
+        let error = store_icusd_price_config(&mut state, 970_000, true).unwrap_err();
 
         assert!(error.contains("route execution is active"));
         assert_eq!(state.route_arb.icusd_price_usd6_resolved(), 1_000_000);
         assert_eq!(state.route_arb_config_generation, 0);
+    }
+
+    #[test]
+    fn setting_the_same_price_while_execution_is_active_is_idempotent() {
+        let mut state = state::BotState::default();
+        state.route_arb = route_arb::icusd_peg_trades_profile_config(state.route_arb);
+        state.route_arb.icusd_price_usd6 = Some(970_000);
+        state.route_arb_config_generation = 8;
+        state.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "active-execution-observation".into(), 1, 2, 3, 4, true,
+        ));
+        state.route_observation_config_generation = Some(8);
+        state.route_observation_last_started_ns = Some(987_654);
+
+        let config_before = state.route_arb.clone();
+        let observation_before = state.route_observation.clone();
+        let result = store_icusd_price_config(&mut state, 970_000, true).unwrap();
+
+        assert_eq!(result.icusd_price_usd6_resolved(), 970_000);
+        assert_eq!(state.route_arb, config_before);
+        assert_eq!(state.route_arb_config_generation, 8);
+        assert_eq!(state.route_observation, observation_before);
+        assert_eq!(state.route_observation_config_generation, Some(8));
+        assert_eq!(state.route_observation_last_started_ns, Some(987_654));
+    }
+
+    #[test]
+    fn setting_the_same_price_while_idle_is_read_only() {
+        let mut state = state::BotState::default();
+        state.route_arb = route_arb::icusd_peg_trades_profile_config(state.route_arb);
+        state.route_arb.icusd_price_usd6 = Some(970_000);
+        state.route_arb_config_generation = 12;
+        state.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "idle-observation".into(), 1, 2, 3, 4, true,
+        ));
+        state.route_observation_config_generation = Some(12);
+        state.route_observation_last_started_ns = Some(654_321);
+
+        let config_before = state.route_arb.clone();
+        let observation_before = state.route_observation.clone();
+        let result = store_icusd_price_config(&mut state, 970_000, false).unwrap();
+
+        assert_eq!(result.icusd_price_usd6, Some(970_000));
+        assert_eq!(state.route_arb, config_before);
+        assert_eq!(state.route_arb_config_generation, 12);
+        assert_eq!(state.route_observation, observation_before);
+        assert_eq!(state.route_observation_config_generation, Some(12));
+        assert_eq!(state.route_observation_last_started_ns, Some(654_321));
+    }
+
+    #[test]
+    fn legacy_missing_par_price_is_an_idempotent_noop() {
+        let mut state = state::BotState::default();
+        state.route_arb.icusd_price_usd6 = None;
+        state.route_arb_config_generation = 4;
+        state.route_observation = Some(route_arb::ObservationAccumulatorV1::new(
+            "legacy-observation".into(), 1, 2, 3, 4, true,
+        ));
+        state.route_observation_config_generation = Some(4);
+        state.route_observation_last_started_ns = Some(222_333);
+
+        let config_before = state.route_arb.clone();
+        let observation_before = state.route_observation.clone();
+        let result = store_icusd_price_config(&mut state, 1_000_000, true).unwrap();
+
+        assert_eq!(result.icusd_price_usd6, Some(1_000_000));
+        assert_eq!(state.route_arb, config_before);
+        assert_eq!(state.route_arb_config_generation, 4);
+        assert_eq!(state.route_observation, observation_before);
+        assert_eq!(state.route_observation_config_generation, Some(4));
+        assert_eq!(state.route_observation_last_started_ns, Some(222_333));
     }
 }

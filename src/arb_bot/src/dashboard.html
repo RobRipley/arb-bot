@@ -3744,8 +3744,11 @@
       const ladder = config && config.stable_size_ladder ? Array.from(config.stable_size_ladder, BigInt) : [];
       if (!ladder.length || ladder.some(value => value <= 0n)) throw new Error('Stable size ladder is unavailable for icUSD price validation');
       const smallestStableSize = ladder.reduce((smallest, value) => value < smallest ? value : smallest);
-      const maximum = smallestStableSize * 100000000n;
-      if (maximum > ICUSD_PRICE_USD6_MAX_NAT64 || amount > maximum) {
+      const minimumNativePriceBound = smallestStableSize * 100000000n;
+      const maximum = minimumNativePriceBound < ICUSD_PRICE_USD6_MAX_NAT64
+        ? minimumNativePriceBound
+        : ICUSD_PRICE_USD6_MAX_NAT64;
+      if (amount > maximum) {
         throw new Error('icUSD price must be positive and must produce a nonzero native amount for the smallest stable size');
       }
       return amount;
@@ -3812,13 +3815,17 @@
             if (currentExecution) throw new Error('Wait for the current route execution to finish before changing icUSD accounting price');
             const freshConfig = configResult;
             const freshPrice = icusdPriceParseUsd6(input && input.value, freshConfig);
-            if (freshPrice === icusdPriceCurrentUsd6(freshConfig)) {
+            const freshCurrent = icusdPriceCurrentUsd6(freshConfig);
+            if (freshPrice === freshCurrent) {
               routeArbConfig = freshConfig;
               if (routeSources.routeArbConfig) markSourceFresh(routeSources.routeArbConfig, freshConfig);
               routeIcusdPriceMutationInFlight = false;
               await loadRouteData();
               toast('icUSD accounting value is already ' + icusdPriceFormatUsd6(freshPrice), 'success');
               return;
+            }
+            if (freshCurrent !== current) {
+              throw new Error('icUSD accounting value changed since this confirmation; refresh and review before saving');
             }
             const updated = unwrapResult(await authenticatedActor.set_icusd_price_usd6_v1(freshPrice));
             routeArbConfig = updated;

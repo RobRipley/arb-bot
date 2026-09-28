@@ -86,6 +86,22 @@ assert.throws(() => vm.runInContext("icusdPriceParseUsd6('0', routeArbConfig)", 
 assert.throws(() => vm.runInContext("icusdPriceParseUsd6('NaN', routeArbConfig)", context), /valid USD amount/);
 assert.throws(() => vm.runInContext("icusdPriceParseUsd6('0.9700001', routeArbConfig)", context), /up to 6 decimal places/);
 assert.throws(() => vm.runInContext("icusdPriceParseUsd6('100000000.000001', routeArbConfig)", context), /smallest stable size/);
+const nat64BoundConfig = {
+  icusd_peg_trades_profile: [false],
+  stable_size_ladder: [200_000_000_000n, 400_000_000_000n],
+  max_stable_principal_usd_6dec: 400_000_000_000n,
+};
+context.nat64BoundConfig = nat64BoundConfig;
+assert.equal(
+  vm.runInContext("icusdPriceParseUsd6('18446744073709.551615', nat64BoundConfig)", context),
+  18_446_744_073_709_551_615n,
+  'a valid nat64 price must remain editable when the true minimum-size bound exceeds nat64::MAX',
+);
+assert.throws(
+  () => vm.runInContext("icusdPriceParseUsd6('18446744073709.551616', nat64BoundConfig)", context),
+  /smallest stable size/,
+  'prices above nat64::MAX must remain rejected even when the configuration-derived bound is larger',
+);
 const editor = vm.runInContext('icusdPriceEditorHtml(routeArbConfig, true, null)', context);
 assert.match(editor, /value="1\.00"/);
 assert.match(editor, /icUSD value/);
@@ -126,6 +142,21 @@ assert.match(context.modal.body, /pool quotes/);
 assert.equal(context.calls.length, 0, 'opening confirmation must not write configuration');
 
 (async () => {
+  const staleModal = context.modal;
+  const originalConfig = context.routeArbConfig;
+  context.routeArbConfig = {
+    icusd_price_usd6: [990000n],
+    stable_size_ladder: [1000000n, 5000000n],
+  };
+  await staleModal.onConfirm();
+  assert.equal(context.calls.length, 0,
+    'a confirmation opened for an older current value must not overwrite a newer admin setting');
+  assert.match(context.toasts.at(-1)[0], /changed since this confirmation/,
+    'a changed current price must require a fresh review rather than silently applying the stale modal');
+  context.routeArbConfig = originalConfig;
+  vm.runInContext('window.saveIcusdAccountingPrice()', context);
+  context.events.length = 0;
+
   let releaseRead;
   context.routeDataRequestPromise = new Promise(resolve => { releaseRead = resolve; });
   const confirmation = context.modal.onConfirm();
