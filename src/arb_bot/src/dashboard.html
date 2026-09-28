@@ -2187,10 +2187,16 @@
       btn.onclick = async function () {
         if (opts.onConfirm) {
           btnLoading(btn);
+          let result;
           try {
-            const closeAfterConfirm = await opts.onConfirm();
-            if (closeAfterConfirm !== false) closeConfirm();
-          } finally { btnDone(btn); }
+            result = await opts.onConfirm();
+            if (result?.keepOpen !== true && result !== false) closeConfirm();
+          } finally {
+            if (result?.disableConfirm === true) {
+              btn.disabled = true;
+              btn.textContent = result.buttonLabel || 'Check status before retrying';
+            } else btnDone(btn);
+          }
         } else closeConfirm();
       };
     }
@@ -5983,11 +5989,11 @@
             const message = e && e.message ? e.message : String(e);
             const errorEl = document.getElementById('withdraw-error');
             if (errorEl) {
-              errorEl.textContent = `Withdrawal failed: ${message}`;
+              errorEl.textContent = `The withdrawal result was not confirmed. Check account activity and the token balance before trying again. Details: ${message}`;
               errorEl.hidden = false;
             }
             console.error('withdraw failed:', e);
-            return false;
+            return { keepOpen: true, disableConfirm: true, buttonLabel: 'Check status before retrying' };
           }
           toast(`Withdrew ${amountStr} ${info.label}`, 'success');
           state.withdrawalForm.amount = '';
