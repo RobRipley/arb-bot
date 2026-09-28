@@ -3,6 +3,8 @@
 use std::cell::Cell;
 use crate::{route_arb::ObservationAccumulatorV1, route_runtime::{self, RuntimeStatus}, state};
 
+pub const ICUSD_PEG_OBSERVATION_INTERVAL_NS: u64 = 600_000_000_000;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TickAction { Idle, ServiceExecution, StartObservation, QuoteBatch(u64), SelectRoute }
 
@@ -16,6 +18,36 @@ pub fn next_action(status: &RuntimeStatus, has_current: bool, observation: Optio
         Some(o) if o.best_stable_candidate.is_some() || o.best_icp_candidate.is_some() => TickAction::SelectRoute,
         Some(_) => TickAction::StartObservation,
     }
+}
+
+/// Profile-aware start gate. Durable execution service has priority even
+/// while the profile is inactive; stale generic observations cannot quote or
+/// select a route after upgrade unless the fixed profile is explicitly set.
+pub fn next_action_for_profile(
+    status: &RuntimeStatus,
+    has_current: bool,
+    observation: Option<&ObservationAccumulatorV1>,
+    profile_active: bool,
+    last_observation_started_ns: Option<u64>,
+    now_ns: u64,
+) -> TickAction {
+    if has_current {
+        return TickAction::ServiceExecution;
+    }
+    if !profile_active {
+        return TickAction::Idle;
+    }
+    if observation.is_none() {
+        if let Some(last_started) = last_observation_started_ns {
+            let Some(eligible_at) = last_started.checked_add(ICUSD_PEG_OBSERVATION_INTERVAL_NS) else {
+                return TickAction::Idle;
+            };
+            if now_ns < eligible_at {
+                return TickAction::Idle;
+            }
+        }
+    }
+    next_action(status, false, observation)
 }
 thread_local! { static BUSY: Cell<Option<u64>> = const { Cell::new(None) }; }
 pub fn in_flight_since_ns() -> Option<u64> { BUSY.with(Cell::get) }
@@ -47,8 +79,14 @@ pub async fn tick() -> Result<(), String> {
     };
     let status = route_runtime::status()?;
     let current = route_runtime::has_current()?;
-    let observation = state::read_state(|s| s.route_observation.clone());
-    let result = match next_action(&status, current, observation.as_ref()) {
+    let (observation, profile_active, last_started_ns) = state::read_state(|s| (
+        s.route_observation.clone(),
+        s.route_arb.icusd_peg_trades_profile_active(),
+        s.route_observation_last_started_ns,
+    ));
+    let result = match next_action_for_profile(
+        &status, current, observation.as_ref(), profile_active, last_started_ns, ic_cdk::api::time(),
+    ) {
         TickAction::Idle => Ok(()),
         TickAction::ServiceExecution | TickAction::SelectRoute => route_runtime::service_tick().await,
         TickAction::StartObservation => crate::start_route_observation_internal().map(|_|()),

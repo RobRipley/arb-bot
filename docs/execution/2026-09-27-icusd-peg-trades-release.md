@@ -1,0 +1,54 @@
+# icUSD peg-trades release and activation record
+
+Prepared: 2026-09-28
+Last live status read: 2026-09-28
+Status: source implementation in progress; no release, upgrade, startup, configuration write, activation, or trade performed.
+
+## Intended profile
+
+This release restores exactly these two-leg ICPSwap routes:
+
+| Direction | Route |
+|---|---|
+| 1 | icUSD → ICP → ckUSDC |
+| 2 | ckUSDC → ICP → icUSD |
+| 3 | icUSD → ICP → ckUSDT |
+| 4 | ckUSDT → ICP → icUSD |
+
+The agreed default size ladder is $5 and $20, with a configurable two-entry ladder and a $40 maximum principal. The four routes at two sizes require 16 pool quotes per scan; the hard cap is 20 pool quote calls per scan and at most two concurrent quote calls. Its observation cadence is 600 seconds. icUSD, ckUSDC, and ckUSDT are valued at $1 for profit accounting. Both the minimum absolute stable-profit floor and minimum stable-profit basis-point floor are zero: pool quotes and ledger fees still have to leave nonnegative net proceeds, with no additional profit cushion. The profile performs no automatic residual drains or ICP sales.
+
+The current changed source adds an admin-gated profile setter that forces route execution disabled and dry-run on while leaving live authorization unchanged; selecting the profile does not grant live authorization. While inactive, the profile-aware scheduler does not start new observations or service stale generic observations, but it still services an already durable execution for reconciliation. An explicit admin manual quote observation is separately gated by an active profile and the persisted 600-second cadence; it does not require live authorization, execution enabled, or dry-run off. Automatic background scans require all three runtime gates—`live_authorized == true`, `enabled == true`, and `dry_run == false`—as well as an active profile; their cadence is 600 seconds. Thus profile selection leaves automatic scans inert with `enabled == false` and `dry_run == true`, and leaves authorization unchanged. These behaviors are present in the current uncommitted source; final acceptance, review, and build evidence remain pending.
+
+Durable settlement protections remain in force: persist intent before a non-idempotent submission, never replay an uncertain submitted call, require source-bound settlement evidence, reserve held inventory, and keep unresolved executions fenced for read-only reconciliation. A held position is not automatically sold or released. The accepted runtime contract describes these invariants at `docs/execution/2026-09-05-runtime-executor-contract.md:9-15,21-25`.
+
+## Current production evidence
+
+Read-only status queries for canister `ucjxv-nqaaa-aaaaj-qrsaq-cai` using the previously recorded controller identity returned **Stopped** on both 2026-09-27 and 2026-09-28 (latest read about 07:43 UTC / 00:43 PDT). The 2026-09-27 balance was 2,459,284,468,408 cycles; on 2026-09-28 it was 2,458,979,622,115. Idle burn was 7,271,676,078 cycles/day and reserved cycles were 0 on the latest read. The four controllers were unchanged: `cpbhu-5iaaa-aaaad-aalta-cai`, `e3mmv-5qaaa-aaaah-aadma-cai`, `fd7h3-mgmok-dmojz-awmxl-k7eqn-37mcv-jjkxp-parnt-ehngl-l2z3m-kae`, and `mi66c-zqlu4-4kxd6-2gtp7-szg5v-6a62a-geoty-fahu5-4trje-xyfby-wqe`. The live module hash remained `429f5378bb31e3baf0b42cb9b28defd5c65c7814f6aa009336cfca0a7babaac2`.
+
+Anonymous queries for `get_route_runtime_status_v1` and `get_route_arb_config_v1` returned `IC0508` because the canister is stopped. Anonymous `canister_status` was rejected with `IC0542`; the controller status call above succeeded. Current route configuration, runtime authorization, volume state, current execution, mutation lock, scheduler marker, held inventory, and settlement state are therefore **unknown**. Do not substitute earlier readbacks for current state.
+
+No candidate Wasm or candidate SHA-256 has been produced. No rollback Wasm is present at the local release-artifact path; the live module hash above is an observed fingerprint, not proof that rollback bytes are available. This is an evidence note, not an implementation gate. No current status query exposed balances or held lots.
+
+## Source and release evidence
+
+Implementation branch/worktree: `codex/restore-icusd-peg-trades` at base `6c6eaf0ebb590bcc7939a87c24fc08ed8b699e41`. The worktree is dirty with implementation changes. The dashboard worker reports all `scripts/test-dashboard-*.cjs` suites and `git diff --check` passed for its current edits. The implementation lead reports a causal baseline RED: pre-change HEAD admitted 203 routes instead of the required four. An earlier source audit found that direct preparation could accept a cached generic observation while the peg profile was inactive (`src/arb_bot/src/lib.rs`, `src/arb_bot/src/route_runtime.rs`).
+
+Round-one review failures are retained as history: overlapping manual/timer/admin quote batches could exceed effective quote/concurrency limits before duplicate cursor commit (`src/arb_bot/src/lib.rs`, `src/arb_bot/src/route_arb.rs`); and the generic config setter could change profile selection while preserving unsafe enabled/dry-run values. The lead's current source adds an in-flight batch guard to serialize quote batches, restricts new preparation/selection to the active profile, current observation generation, and its exact route allowlist, and reserves profile transitions for the dedicated safe-off setter. Round-two reviewer A reported source PASS with no blockers. Reviewer B found a P2 dashboard recovery defect: a manual-quote cursor survived a successful stop/reactivate profile mutation while the backend cleared the observation, leaving scans/retries stuck until page reload. The dashboard worker applied the bounded cursor-reset fix. Round-three reviewer B requested copy explaining that automatic scans require authorization, enabled execution, and dry-run off. The UI copy now states those three scheduler gates separately from manual observation's profile/cadence gate. Fresh final reviewers A3 and B3 confirmed the source is clean and the copy matches the scheduler behavior; no runtime-code change was needed for the copy finding.
+
+The implementation lead reports the latest full Cargo test run exited 0 in 173.49 seconds: library 39/39, route observation 14/14, route policy 8/8, route scheduler 4/4, state decode 12/12, and storage 7/7; all other suites passed. The existing `print_generated_candid` diagnostic was the only noted diagnostic and was ignored. Candid three-way comparison and old-interface/InitArgs subtype checks passed; Stage-1 disposition passed for 110 methods, including the new endpoint; zero-call and route-target guards plus `git diff --check` passed. All `scripts/test-dashboard-*.cjs` suites exited 0 after the cursor-reset fix, and fresh final reviewers A3/B3 cleared the source and scan-gate copy. The Wasm build is currently running; candidate hash is unavailable. `cargo fmt --check` exited 1 on repo-wide pre-existing formatting drift that includes unmodified `arb.rs`; its diff is quiet, but standalone `rustfmt --check arb.rs` also fails, so no formatter pass is claimed. Wasm build/hash, exact merged commit, and release acceptance remain **pending**.
+
+GitHub read-only inspection confirmed the default branch is `main` on a user-owned repository. The branch-protection endpoint returned 404 `Branch not protected`; repository rulesets and effective `main` rules were both empty. The local `.github/workflows/` directory contains only comment-triggered `opencode.yml`, which runs OpenCode for `/oc` or `/opencode`; there is no automated build/test workflow and no server-enforced required status check or review rule visible. The standing user policy still requires merge only when green. This record must be updated from the implementation lead's final evidence before any release-readiness claim.
+
+The source delivery plan at `docs/superpowers/plans/2026-09-06-arbitrage-operations-ui.md:629-636` defines the release boundary: merge only when required checks/reviews are green; stop after source merge unless the user separately requests a release; for a separately requested release, build from the exact merged tree and record SHA-256; before an authorized upgrade, read current execution, mutation lock, runtime authorization, volume state, and module hash; upgrade only from a clear execution/lock state; then verify the candidate module hash, runtime gates, dashboard bytes, route/volume configuration, and current execution state; publish readable deployment evidence. This source implementation request does not itself authorize upgrade or live activation.
+
+The prior deployed evidence at `docs/execution/2026-09-06-route-runtime-deployment-evidence.md:26` explicitly says its successful startup and disabled-runtime readbacks did not authorize later activation or live trading. Activation therefore remains a separate operator decision after the profile and runtime gates have been read back. A successful source build, merge, or upgrade alone does not prove a successful live trade.
+
+## Unexecuted release procedure
+
+1. Finish the bounded dashboard cursor-reset fix and obtain post-fix causal green plus fresh round-three reviews. Record the merged commit and final check results here. Local Cargo, Candid, Stage-1, guard, and post-fix dashboard checks are recorded above. GitHub API checks found no branch protection, rulesets, effective branch rules, or automated build/test workflow.
+2. Only if the user separately requests a release, build the release Wasm from that exact merged tree and record its SHA-256 and size here.
+3. Before any authorized upgrade, read the state listed in the accepted plan. The current stopped canister cannot answer the runtime/config queries, so this preflight is incomplete. No lifecycle change is included in this record.
+4. Proceed with an upgrade only after the authorized preflight establishes a clear execution and mutation-lock state. After the upgrade, verify the exact candidate module hash, runtime gates, dashboard bytes, route and volume configuration, current execution, and retained settlement/held-position state. Keep the peg profile disabled and dry-run enabled; do not activate live trading as part of the upgrade.
+5. If separately authorized for live operation, apply/read back the exact four-route profile and verify the 600-second cadence, two-entry size ladder and $40 maximum principal, 16 expected/20 maximum pool quotes, concurrency limit of two, fee-aware break-even floors, route scope, no-drain behavior, runtime authorization, and absence or safe preservation of in-flight/held settlement state. Report live trading only after a terminal execution has source-bound settlement evidence.
+
+All release, startup, config, authorization, and trade operations above are **not performed**. This record does not request their authorization.

@@ -66,6 +66,10 @@ const scanSection = section(
   '    function manualQuoteScanStillActive',
   '    function cockpitSourceLabel',
 );
+const progressSection = section(
+  '    function observationProgressHtml(',
+  '    function renderDiagnostics()',
+);
 
 function scanContext(actor, initialView = 'markets') {
   const messages = [];
@@ -73,6 +77,9 @@ function scanContext(actor, initialView = 'markets') {
   const context = vm.createContext({
     window: {},
     state: { activeView: initialView },
+    latestRouteStatus: { icusd_peg_trades_profile_active: true },
+    statusState: 'fresh',
+    routeSourceState: () => context.statusState,
     authenticatedActor: actor,
     latestRouteObservation: null,
     manualQuoteScan: { phase: 'ready', observationId: null, cursor: null, batchCount: 0, error: null, startedAtNs: null },
@@ -97,6 +104,32 @@ function scanContext(actor, initialView = 'markets') {
 }
 
 (async () => {
+  let inactiveStarts = 0;
+  const inactiveActor = { start_route_observation_v1: async () => { inactiveStarts += 1; return { Ok: {} }; } };
+  const inactive = scanContext(inactiveActor);
+  inactive.latestRouteStatus = { icusd_peg_trades_profile_active: false };
+  const inactiveResult = await vm.runInContext('window.runManualQuoteScan()', inactive);
+  assert.equal(inactiveResult, false, 'manual scans must not start while the peg profile is inactive');
+  assert.equal(inactiveStarts, 0, 'inactive profile must not call the generic observation endpoint');
+  assert.equal(vm.runInContext('manualQuoteScan.phase', inactive), 'ready', 'inactive rejection must not create a fake scan state');
+  assert.match(inactive.messages.at(-1).message, /Activate the icUSD peg trades profile/);
+  const progressContext = vm.createContext({
+    isAdmin: true,
+    latestRouteObservation: null,
+    latestRouteStatus: inactive.latestRouteStatus,
+    manualQuoteScan: { phase: 'ready', error: null },
+    routeSources: { observation: {} },
+    routeSourceState: () => 'fresh',
+    sourceLastSuccessLabel: () => 'just now',
+    manualQuoteScanState: () => ({ key: 'ready', label: 'Ready' }),
+    routeOpt: value => Array.isArray(value) && value.length ? value[0] : null,
+    bi: String,
+    esc: String,
+  });
+  vm.runInContext(progressSection, progressContext);
+  const inactiveProgress = vm.runInContext('observationProgressHtml()', progressContext);
+  assert.match(inactiveProgress, /disabled>Activate peg profile to scan/);
+
   let batchCalls = 0;
   const actor = {
     start_route_observation_v1: async () => ({ Ok: {

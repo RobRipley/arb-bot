@@ -982,6 +982,23 @@ pub struct BotState {
     pub route_arb_config_generation: u64,
     #[serde(default)]
     pub route_observation: Option<crate::route_arb::ObservationAccumulatorV1>,
+    /// Config generation that produced the currently stored observation.
+    /// Missing legacy values invalidate old observations after profile choice.
+    #[serde(default)]
+    pub route_observation_config_generation: Option<u64>,
+    /// Durable observation cadence survives a canister upgrade and config
+    /// changes. `None` decodes older state and permits the first profile scan.
+    #[serde(default)]
+    pub route_observation_last_started_ns: Option<u64>,
+    /// At most one batch can own the observation cursor while quote calls
+    /// are suspended. Reset on upgrade because the suspended call is gone.
+    #[serde(default)]
+    pub route_observation_batch_in_flight: bool,
+    /// Worst-case quote calls reserved for the in-flight cursor. Written
+    /// before awaits so an interrupted batch cannot be replayed as if no
+    /// quote budget had been spent.
+    #[serde(default)]
+    pub route_observation_reserved_quote_calls: u64,
     #[serde(default)]
     pub token_ordering_resolved: bool,
     #[serde(default)]
@@ -1088,6 +1105,10 @@ impl Default for BotState {
             route_arb: crate::route_arb::RouteArbConfigV1::default(),
             route_arb_config_generation: 0,
             route_observation: None,
+            route_observation_config_generation: None,
+            route_observation_last_started_ns: None,
+            route_observation_batch_in_flight: false,
+            route_observation_reserved_quote_calls: 0,
             token_ordering_resolved: false,
             icusd_token_ordering_resolved: false,
             ckusdt_token_ordering_resolved: false,
@@ -2205,6 +2226,10 @@ pub fn load_from_stable_memory() {
             route_arb: crate::route_arb::RouteArbConfigV1::default(),
             route_arb_config_generation: 0,
             route_observation: None,
+            route_observation_config_generation: None,
+            route_observation_last_started_ns: None,
+            route_observation_batch_in_flight: false,
+            route_observation_reserved_quote_calls: 0,
             token_ordering_resolved: legacy.token_ordering_resolved,
             icusd_token_ordering_resolved: legacy.icusd_token_ordering_resolved,
             ckusdt_token_ordering_resolved: legacy.ckusdt_token_ordering_resolved,

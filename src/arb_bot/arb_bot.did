@@ -10,24 +10,23 @@ type AssetInventoryBandV1 = record {
   ceiling_native : nat64;
   floor_native : nat64;
 };
+// Per-book configuration for a native same-asset (start==end) returning
+// book — ckBTC-returning and ckETH-returning today. Grouped into one
+// substruct (rather than four-plus loose fields per book) so the whole
+// book toggles as a unit on the candid wire.
 type AssetReturnBookConfigV1 = record {
-  enabled : bool;
-  size_ladder : vec nat64;
-  max_principal_native : nat64;
   min_profit_native : nat64;
   min_profit_bps : nat32;
+  max_principal_native : nat64;
+  enabled : bool;
+  size_ladder : vec nat64;
 };
 type BestRouteCandidatesV1 = record {
   icp : opt RouteCandidateReportV1;
   stable : opt RouteCandidateReportV1;
+  observation_id : opt text;
   ckbtc : opt RouteCandidateReportV1;
   cketh : opt RouteCandidateReportV1;
-  observation_id : opt text;
-  scan_complete : bool;
-};
-type TopRouteCandidatesV1 = record {
-  candidates : vec RouteCandidateReportV1;
-  observation_id : opt text;
   scan_complete : bool;
 };
 // Which of the two Strategy S pools a stranded BOB balance entered through.
@@ -273,11 +272,11 @@ type BotHealthReport = record {
   arb_cycle_in_progress : bool;
 };
 type CandidateClass = variant {
+  CkEthReturning;
   IcpReturning;
+  CkBtcReturning;
   StablePar;
   StableSettledCrossAsset;
-  CkBtcReturning;
-  CkEthReturning;
 };
 type CandidateReport = record {
   fill_ok : bool;
@@ -394,13 +393,14 @@ type ExecutionRecordV1 = record {
   current_leg_index : nat8;
   route_id : text;
   updated_at_ns : nat64;
+  // Exact parent input asset for new executions. Historical records may not
+  // have preserved this field and therefore decode as unavailable.
+  start_asset : opt Asset;
   adapter_request_fingerprint : opt text;
   required_min_output_native : nat64;
   // Stable-par USD6 for stable books; ICP e8s for IcpReturning.
   // None for held inventory and historical records without attributable P&L.
   realized_profit : opt int;
-  // Exact parent input asset for new executions; unavailable for historical records without it.
-  start_asset : opt Asset;
   candidate_class : CandidateClass;
   evidence : vec ReconciliationEvidenceV1;
   incident : opt text;
@@ -412,6 +412,7 @@ type ExecutionRecordV1 = record {
   execution_id : text;
 };
 type HeldBasisV1 = variant {
+  CkEthNative : record { principal_cketh_wei : nat64 };
   LegacyUnknown : record { preserved_pending_fields : text };
   StablePar : record {
     principal_native : nat64;
@@ -420,7 +421,6 @@ type HeldBasisV1 = variant {
   };
   IcpNative : record { principal_icp_e8s : nat64 };
   CkBtcNative : record { principal_ckbtc_sats : nat64 };
-  CkEthNative : record { principal_cketh_wei : nat64 };
 };
 type HeldLotV1 = record {
   asset : Asset;
@@ -464,23 +464,31 @@ type LegType = variant {
   // Drain — candid-append-safe, old logs decode unchanged.
   TopUp;
 };
-// All-time totals folded from every terminal route execution. Route-arb
-// counterpart to the legacy, now-frozen TradeSummary; the two never share
-// records. folded_through is an internal watermark (TERMINAL_ROUTE_EXECUTIONS
-// entries already counted), exposed for diagnostics/testing, not for display.
+// Durable, all-time totals folded from every terminal route execution —
+// the route-arbitrage equivalent of the legacy `get_summary()` ledger, kept
+// separate because the two accounting systems never share records (see
+// `state::fold_lifetime_route_summary`). `folded_through` is the number of
+// `TERMINAL_ROUTE_EXECUTIONS` log entries already counted here; it is the
+// sole idempotency guard, so folding can be triggered from any call site
+// (lazily on read, eagerly after each new completion, or on upgrade) in any
+// order without ever double-counting a record.
 type LifetimeRouteSummaryV1 = record {
-  completed_count : nat64;
-  aborted_count : nat64;
-  held_inventory_count : nat64;
-  // USD, 6-decimal — sum over StablePar/StableSettledCrossAsset executions.
-  stable_realized_profit_usd6 : int;
-  // ICP, 8-decimal e8s — sum over IcpReturning executions.
+  // Sum of `realized_profit` (ICP, 8-decimal e8s) across terminal
+  // executions whose `candidate_class` is `IcpReturning`.
   icp_realized_profit_e8s : int;
-  // ckBTC, 8-decimal satoshis — sum over CkBtcReturning executions.
-  ckbtc_realized_profit_sats : int;
-  // ckETH, 18-decimal native units — sum over CkEthReturning executions.
+  completed_count : nat64;
+  // Sum of `realized_profit` (USD, 6-decimal) across terminal executions
+  // whose `candidate_class` is `StablePar` or `StableSettledCrossAsset`.
+  stable_realized_profit_usd6 : int;
+  held_inventory_count : nat64;
+  // Sum of `realized_profit` (ckETH, 18-decimal native units) across
+  // terminal executions whose `candidate_class` is `CkEthReturning`.
   cketh_realized_profit_wei : int;
   folded_through : nat64;
+  aborted_count : nat64;
+  // Sum of `realized_profit` (ckBTC, 8-decimal satoshis) across terminal
+  // executions whose `candidate_class` is `CkBtcReturning`.
+  ckbtc_realized_profit_sats : int;
 };
 type MutationLockV1 = record {
   owner : MutationOwnerV1;
@@ -498,25 +506,29 @@ type MutationOwnerV1 = variant {
 type ObservationAccumulatorV1 = record {
   quote_call_budget_sufficient : bool;
   observation_id : text;
+  provisional_best_cketh_candidate : opt RouteCandidateReportV1;
   started_at_ns : nat64;
   candidates_evaluated : nat64;
+  best_ckbtc_candidate : opt RouteCandidateReportV1;
   completed_at_ns : opt nat64;
   total_work_items : nat64;
   best_icp_candidate : opt RouteCandidateReportV1;
+  best_cketh_candidate : opt RouteCandidateReportV1;
   provisional_best_stable_candidate : opt RouteCandidateReportV1;
   incident : opt text;
   next_cursor : nat64;
   quote_calls_made : nat64;
+  provisional_best_ckbtc_candidate : opt RouteCandidateReportV1;
   route_count : nat32;
   full_fill_rejections : nat64;
   best_stable_candidate : opt RouteCandidateReportV1;
   required_quote_calls : nat64;
   provisional_best_icp_candidate : opt RouteCandidateReportV1;
-  best_ckbtc_candidate : opt RouteCandidateReportV1;
-  best_cketh_candidate : opt RouteCandidateReportV1;
-  provisional_best_ckbtc_candidate : opt RouteCandidateReportV1;
-  provisional_best_cketh_candidate : opt RouteCandidateReportV1;
+  // The five strongest full-fill quotes observed so far, ranked by net
+  // spread rather than execution eligibility. This intentionally keeps
+  // below-threshold candidates visible to an operator.
   provisional_top_candidates : vec RouteCandidateReportV1;
+  // The completed observation's published top-five quote-only candidates.
   top_candidates : vec RouteCandidateReportV1;
   scan_complete : bool;
 };
@@ -631,7 +643,98 @@ type ReconciliationEvidenceV1 = record {
   observed_at_ns : nat64;
   amount_native : nat64;
 };
-type VenueKind = variant { IcpSwap; Rumi3Pool };
+type ReservationKindV1 = variant {
+  ActiveRoute;
+  LegacyFreeze;
+  HeldPosition;
+  NonRoute;
+};
+type Result = variant { Ok : ExecutionRecordV1; Err : text };
+type Result_1 = variant { Ok; Err : text };
+type Result_10 = variant { Ok : RouteArbConfigV1; Err : text };
+type Result_11 = variant { Ok : ObservationStartV1; Err : text };
+type Result_2 = variant { Ok : vec HeldPositionV1; Err : text };
+type Result_3 = variant { Ok : RouteExecutionDetailV1; Err : text };
+type Result_4 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
+type Result_5 = variant { Ok : vec OwnershipReservationV1; Err : text };
+type Result_6 = variant { Ok : RuntimeStatus; Err : text };
+type Result_7 = variant { Ok : vec ExecutionRecordV1; Err : text };
+type Result_8 = variant { Ok : ObservationBatchResultV1; Err : text };
+type Result_9 = variant { Ok : record { nat64; nat64 }; Err : text };
+type RouteArbConfigV1 = record {
+  max_icp_principal_e8s : nat64;
+  // Explicitly selected fixed icUSD/ICP/ckUSDC/ckUSDT restoration profile.
+  // `None` is the pre-profile shape and resolves to inactive.
+  icusd_peg_trades_profile : opt bool;
+  asset_controls : vec AssetControlV1;
+  quote_max_age_ns : nat64;
+  max_stable_principal_usd_6dec : nat64;
+  min_icp_profit_bps : nat32;
+  min_icp_profit_e8s : nat64;
+  stable_book_enabled : bool;
+  max_open_held_positions : nat16;
+  max_route_legs : nat8;
+  // Allow ckUSDC/ckUSDT-funded stable routes to settle in icUSD.
+  // `None` preserves the protected default for pre-field configurations.
+  allow_wrapped_stable_to_icusd : opt bool;
+  settlement_timeout_ns : nat64;
+  max_open_non_route_reservations : nat16;
+  // ckETH-returning book configuration. Same omission semantics as
+  // `ckbtc_book`.
+  cketh_book : opt AssetReturnBookConfigV1;
+  enabled : bool;
+  max_execution_record_bytes : nat32;
+  max_concurrent_quote_calls : nat8;
+  pool_controls : vec PoolControlV1;
+  max_reconciliation_evidence_items : nat8;
+  inventory_bands : vec AssetInventoryBandV1;
+  max_terminal_execution_records : nat32;
+  max_quote_calls_per_observation : nat16;
+  reconciliation_queries_per_cycle : nat8;
+  icp_book_enabled : bool;
+  stable_size_ladder : vec nat64;
+  dry_run : bool;
+  // ckBTC-returning book configuration. `None` preserves the protected
+  // default (book disabled, inert) for pre-field configurations and for
+  // a caller built against the pre-ckBTC/ckETH interface — see
+  // `set_route_arb_config_v1`, which resolves an omitted field to the
+  // currently stored value rather than clobbering it.
+  ckbtc_book : opt AssetReturnBookConfigV1;
+  min_stable_profit_bps : nat32;
+  icp_size_ladder : vec nat64;
+  min_stable_profit_usd_6dec : nat64;
+};
+type RouteArbStatusV1 = record {
+  config_incident : opt text;
+  config_valid : bool;
+  execution_compiled_in : bool;
+  observation_interval_secs : nat64;
+  live_execution_authorized : bool;
+  route_count : nat32;
+  icusd_peg_trades_profile_active : bool;
+  next_observation_eligible_at_ns : opt nat64;
+};
+type RouteCandidateReportV1 = record {
+  asset_path : vec Asset;
+  size_ladder_index : nat8;
+  end_asset : Asset;
+  net_profit_bps : int64;
+  legs : vec QuoteLegReportV1;
+  allowance_status : text;
+  route_id : text;
+  principal_native : nat;
+  par_assumption : bool;
+  start_asset : Asset;
+  candidate_class : CandidateClass;
+  canonical_cycle_id : opt text;
+  quote_timestamp_ns : nat64;
+  eligible : bool;
+  rejection_reason : opt text;
+  inventory_effect : text;
+  venue_edges : vec text;
+  full_fill : bool;
+  net_profit_native : int64;
+};
 type RouteExecutionDetailV1 = record {
   asset_path : vec Asset;
   legs : vec RouteExecutionLegV1;
@@ -669,100 +772,26 @@ type RouteExecutionLegV1 = record {
   pool_principal : principal;
   settled_at_ns : opt nat64;
   quoted_input_native : nat64;
-  // Exact venue request amount; unavailable for pre-detail historical records.
-  requested_input_native : opt nat64;
   pool_id : text;
   reconciled_at_ns : opt nat64;
+  // Exact venue request amount, excluding the input ledger fee. This is
+  // distinct from the quote's input amount and is unavailable for legacy
+  // records that predate durable per-leg requests.
+  requested_input_native : opt nat64;
   actual_effective_input_native : opt nat64;
   edge_id : text;
   output_fee_native : nat64;
-};
-type ReservationKindV1 = variant {
-  ActiveRoute;
-  LegacyFreeze;
-  HeldPosition;
-  NonRoute;
-};
-type Result = variant { Ok : ExecutionRecordV1; Err : text };
-type Result_1 = variant { Ok; Err : text };
-type Result_2 = variant { Ok : RouteExecutionDetailV1; Err : text };
-type Result_3 = variant { Ok : vec HeldPositionV1; Err : text };
-type Result_4 = variant { Ok : vec ObservationAccumulatorV1; Err : text };
-type Result_5 = variant { Ok : vec OwnershipReservationV1; Err : text };
-type Result_6 = variant { Ok : RuntimeStatus; Err : text };
-type Result_11 = variant { Ok : RouteArbConfigV1; Err : text };
-type Result_7 = variant { Ok : vec ExecutionRecordV1; Err : text };
-type Result_8 = variant { Ok : ObservationBatchResultV1; Err : text };
-type Result_9 = variant { Ok : record { nat64; nat64 }; Err : text };
-type Result_10 = variant { Ok : ObservationStartV1; Err : text };
-type RouteArbConfigV1 = record {
-  max_icp_principal_e8s : nat64;
-  allow_wrapped_stable_to_icusd : opt bool;
-  ckbtc_book : opt AssetReturnBookConfigV1;
-  cketh_book : opt AssetReturnBookConfigV1;
-  asset_controls : vec AssetControlV1;
-  quote_max_age_ns : nat64;
-  max_stable_principal_usd_6dec : nat64;
-  min_icp_profit_bps : nat32;
-  min_icp_profit_e8s : nat64;
-  stable_book_enabled : bool;
-  max_open_held_positions : nat16;
-  max_route_legs : nat8;
-  settlement_timeout_ns : nat64;
-  max_open_non_route_reservations : nat16;
-  enabled : bool;
-  max_execution_record_bytes : nat32;
-  max_concurrent_quote_calls : nat8;
-  pool_controls : vec PoolControlV1;
-  max_reconciliation_evidence_items : nat8;
-  inventory_bands : vec AssetInventoryBandV1;
-  max_terminal_execution_records : nat32;
-  max_quote_calls_per_observation : nat16;
-  reconciliation_queries_per_cycle : nat8;
-  icp_book_enabled : bool;
-  stable_size_ladder : vec nat64;
-  dry_run : bool;
-  min_stable_profit_bps : nat32;
-  icp_size_ladder : vec nat64;
-  min_stable_profit_usd_6dec : nat64;
-};
-type RouteArbStatusV1 = record {
-  config_incident : opt text;
-  config_valid : bool;
-  execution_compiled_in : bool;
-  live_execution_authorized : bool;
-  route_count : nat32;
-};
-type RouteCandidateReportV1 = record {
-  asset_path : vec Asset;
-  size_ladder_index : nat8;
-  end_asset : Asset;
-  net_profit_bps : int64;
-  legs : vec QuoteLegReportV1;
-  allowance_status : text;
-  route_id : text;
-  principal_native : nat;
-  par_assumption : bool;
-  start_asset : Asset;
-  candidate_class : CandidateClass;
-  canonical_cycle_id : opt text;
-  quote_timestamp_ns : nat64;
-  eligible : bool;
-  rejection_reason : opt text;
-  inventory_effect : text;
-  venue_edges : vec text;
-  full_fill : bool;
-  net_profit_native : int64;
 };
 type RuntimeStatus = record {
   last_error : opt text;
   compiled_support : bool;
   // Stable-par USD6 or ICP e8s, based on attributable completed movements.
   last_realized_profit : opt int;
+  // Start time of the currently executing scheduler callback, when any.
+  scheduler_in_flight_since_ns : opt nat64;
   enabled : bool;
   dry_run : bool;
   last_tick_ns : nat64;
-  scheduler_in_flight_since_ns : opt nat64;
   last_profit_class : opt CandidateClass;
   live_authorized : bool;
 };
@@ -794,6 +823,14 @@ type StrategyTPool = variant {
 // (verified live 2026-09-02/03): IcUsd=0, CkUsdt=1, CkUsdc=2.
 type StrategyTToken = variant { IcUsd; CkUsdc; CkUsdt };
 type Token = variant { CkUSDC; ThreeUSD };
+// Read-only view of the strongest fully quoted route identities. Unlike the
+// per-book execution candidates, this preserves routes that were rejected by
+// the configured profit, allowance, or inventory gate.
+type TopRouteCandidatesV1 = record {
+  observation_id : opt text;
+  candidates : vec RouteCandidateReportV1;
+  scan_complete : bool;
+};
 type TradeLeg = record {
   dex : text;
   fees_usd : int64;
@@ -833,6 +870,7 @@ type TradeSummary = record {
   leg2_count : nat64;
   icpswap_count : nat64;
 };
+type VenueKind = variant { IcpSwap; Rumi3Pool };
 type VolumeDirection = variant {
   // icUSD/BOB pool: spend icUSD to buy BOB.
   BuyBob;
@@ -956,27 +994,37 @@ service : (InitArgs) -> {
   get_config : () -> (BotConfig) query;
   get_current_route_execution_v1 : () -> (opt ExecutionRecordV1) query;
   get_errors : (nat64, nat64) -> (vec ErrorRecord) query;
-  get_held_positions_v1 : (nat64, nat64) -> (Result_3) query;
-  // All-time route-execution totals, durable across upgrades. Counterpart
-  // to the legacy, now-frozen get_summary(); the two never share records.
+  get_held_positions_v1 : (nat64, nat64) -> (Result_2) query;
+  // All-time route-execution totals (completed/aborted/held counts, stable
+  // USD6 realized profit, ICP e8s realized profit), durable across upgrades
+  // and unbounded by the terminal log's pagination. This is the route-arb
+  // counterpart to the legacy, now-frozen `get_summary()`; the two are
+  // intentionally separate and never share records.
   get_lifetime_route_summary_v1 : () -> (LifetimeRouteSummaryV1) query;
   get_prices : () -> (PriceInfo);
   // Anonymous-safe stuck-state flags for the logged-out dashboard wedge
   // banner. Booleans only — details require the admin-gated `get_bot_health`.
   get_public_health : () -> (PublicHealth) query;
+  // Reads the stored route-arb config, normalizing `ckbtc_book`/`cketh_book`
+  // to `Some(disabled default)` for display when a pre-ckBTC/ckETH stable
+  // state blob has not yet been touched by `set_route_arb_config_v1` (which
+  // would otherwise normalize them on write). This is read-only — the
+  // returned value is a detached clone, never written back to state — so an
+  // admin can flip either book on immediately after the upgrade without a
+  // separate initialization call first.
   get_route_arb_config_v1 : () -> (RouteArbConfigV1) query;
   get_route_arb_status_v1 : () -> (RouteArbStatusV1) query;
-  get_route_execution_detail_v1 : (text) -> (Result_2) query;
+  get_route_execution_detail_v1 : (text) -> (Result_3) query;
   get_route_mutation_lock_v1 : () -> (opt MutationLockV1) query;
   get_route_observation_v1 : () -> (opt ObservationAccumulatorV1) query;
   get_route_observations_v1 : (nat64, nat64) -> (Result_4) query;
   get_route_reservations_v1 : (nat64, nat64) -> (Result_5) query;
   get_route_runtime_status_v1 : () -> (Result_6) query;
-  get_top_route_candidates_v1 : () -> (TopRouteCandidatesV1) query;
   get_route_wallet_balances_v1 : () -> (vec WalletAssetBalanceV1);
   get_snapshots : (nat64, nat64) -> (vec CycleSnapshot) query;
   get_summary : () -> (TradeSummary) query;
   get_terminal_route_executions_v1 : (nat64, nat64) -> (Result_7) query;
+  get_top_route_candidates_v1 : () -> (TopRouteCandidatesV1) query;
   get_trade_history : (nat64, nat64) -> (vec TradeRecord) query;
   get_trade_legs : (nat64, nat64) -> (vec TradeLeg) query;
   get_volume_stats : () -> (VolumeStats) query;
@@ -1051,8 +1099,8 @@ service : (InitArgs) -> {
   // steady-state skim threshold. Single method so the pair can't pass through
   // an invalid intermediate state (e.g. floor temporarily above ceiling).
   set_icp_inventory_band : (nat64, nat64) -> (Result_1);
+  set_icusd_peg_trades_profile_v1 : (bool) -> (Result_10);
   set_route_arb_config_v1 : (RouteArbConfigV1) -> (Result_1);
-  set_wrapped_stable_to_icusd_allowed_v1 : (bool) -> (Result_11);
   set_route_runtime_authorized_v1 : (bool) -> (Result_6);
   // Kill switch for the Rumi AMM (3USD/ICP) venue — pauses Strategies A/C/D/Q/R
   // (every strategy that trades against `rumi_amm`) without touching the
@@ -1087,8 +1135,9 @@ service : (InitArgs) -> {
   set_strategy_t_thresholds : (int64, nat32, nat64) -> (Result_1);
   set_volume_config : (VolumePool, VolumePoolConfig) -> (Result_1);
   set_volume_global : (nat64, nat64) -> ();
+  set_wrapped_stable_to_icusd_allowed_v1 : (bool) -> (Result_10);
   setup_approvals : () -> (text);
-  start_route_observation_v1 : () -> (Result_10);
+  start_route_observation_v1 : () -> (Result_11);
   trigger_volume_cycle : () -> (text);
   trigger_volume_rebalance : () -> ();
   // Swap ICP ↔ icUSD using the volume subaccount.
