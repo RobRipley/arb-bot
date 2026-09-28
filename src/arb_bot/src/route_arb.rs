@@ -23,6 +23,17 @@ pub enum Asset {
     CkEth,
 }
 
+pub const DEFAULT_ICUSD_PRICE_USD6: u64 = 1_000_000;
+const ICUSD_NATIVE_SCALE: u128 = 100_000_000;
+
+fn default_icusd_price_usd6() -> Option<u64> {
+    Some(DEFAULT_ICUSD_PRICE_USD6)
+}
+
+fn default_captured_icusd_price_usd6() -> u64 {
+    DEFAULT_ICUSD_PRICE_USD6
+}
+
 impl Asset {
     pub const ALL: [Asset; 6] = [
         Asset::IcUsd,
@@ -482,6 +493,85 @@ pub fn par_usd_6dec_checked(amount_native: u128, decimals: u8) -> Result<i128, S
     i128::try_from(amount).map_err(|_| "stable-par result exceeds signed P&L range".to_string())
 }
 
+/// Conservatively value a stable balance in USD6. icUSD uses its configured
+/// accounting price; wrapped dollar ledgers remain valued at $1.00.
+pub fn stable_usd6_floor_checked(
+    amount_native: u128,
+    asset: Asset,
+    icusd_price_usd6: u64,
+) -> Result<u128, String> {
+    if !asset.is_stable() || icusd_price_usd6 == 0 {
+        return Err("stable valuation requires a stable asset and positive icUSD price".into());
+    }
+    let price = if asset == Asset::IcUsd {
+        u128::from(icusd_price_usd6)
+    } else {
+        u128::from(DEFAULT_ICUSD_PRICE_USD6)
+    };
+    let numerator = amount_native.checked_mul(price).ok_or("stable valuation overflow")?;
+    let denominator = 10u128.checked_pow(u32::from(asset.decimals())).ok_or("unsupported stable precision")?;
+    Ok(numerator / denominator)
+}
+
+/// Round the principal valuation up so a fractional USD6 debit cannot be
+/// erased when comparing it with a fee-net terminal balance.
+pub fn stable_usd6_ceil_checked(
+    amount_native: u128,
+    asset: Asset,
+    icusd_price_usd6: u64,
+) -> Result<u128, String> {
+    if !asset.is_stable() || icusd_price_usd6 == 0 {
+        return Err("stable valuation requires a stable asset and positive icUSD price".into());
+    }
+    let price = if asset == Asset::IcUsd {
+        u128::from(icusd_price_usd6)
+    } else {
+        u128::from(DEFAULT_ICUSD_PRICE_USD6)
+    };
+    let numerator = amount_native.checked_mul(price).ok_or("stable valuation overflow")?;
+    let denominator = 10u128.checked_pow(u32::from(asset.decimals())).ok_or("unsupported stable precision")?;
+    let quotient = numerator / denominator;
+    quotient.checked_add(u128::from(numerator % denominator != 0)).ok_or_else(|| "stable valuation overflow".into())
+}
+
+pub fn stable_native_for_usd6_floor_checked(
+    usd6: u64,
+    asset: Asset,
+    icusd_price_usd6: u64,
+) -> Result<u64, String> {
+    if !asset.is_stable() || icusd_price_usd6 == 0 {
+        return Err("stable sizing requires a stable asset and positive icUSD price".into());
+    }
+    let price = if asset == Asset::IcUsd {
+        u128::from(icusd_price_usd6)
+    } else {
+        u128::from(DEFAULT_ICUSD_PRICE_USD6)
+    };
+    let scale = 10u128.checked_pow(u32::from(asset.decimals())).ok_or("unsupported stable precision")?;
+    let native = u128::from(usd6).checked_mul(scale).ok_or("stable principal conversion overflow")? / price;
+    u64::try_from(native).map_err(|_| "stable principal conversion overflow".into())
+}
+
+pub fn stable_native_for_usd6_ceil_checked(
+    usd6: u128,
+    asset: Asset,
+    icusd_price_usd6: u64,
+) -> Result<u64, String> {
+    if !asset.is_stable() || icusd_price_usd6 == 0 {
+        return Err("stable sizing requires a stable asset and positive icUSD price".into());
+    }
+    let price = if asset == Asset::IcUsd {
+        u128::from(icusd_price_usd6)
+    } else {
+        u128::from(DEFAULT_ICUSD_PRICE_USD6)
+    };
+    let scale = 10u128.checked_pow(u32::from(asset.decimals())).ok_or("unsupported stable precision")?;
+    let numerator = usd6.checked_mul(scale).ok_or("stable principal conversion overflow")?;
+    let quotient = numerator / price;
+    let native = quotient.checked_add(u128::from(numerator % price != 0)).ok_or("stable principal conversion overflow")?;
+    u64::try_from(native).map_err(|_| "stable principal conversion overflow".into())
+}
+
 pub fn net_profit_bps_checked(net_profit: i128, principal: u128) -> Result<i64, String> {
     if principal == 0 {
         return Err("principal must be greater than zero".to_string());
@@ -489,6 +579,10 @@ pub fn net_profit_bps_checked(net_profit: i128, principal: u128) -> Result<i64, 
     let principal = i128::try_from(principal).map_err(|_| "principal exceeds signed P&L range")?;
     let numerator = net_profit.checked_mul(10_000).ok_or("profit-bps multiplication overflow")?;
     i64::try_from(numerator / principal).map_err(|_| "profit-bps result exceeds report range".to_string())
+}
+
+pub fn net_profit_bps_ratio_checked(net_profit: i128, principal: u128) -> Result<i64, String> {
+    net_profit_bps_checked(net_profit, principal)
 }
 
 #[derive(CandidType, Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -599,12 +693,14 @@ fn rejected_after_quote(
     }
 }
 
-fn quote_profit(quote: &RouteQuote) -> Result<(ProfitDomain, i128, i64), String> {
+fn quote_profit(quote: &RouteQuote, icusd_price_usd6: u64) -> Result<(ProfitDomain, i128, i64), String> {
     let final_amount = quote.legs.last().ok_or("route has no quoted legs")?.wallet_after;
     let (domain, profit, principal) = if quote.start_asset.is_stable() && quote.end_asset.is_stable() {
-        let start = par_usd_6dec_checked(quote.principal_native, quote.start_asset.decimals())?;
-        let end = par_usd_6dec_checked(final_amount, quote.end_asset.decimals())?;
-        (ProfitDomain::StableParUsd6Dec, end.checked_sub(start).ok_or("stable profit overflow")?, u128::try_from(start).map_err(|_| "invalid stable principal")?)
+        let start = stable_usd6_ceil_checked(quote.principal_native, quote.start_asset, icusd_price_usd6)?;
+        let end = stable_usd6_floor_checked(final_amount, quote.end_asset, icusd_price_usd6)?;
+        let start_i128 = i128::try_from(start).map_err(|_| "invalid stable principal")?;
+        let end_i128 = i128::try_from(end).map_err(|_| "stable value exceeds signed P&L range")?;
+        (ProfitDomain::StableParUsd6Dec, end_i128.checked_sub(start_i128).ok_or("stable profit overflow")?, start)
     } else if quote.start_asset == Asset::Icp && quote.end_asset == Asset::Icp {
         let final_amount = i128::try_from(final_amount).map_err(|_| "ICP output exceeds signed P&L range")?;
         let principal = i128::try_from(quote.principal_native).map_err(|_| "ICP principal exceeds signed P&L range")?;
@@ -638,6 +734,32 @@ pub fn evaluate_candidate(
     min_cketh_profit_wei: i128,
     min_cketh_profit_bps: i64,
 ) -> CandidateEvaluation {
+    evaluate_candidate_with_icusd_price(
+        quote, balances, reservations, bands,
+        min_stable_profit_usd_6dec, min_stable_profit_bps,
+        min_icp_profit_e8s, min_icp_profit_bps,
+        min_ckbtc_profit_sats, min_ckbtc_profit_bps,
+        min_cketh_profit_wei, min_cketh_profit_bps,
+        DEFAULT_ICUSD_PRICE_USD6,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_candidate_with_icusd_price(
+    quote: &RouteQuote,
+    balances: &AssetAmounts,
+    reservations: &ReservationTotals,
+    bands: &InventoryBands,
+    min_stable_profit_usd_6dec: i128,
+    min_stable_profit_bps: i64,
+    min_icp_profit_e8s: i128,
+    min_icp_profit_bps: i64,
+    min_ckbtc_profit_sats: i128,
+    min_ckbtc_profit_bps: i64,
+    min_cketh_profit_wei: i128,
+    min_cketh_profit_bps: i64,
+    icusd_price_usd6: u64,
+) -> CandidateEvaluation {
     let fallback_domain = fallback_profit_domain(quote.start_asset);
     if quote.principal_native == 0 {
         return rejected(quote, fallback_domain, "principal must be greater than zero");
@@ -662,7 +784,7 @@ pub fn evaluate_candidate(
     if expected_from != quote.end_asset {
         return rejected(quote, fallback_domain, "quoted terminal asset does not match route");
     }
-    let (domain, profit, bps) = match quote_profit(quote) {
+    let (domain, profit, bps) = match quote_profit(quote, icusd_price_usd6) {
         Ok(value) => value,
         Err(reason) => return rejected(quote, fallback_domain, reason),
     };
@@ -846,6 +968,10 @@ pub struct RouteArbConfigV1 {
     /// `None` is the pre-profile shape and resolves to inactive.
     #[serde(default)]
     pub icusd_peg_trades_profile: Option<bool>,
+    /// Accounting valuation for icUSD in USD6. Missing legacy state and
+    /// clients resolve to $1.00; wrapped stable ledgers remain at par.
+    #[serde(default)]
+    pub icusd_price_usd6: Option<u64>,
     pub asset_controls: Vec<AssetControlV1>,
     pub pool_controls: Vec<PoolControlV1>,
     pub stable_size_ladder: Vec<u64>,
@@ -883,6 +1009,7 @@ impl Default for RouteArbConfigV1 {
             cketh_book: Some(AssetReturnBookConfigV1::default_cketh()),
             allow_wrapped_stable_to_icusd: None,
             icusd_peg_trades_profile: None,
+            icusd_price_usd6: default_icusd_price_usd6(),
             asset_controls: Asset::ALL.into_iter().map(|asset| AssetControlV1 { asset, enabled: true }).collect(),
             pool_controls: pool_pins().into_iter().map(|pool| PoolControlV1 { pool_id: pool.pool_id.to_string(), enabled: true }).collect(),
             stable_size_ladder: vec![1_000_000, 5_000_000, 10_000_000, 40_000_000],
@@ -930,6 +1057,10 @@ impl RouteArbConfigV1 {
 
     pub fn icusd_peg_trades_profile_active(&self) -> bool {
         self.icusd_peg_trades_profile.unwrap_or(false)
+    }
+
+    pub fn icusd_price_usd6_resolved(&self) -> u64 {
+        self.icusd_price_usd6.unwrap_or(DEFAULT_ICUSD_PRICE_USD6)
     }
 }
 
@@ -991,6 +1122,57 @@ pub fn resolve_incoming_profile_field(
     incoming
 }
 
+pub fn resolve_incoming_icusd_price_field(
+    mut incoming: RouteArbConfigV1,
+    current: &RouteArbConfigV1,
+) -> RouteArbConfigV1 {
+    incoming.icusd_price_usd6 = Some(
+        incoming
+            .icusd_price_usd6
+            .unwrap_or_else(|| current.icusd_price_usd6_resolved()),
+    );
+    incoming
+}
+
+pub fn validate_icusd_price_usd6(price_usd6: u64, config: &RouteArbConfigV1) -> Result<(), String> {
+    let smallest_size = config
+        .stable_size_ladder
+        .iter()
+        .copied()
+        .min()
+        .ok_or("stable size ladder cannot be empty")?;
+    let max_price = u128::from(smallest_size)
+        .checked_mul(ICUSD_NATIVE_SCALE)
+        .ok_or("icUSD price bound overflow")?;
+    if price_usd6 == 0 || u128::from(price_usd6) > max_price {
+        return Err("icUSD price must be positive and must produce a nonzero native amount for the smallest stable size".into());
+    }
+    let smallest_native = stable_native_for_usd6_floor_checked(smallest_size, Asset::IcUsd, price_usd6)?;
+    let largest_native = config
+        .stable_size_ladder
+        .iter()
+        .copied()
+        .max()
+        .ok_or("stable size ladder cannot be empty")?;
+    if smallest_native == 0
+        || stable_native_for_usd6_floor_checked(largest_native, Asset::IcUsd, price_usd6)? == 0
+    {
+        return Err("icUSD price must produce nonzero native amounts for every stable size".into());
+    }
+    Ok(())
+}
+
+pub fn validate_icusd_price_change(
+    current_price_usd6: u64,
+    next_price_usd6: u64,
+    route_execution_active: bool,
+) -> Result<(), String> {
+    if route_execution_active && current_price_usd6 != next_price_usd6 {
+        return Err("cannot change icUSD accounting price while a route execution is active".into());
+    }
+    Ok(())
+}
+
 /// Generic full-record edits may tune an already selected profile, but only
 /// the dedicated profile action may cross the inactive/active boundary.
 pub fn validate_profile_transition(
@@ -1009,6 +1191,7 @@ fn exact_asset_set<T>(items: &[T], asset_of: impl Fn(&T) -> Asset) -> bool {
 }
 
 pub fn validate_route_config(config: &RouteArbConfigV1) -> Result<(), String> {
+    validate_icusd_price_usd6(config.icusd_price_usd6_resolved(), config)?;
     if !(1..=HARD_MAX_ROUTE_LEGS).contains(&config.max_route_legs) {
         return Err("max_route_legs must be between 1 and 4".to_string());
     }
@@ -1248,17 +1431,6 @@ pub struct WorkUniverse {
     pub items: Vec<RouteWorkItem>,
 }
 
-fn native_stable_principal(usd_6dec: u64, asset: Asset) -> Result<u64, String> {
-    let decimals = asset.decimals();
-    if decimals >= 6 {
-        let factor = 10u64.checked_pow(u32::from(decimals - 6)).ok_or("unsupported decimal exponent")?;
-        usd_6dec.checked_mul(factor).ok_or_else(|| "stable principal conversion overflow".to_string())
-    } else {
-        let divisor = 10u64.checked_pow(u32::from(6 - decimals)).ok_or("unsupported decimal exponent")?;
-        Ok(usd_6dec / divisor)
-    }
-}
-
 pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, String> {
     validate_route_config(config)?;
     let enabled_assets: std::collections::BTreeSet<_> = config.asset_controls.iter().filter(|item| item.enabled).map(|item| item.asset).collect();
@@ -1297,7 +1469,11 @@ pub fn build_work_universe(config: &RouteArbConfigV1) -> Result<WorkUniverse, St
                     *configured_size
                 }
                 CandidateClass::StablePar | CandidateClass::StableSettledCrossAsset => {
-                    native_stable_principal(*configured_size, route.start_asset())?
+                    stable_native_for_usd6_floor_checked(
+                        *configured_size,
+                        route.start_asset(),
+                        config.icusd_price_usd6_resolved(),
+                    )?
                 }
             };
             items.push(RouteWorkItem {
@@ -1467,6 +1643,10 @@ pub struct RouteCandidateReportV1 {
     pub allowance_status: String,
     pub inventory_effect: String,
     pub quote_timestamp_ns: u64,
+    /// Accounting price captured with this quote/execution. Older records
+    /// decode as the historical $1.00 value.
+    #[serde(default = "default_captured_icusd_price_usd6")]
+    pub accounting_icusd_price_usd6: u64,
     pub legs: Vec<QuoteLegReportV1>,
     pub eligible: bool,
     pub rejection_reason: Option<String>,
@@ -1488,6 +1668,7 @@ impl RouteCandidateReportV1 {
             net_profit_bps: profit, size_ladder_index: 0, par_assumption: false,
             full_fill: true, allowance_status: "sufficient".to_string(),
             inventory_effect: "within bands".to_string(), quote_timestamp_ns: 0,
+            accounting_icusd_price_usd6: DEFAULT_ICUSD_PRICE_USD6,
             legs: Vec::new(), eligible, rejection_reason: None,
         }
     }
@@ -2205,7 +2386,7 @@ fn inventory_bands_from_config(config: &RouteArbConfigV1) -> InventoryBands {
     bands
 }
 
-fn rejection_report(item: &RouteWorkItem, timestamp: u64, reason: String) -> RouteCandidateReportV1 {
+fn rejection_report(item: &RouteWorkItem, timestamp: u64, reason: String, icusd_price_usd6: u64) -> RouteCandidateReportV1 {
     RouteCandidateReportV1 {
         route_id: item.route.route_id.clone(),
         canonical_cycle_id: item.route.canonical_cycle_id.clone(),
@@ -2218,6 +2399,7 @@ fn rejection_report(item: &RouteWorkItem, timestamp: u64, reason: String) -> Rou
         par_assumption: item.route.start_asset() != item.route.end_asset(),
         full_fill: false, allowance_status: "unknown".to_string(),
         inventory_effect: "not evaluated".to_string(), quote_timestamp_ns: timestamp,
+        accounting_icusd_price_usd6: icusd_price_usd6,
         legs: Vec::new(), eligible: false, rejection_reason: Some(reason),
     }
 }
@@ -2227,6 +2409,7 @@ fn candidate_report(
     quote: &RouteQuote,
     evaluation: CandidateEvaluation,
     allowance_sufficient: bool,
+    icusd_price_usd6: u64,
 ) -> RouteCandidateReportV1 {
     let profit = i64::try_from(evaluation.net_profit_native);
     let inventory_blocked = evaluation.rejection_reason.as_deref().is_some_and(|reason| {
@@ -2258,6 +2441,7 @@ fn candidate_report(
             "within configured bands".to_string()
         },
         quote_timestamp_ns: quote.quoted_at_ns,
+        accounting_icusd_price_usd6: icusd_price_usd6,
         legs: quote.legs.iter().map(|leg| QuoteLegReportV1 {
             edge_id: leg.edge_id.clone(), from: leg.from, to: leg.to,
             wallet_before: leg.wallet_before, entry_ledger_fee: leg.entry_ledger_fee,
@@ -2285,16 +2469,16 @@ async fn quote_work_item_live(
     for edge in &item.route.edges {
         let ordering = match admissions.get(edge.pool_id) {
             Some(Ok(ordering)) => *ordering,
-            Some(Err(error)) => return (rejection_report(item, ic_cdk::api::time(), error.clone()), quote_calls, false),
-            None => return (rejection_report(item, ic_cdk::api::time(), "pool admission evidence unavailable".to_string()), quote_calls, false),
+            Some(Err(error)) => return (rejection_report(item, ic_cdk::api::time(), error.clone(), config.icusd_price_usd6_resolved()), quote_calls, false),
+            None => return (rejection_report(item, ic_cdk::api::time(), "pool admission evidence unavailable".to_string(), config.icusd_price_usd6_resolved()), quote_calls, false),
         };
         let entry_fee = match fees.get(edge.from).and_then(|fee| u64::try_from(fee).map_err(|_| "ledger fee exceeds u64".to_string())) {
             Ok(fee) => fee,
-            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, false),
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error, config.icusd_price_usd6_resolved()), quote_calls, false),
         };
         let venue_input = match wallet_before.checked_sub(entry_fee) {
             Some(value) if value > 0 => value,
-            _ => return (rejection_report(item, ic_cdk::api::time(), "entry fee consumes route input".to_string()), quote_calls, false),
+            _ => return (rejection_report(item, ic_cdk::api::time(), "entry fee consumes route input".to_string(), config.icusd_price_usd6_resolved()), quote_calls, false),
         };
         let ledger = asset_pins()[edge.from.index()].ledger;
         match crate::swaps::query_allowance(ledger, ic_cdk::id(), edge.pool_principal).await {
@@ -2316,35 +2500,36 @@ async fn quote_work_item_live(
         };
         let gross = match gross {
             Ok(value) => value,
-            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, true),
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error, config.icusd_price_usd6_resolved()), quote_calls, true),
         };
         let output_fee = match fees.get(edge.to).and_then(|fee| u64::try_from(fee).map_err(|_| "ledger fee exceeds u64".to_string())) {
             Ok(fee) => fee,
-            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error), quote_calls, false),
+            Err(error) => return (rejection_report(item, ic_cdk::api::time(), error, config.icusd_price_usd6_resolved()), quote_calls, false),
         };
         wallet_before = match gross.checked_sub(output_fee) {
             Some(value) if value > 0 => value,
-            _ => return (rejection_report(item, ic_cdk::api::time(), "output fee consumes route output".to_string()), quote_calls, false),
+            _ => return (rejection_report(item, ic_cdk::api::time(), "output fee consumes route output".to_string(), config.icusd_price_usd6_resolved()), quote_calls, false),
         };
         gross_outputs.push(gross);
     }
     let quoted_at = ic_cdk::api::time();
     let mut quote = match build_quote_from_outputs(&item.route, item.principal_native, fees, &gross_outputs, quoted_at, item.size_ladder_index) {
         Ok(quote) => quote,
-        Err(error) => return (rejection_report(item, quoted_at, error), quote_calls, false),
+        Err(error) => return (rejection_report(item, quoted_at, error, config.icusd_price_usd6_resolved()), quote_calls, false),
     };
     quote.allowance_sufficient = Some(allowance_sufficient);
     let bands = inventory_bands_from_config(config);
     let ckbtc_book = config.ckbtc_book_resolved();
     let cketh_book = config.cketh_book_resolved();
-    let evaluation = evaluate_candidate(
+    let evaluation = evaluate_candidate_with_icusd_price(
         &quote, balances, reservations, &bands,
         i128::from(config.min_stable_profit_usd_6dec), i64::from(config.min_stable_profit_bps),
         i128::from(config.min_icp_profit_e8s), i64::from(config.min_icp_profit_bps),
         i128::from(ckbtc_book.min_profit_native), i64::from(ckbtc_book.min_profit_bps),
         i128::from(cketh_book.min_profit_native), i64::from(cketh_book.min_profit_bps),
+        config.icusd_price_usd6_resolved(),
     );
-    (candidate_report(item, &quote, evaluation, allowance_sufficient), quote_calls, false)
+    (candidate_report(item, &quote, evaluation, allowance_sufficient, config.icusd_price_usd6_resolved()), quote_calls, false)
 }
 
 pub async fn quote_observation_items(
@@ -2361,4 +2546,137 @@ pub async fn quote_observation_items(
     .buffered(usize::from(config.max_concurrent_quote_calls))
     .collect()
     .await
+}
+
+#[cfg(test)]
+mod icusd_price_tests {
+    use super::*;
+
+    #[test]
+    fn configured_icusd_price_converts_usd_ladder_to_native_amount() {
+        let mut value = serde_json::to_value(icusd_peg_trades_profile_config(
+            RouteArbConfigV1::default(),
+        ))
+        .unwrap();
+        value["icusd_price_usd6"] = serde_json::json!(970_000u64);
+        let config: RouteArbConfigV1 = serde_json::from_value(value).unwrap();
+
+        let universe = build_work_universe(&config).unwrap();
+        let icusd_item = universe
+            .items
+            .iter()
+            .find(|item| item.route.start_asset() == Asset::IcUsd && item.size_ladder_index == 0)
+            .unwrap();
+
+        // floor($5 * 1e8 / $0.97) in 8-decimal icUSD native units.
+        assert_eq!(icusd_item.principal_native, 515_463_917);
+        let large_item = universe
+            .items
+            .iter()
+            .find(|item| item.route.start_asset() == Asset::IcUsd && item.size_ladder_index == 1)
+            .unwrap();
+        assert_eq!(large_item.principal_native, 2_061_855_670);
+    }
+
+    fn priced_candidate(start: Asset, end: Asset, principal: u64, gross_end: u64) -> CandidateEvaluation {
+        let route = enumerate_routes(2)
+            .unwrap()
+            .into_iter()
+            .find(|route| route.start_asset() == start && route.end_asset() == end)
+            .unwrap();
+        let mut fees = LedgerFeeTable::zero();
+        fees.set(Asset::CkUsdc, 10_000);
+        fees.set(Asset::Icp, 10_000);
+        fees.set(Asset::IcUsd, 100_000);
+        let quote = build_quote_from_outputs(
+            &route,
+            principal,
+            &fees,
+            &[2_000_000_000, gross_end],
+            1,
+            0,
+        )
+        .unwrap();
+        let mut balances = AssetAmounts::zero();
+        for asset in Asset::ALL {
+            balances.set(asset, Some(1_000_000_000_000));
+        }
+        evaluate_candidate_with_icusd_price(
+            &quote,
+            &balances,
+            &ReservationTotals::default(),
+            &InventoryBands::unbounded(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            970_000,
+        )
+    }
+
+    #[test]
+    fn configured_price_rejects_par_positive_but_usd_loss_after_ledger_fees() {
+        let candidate = priced_candidate(Asset::CkUsdc, Asset::IcUsd, 20_000_000, 2_060_100_000);
+        assert_eq!(candidate.net_profit_native, -18_000);
+        assert!(!candidate.eligible);
+    }
+
+    #[test]
+    fn configured_price_admits_fee_net_icusd_discount_conversion() {
+        let candidate = priced_candidate(Asset::IcUsd, Asset::CkUsdc, 2_000_000_000, 19_520_000);
+        assert_eq!(candidate.net_profit_native, 110_000);
+        assert!(candidate.eligible);
+    }
+
+    #[test]
+    fn legacy_config_omission_preserves_price_and_legacy_candidate_uses_par_snapshot() {
+        let mut current = icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+        current.icusd_price_usd6 = Some(970_000);
+        let mut wire = serde_json::to_value(&current).unwrap();
+        wire.as_object_mut().unwrap().remove("icusd_price_usd6");
+        let incoming: RouteArbConfigV1 = serde_json::from_value(wire).unwrap();
+        let merged = resolve_incoming_icusd_price_field(incoming, &current);
+        assert_eq!(merged.icusd_price_usd6_resolved(), 970_000);
+
+        let mut old_record = serde_json::to_value(RouteCandidateReportV1::fixture(
+            "legacy",
+            CandidateClass::StablePar,
+            0,
+            true,
+        ))
+        .unwrap();
+        old_record.as_object_mut().unwrap().remove("accounting_icusd_price_usd6");
+        let decoded: RouteCandidateReportV1 = serde_json::from_value(old_record).unwrap();
+        assert_eq!(decoded.accounting_icusd_price_usd6, DEFAULT_ICUSD_PRICE_USD6);
+
+        let captured: RouteCandidateReportV1 = serde_json::from_value(
+            serde_json::to_value({
+                let mut row = RouteCandidateReportV1::fixture("priced", CandidateClass::StablePar, 0, true);
+                row.accounting_icusd_price_usd6 = 970_000;
+                row
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(captured.accounting_icusd_price_usd6, 970_000);
+    }
+
+    #[test]
+    fn configured_price_validation_rejects_zero_and_zero_sized_ladder() {
+        let config = icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+        assert!(validate_icusd_price_usd6(0, &config).is_err());
+        assert!(validate_icusd_price_usd6(500_000_000_000_001, &config).is_err());
+        assert!(validate_icusd_price_usd6(500_000_000_000_000, &config).is_ok());
+    }
+
+    #[test]
+    fn price_change_is_rejected_while_execution_is_active_but_noop_is_safe() {
+        assert!(validate_icusd_price_change(1_000_000, 970_000, true).is_err());
+        assert!(validate_icusd_price_change(970_000, 970_000, true).is_ok());
+        assert!(validate_icusd_price_change(1_000_000, 970_000, false).is_ok());
+    }
 }

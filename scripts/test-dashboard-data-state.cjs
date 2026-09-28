@@ -134,6 +134,7 @@ Object.assign(context, {
   anonymousActor: routeActor,
   authenticatedActor: walletActor,
   routeDataRequestPromise: null,
+  routeIcusdPriceMutationInFlight: false,
   latestRouteStatus: null,
   latestRouteObservation: null,
   latestRouteCandidates: null,

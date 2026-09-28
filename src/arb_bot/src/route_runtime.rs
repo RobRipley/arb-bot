@@ -462,6 +462,19 @@ impl RuntimeIo for LiveIo {
 fn native(v: u128) -> Result<u64, String> {
     u64::try_from(v).map_err(|_| "native amount overflow".into())
 }
+fn realized_stable_profit(
+    start_asset: Asset,
+    start_native: u128,
+    end_asset: Asset,
+    end_native: u128,
+    icusd_price_usd6: u64,
+) -> Result<i128, String> {
+    let ending = crate::route_arb::stable_usd6_floor_checked(end_native, end_asset, icusd_price_usd6)?;
+    let starting = crate::route_arb::stable_usd6_ceil_checked(start_native, start_asset, icusd_price_usd6)?;
+    i128::try_from(ending).map_err(|_| "terminal stable value exceeds signed P&L range")?
+        .checked_sub(i128::try_from(starting).map_err(|_| "starting stable value exceeds signed P&L range")?)
+        .ok_or_else(|| "stable realized profit overflow".into())
+}
 fn final_floor(c: &RouteArbConfigV1, original: &RouteCandidateReportV1) -> Result<u64, String> {
     let p = original.principal_native;
     let (basis, absolute, bps) = match original.start_asset {
@@ -479,8 +492,11 @@ fn final_floor(c: &RouteArbConfigV1, original: &RouteCandidateReportV1) -> Resul
             (p, u128::from(book.min_profit_native), u128::from(book.min_profit_bps))
         }
         _ => (
-            u128::try_from(par_usd_6dec_checked(p, original.start_asset.decimals())?)
-                .map_err(|_| "invalid basis")?,
+            crate::route_arb::stable_usd6_ceil_checked(
+                p,
+                original.start_asset,
+                original.accounting_icusd_price_usd6,
+            )?,
             u128::from(c.min_stable_profit_usd_6dec),
             u128::from(c.min_stable_profit_bps),
         ),
@@ -497,9 +513,10 @@ fn final_floor(c: &RouteArbConfigV1, original: &RouteCandidateReportV1) -> Resul
     if matches!(original.end_asset, Asset::Icp | Asset::CkBtc | Asset::CkEth) {
         native(end)
     } else {
-        native(
-            end.checked_mul(10u128.pow(u32::from(original.end_asset.decimals() - 6)))
-                .ok_or("native floor overflow")?,
+        crate::route_arb::stable_native_for_usd6_ceil_checked(
+            end,
+            original.end_asset,
+            original.accounting_icusd_price_usd6,
         )
     }
 }
@@ -936,9 +953,10 @@ fn held_basis(ex: &RuntimeExecution) -> Result<HeldBasisV1, String> {
         _ => Ok(HeldBasisV1::StablePar {
             start_asset: ex.original.start_asset,
             principal_native: native(ex.original.principal_native)?,
-            principal_usd_6dec: u64::try_from(par_usd_6dec_checked(
+            principal_usd_6dec: u64::try_from(crate::route_arb::stable_usd6_ceil_checked(
                 ex.original.principal_native,
-                ex.original.start_asset.decimals(),
+                ex.original.start_asset,
+                ex.original.accounting_icusd_price_usd6,
             )?)
             .map_err(|_| "basis overflow")?,
         }),
@@ -1050,12 +1068,12 @@ pub async fn advance_with<I: RuntimeIo>(io: &I, id: &str) -> Result<ExecutionRec
                         - i128::try_from(ex.original.principal_native)
                             .map_err(|_| "basis overflow")?
                 } else {
-                    par_usd_6dec_checked(
-                        u128::from(ex.current_wallet_native),
-                        ex.original.end_asset.decimals(),
-                    )? - par_usd_6dec_checked(
+                    realized_stable_profit(
+                        ex.original.start_asset,
                         ex.original.principal_native,
-                        ex.original.start_asset.decimals(),
+                        ex.original.end_asset,
+                        u128::from(ex.current_wallet_native),
+                        ex.original.accounting_icusd_price_usd6,
                     )?
                 });
                 finish(&mut ex, io.now())?;
@@ -1315,8 +1333,13 @@ async fn reconcile_inner<I: RuntimeIo>(
                 i128::from(returned)
                     - i128::try_from(ex.original.principal_native).map_err(|_| "basis overflow")?
             } else {
-                par_usd_6dec_checked(u128::from(returned), r.edge.from.decimals())?
-                    - par_usd_6dec_checked(ex.original.principal_native, r.edge.from.decimals())?
+                realized_stable_profit(
+                    ex.original.start_asset,
+                    ex.original.principal_native,
+                    r.edge.from,
+                    u128::from(returned),
+                    ex.original.accounting_icusd_price_usd6,
+                )?
             });
             finish(&mut ex, io.now())?;
         } else {
@@ -1669,6 +1692,7 @@ mod tests {
             allowance_status: "sufficient".into(),
             inventory_effect: "within configured bands".into(),
             quote_timestamp_ns: now,
+            accounting_icusd_price_usd6: crate::route_arb::DEFAULT_ICUSD_PRICE_USD6,
             legs,
             eligible: true,
             rejection_reason: None,
@@ -2261,5 +2285,61 @@ mod tests {
         assert!(block_on(prepare_with_validated(&io, &route)).is_err());
         assert_eq!(io.submissions.get(), 0);
         assert!(state::get_mutation_lock().is_none());
+    }
+
+    #[test]
+    fn price_captured_terminal_floors_convert_each_stable_direction_conservatively() {
+        let mut config = crate::route_arb::icusd_peg_trades_profile_config(RouteArbConfigV1::default());
+        config.icusd_price_usd6 = Some(970_000);
+
+        let mut icusd_to_wrapped = RouteCandidateReportV1::fixture(
+            "icusd-to-usdc",
+            CandidateClass::StableSettledCrossAsset,
+            0,
+            true,
+        );
+        icusd_to_wrapped.start_asset = Asset::IcUsd;
+        icusd_to_wrapped.end_asset = Asset::CkUsdc;
+        icusd_to_wrapped.principal_native = 2_000_000_000;
+        icusd_to_wrapped.accounting_icusd_price_usd6 = 970_000;
+        assert_eq!(final_floor(&config, &icusd_to_wrapped).unwrap(), 19_400_000);
+
+        let mut wrapped_to_icusd = RouteCandidateReportV1::fixture(
+            "usdc-to-icusd",
+            CandidateClass::StableSettledCrossAsset,
+            0,
+            true,
+        );
+        wrapped_to_icusd.start_asset = Asset::CkUsdc;
+        wrapped_to_icusd.end_asset = Asset::IcUsd;
+        wrapped_to_icusd.principal_native = 20_000_000;
+        wrapped_to_icusd.accounting_icusd_price_usd6 = 970_000;
+        assert_eq!(final_floor(&config, &wrapped_to_icusd).unwrap(), 2_061_855_671);
+    }
+
+    #[test]
+    fn held_stable_basis_uses_candidate_captured_price() {
+        let (io, route) = setup(1);
+        let record = block_on(prepare_with_validated(&io, &route)).unwrap();
+        let mut execution = current(&record.execution_id).unwrap();
+        execution.original.start_asset = Asset::IcUsd;
+        execution.original.principal_native = 2_000_000_000;
+        execution.original.accounting_icusd_price_usd6 = 970_000;
+        let HeldBasisV1::StablePar { principal_usd_6dec, .. } = held_basis(&execution).unwrap() else {
+            panic!("stable route must retain stable accounting basis")
+        };
+        assert_eq!(principal_usd_6dec, 19_400_000);
+    }
+
+    #[test]
+    fn realized_stable_profit_uses_captured_price_and_legacy_par_default() {
+        assert_eq!(
+            realized_stable_profit(Asset::IcUsd, 2_000_000_000, Asset::CkUsdc, 19_500_000, 970_000).unwrap(),
+            100_000,
+        );
+        assert_eq!(
+            realized_stable_profit(Asset::IcUsd, 2_000_000_000, Asset::CkUsdc, 19_500_000, crate::route_arb::DEFAULT_ICUSD_PRICE_USD6).unwrap(),
+            -500_000,
+        );
     }
 }
