@@ -1427,6 +1427,13 @@ fn best_candidate_for_book(
     }
 }
 
+/// Whether a scan left a winner in any lane the rotation serves. The
+/// scheduler decides "there is a route to select" on this, so it cannot
+/// disagree with `profile_candidate_for_execution` about which books exist.
+pub(crate) fn has_candidate_in_any_book(o: &ObservationAccumulatorV1) -> bool {
+    BOOK_ROTATION_ORDER.iter().any(|book| best_candidate_for_book(o, *book).is_some())
+}
+
 fn profile_candidate_for_execution(
     config: &RouteArbConfigV1,
     config_generation: u64,
