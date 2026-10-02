@@ -131,6 +131,9 @@ pub struct RuntimeStatus {
     pub last_tick_ns: u64,
     /// Start time of the currently executing scheduler callback, when any.
     pub scheduler_in_flight_since_ns: Option<u64>,
+    /// When the scheduler will next tick. It sleeps between observations by
+    /// design, so a stale `last_tick_ns` is healthy until this has passed.
+    pub scheduler_next_tick_due_ns: Option<u64>,
     /// Stable-par USD6 or ICP e8s, based on attributable completed movements.
     pub last_realized_profit: Option<i128>,
     pub last_profit_class: Option<CandidateClass>,
@@ -325,6 +328,7 @@ pub fn status() -> Result<RuntimeStatus, String> {
         last_error: s.last_error,
         last_tick_ns: s.last_tick_ns,
         scheduler_in_flight_since_ns: crate::route_scheduler::in_flight_since_ns(),
+        scheduler_next_tick_due_ns: crate::route_scheduler::next_tick_due_ns(),
         last_profit_class: s.last_terminal.as_ref().map(|e| e.original.candidate_class),
         last_realized_profit: s.last_terminal.and_then(|e| e.realized_profit),
     })

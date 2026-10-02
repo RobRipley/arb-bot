@@ -26,10 +26,29 @@ const ctx=vm.createContext({latestRouteRuntime:null,routeSources:{runtime:{state
 vm.runInContext(code,ctx);
 (async()=>{
   const nowMs=1_000_000;
-  const freshCtx=vm.createContext({Date:{now:()=>nowMs},routeOpt:x=>x?.[0]??null,SCHEDULER_NO_PROGRESS_CEILING_MS:600000});
+  const freshCtx=vm.createContext({Date:{now:()=>nowMs},routeOpt:x=>x?.[0]??null,SCHEDULER_NO_PROGRESS_CEILING_MS:600000,SCHEDULER_WATCHDOG_INTERVAL_MS:300000});
   vm.runInContext(freshnessCode,freshCtx);
   assert.equal(vm.runInContext('routeRuntimePayloadTimestampMs({last_tick_ns:1n,scheduler_in_flight_since_ns:[900000000000n],live_authorized:true,enabled:true,dry_run:false},1000000)',freshCtx),1000000);
   assert.equal(vm.runInContext('routeRuntimePayloadTimestampMs({last_tick_ns:500000000000n,scheduler_in_flight_since_ns:[100000000000n],live_authorized:true,enabled:true,dry_run:false},1000000)',freshCtx),500000);
+  // The scheduler now sleeps between observations and reports when it will
+  // next tick. now = 1000s. A healthy scheduler completes a tick at least
+  // once per watchdog period (300s), so the heartbeat here is 200s old.
+  const runtimeAt=({tick=800,due,inFlight='[]'})=>`routeRuntimePayloadTimestampMs({last_tick_ns:${tick}000000000n,scheduler_in_flight_since_ns:${inFlight},live_authorized:true,enabled:true,dry_run:false${due===undefined?'':`,scheduler_next_tick_due_ns:${due}`}},1000000)`;
+  assert.equal(vm.runInContext(runtimeAt({due:'[1200000000000n]'}),freshCtx),1000000,'a tick due in the future is a planned sleep, not a stall');
+  assert.equal(vm.runInContext(runtimeAt({due:'[990000000000n]'}),freshCtx),1000000,'a tick a few seconds overdue is still within timer/polling jitter');
+  assert.equal(vm.runInContext(runtimeAt({due:'[900000000000n]'}),freshCtx),800000,'a tick long overdue means the timer is dead: report the real last heartbeat');
+  assert.equal(vm.runInContext(runtimeAt({due:'[]'}),freshCtx),800000,'no due time reported: fall back to the heartbeat');
+  assert.equal(vm.runInContext(runtimeAt({}),freshCtx),800000,'a canister that predates the field keeps the old heartbeat behaviour');
+  // The watchdog keeps re-arming (so the due time stays in the future) even
+  // when ticks never complete. Neither case may be shown as a healthy sleep.
+  assert.equal(vm.runInContext(runtimeAt({tick:500,due:'[1200000000000n]'}),freshCtx),500000,'ticks that stopped completing are a stall even though a tick is still scheduled');
+  assert.equal(vm.runInContext(runtimeAt({tick:200,due:'[1200000000000n]',inFlight:'[300000000000n]'}),freshCtx),200000,'a tick stuck in flight past the no-progress ceiling is a stall even though a tick is still scheduled');
+  assert.equal(vm.runInContext(runtimeAt({tick:200,due:'[1200000000000n]',inFlight:'[950000000000n]'}),freshCtx),1000000,'a tick genuinely in flight is still active');
+  assert.equal(vm.runInContext('routeRuntimeNextTickLabel({scheduler_next_tick_due_ns:[1045000000000n]},1000000)',freshCtx),' · next check in 45s');
+  assert.equal(vm.runInContext('routeRuntimeNextTickLabel({scheduler_next_tick_due_ns:[1300000000000n]},1000000)',freshCtx),' · next check in 5.0m');
+  assert.equal(vm.runInContext('routeRuntimeNextTickLabel({scheduler_next_tick_due_ns:[900000000000n]},1000000)',freshCtx),' · next check in 0s');
+  assert.equal(vm.runInContext('routeRuntimeNextTickLabel({scheduler_next_tick_due_ns:[]},1000000)',freshCtx),'');
+  assert.equal(vm.runInContext('routeRuntimeNextTickLabel({},1000000)',freshCtx),'');
   assert.equal(vm.runInContext('routeAutomationState().state',ctx),'Unknown');
   assert.equal(vm.runInContext('routeAutomationState().label',ctx),'Unknown');
   assert(!vm.runInContext('routeRuntimeHtml()',ctx).includes('onclick='));

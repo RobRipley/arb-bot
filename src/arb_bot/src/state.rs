@@ -1672,6 +1672,57 @@ pub fn release_mutation_lock(operation_id: &str) -> Result<(), String> {
     })
 }
 
+/// Operation-id prefix of an admin `fund_volume_subaccount` call.
+pub const VOLUME_FUND_OPERATION_PREFIX: &str = "volume-fund-";
+
+/// Recovers from a failed admin `fund_volume_subaccount` call.
+///
+/// A failed fund transfer leaves the durable lock marked
+/// `reconciliation_required`, which `release_mutation_lock` refuses to clear.
+/// Every volume cycle and route execution must acquire that same lock, so
+/// without this path a single failed fund call wedges the bot permanently.
+///
+/// Releasing is safe for this operation class whatever the transfer's real
+/// outcome: it is one ICRC-1 transfer from the canister's default account to
+/// the canister's own volume subaccount, so value either stayed put or moved
+/// into an account route arbitrage never spends. It cannot strand or
+/// mis-attribute route-owned inventory, which is the hazard the
+/// reconciliation flag exists for. Other volume operations (withdraw, cycle,
+/// rebalance) move value *into* the shared default account and stay
+/// unreleasable here.
+///
+/// The caller must name the exact held operation id, so a stale call cannot
+/// release a different lock that was taken after the one it inspected.
+pub fn release_failed_volume_fund_lock(operation_id: &str) -> Result<(), String> {
+    ROUTE_MUTATION_LOCK.with(|cell| {
+        let mut cell = cell.borrow_mut();
+        let slot = cell.get();
+        let lock = slot.lock.as_ref().ok_or("account mutation lock is not held")?;
+        if lock.operation_id != operation_id {
+            return Err(format!(
+                "account mutation lock is held by {}, not {operation_id}",
+                lock.operation_id
+            ));
+        }
+        if lock.owner != crate::route_arb::MutationOwnerV1::VolumeOperation
+            || !lock.operation_id.starts_with(VOLUME_FUND_OPERATION_PREFIX)
+        {
+            return Err(
+                "only a failed volume fund lock is recoverable; this lock is not one".to_string(),
+            );
+        }
+        if !lock.reconciliation_required {
+            return Err(
+                "volume fund lock is not marked reconciliation-required; its in-flight call releases it"
+                    .to_string(),
+            );
+        }
+        cell.set(crate::route_arb::MutationLockSlotV1::default())
+            .map_err(|error| format!("failed to persist mutation lock release: {error:?}"))?;
+        Ok(())
+    })
+}
+
 #[doc(hidden)]
 pub fn release_mutation_lock_for_test() {
     ROUTE_MUTATION_LOCK.with(|cell| {
