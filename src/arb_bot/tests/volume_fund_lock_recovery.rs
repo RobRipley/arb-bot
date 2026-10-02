@@ -59,6 +59,10 @@ fn only_volume_fund_locks_are_recoverable() {
         // Prefix must be exact, not merely contained.
         "x-volume-fund-5",
         "volume-fund",
+        // The suffix is the acquisition time; anything else is not a fund lock.
+        "volume-fund-",
+        "volume-fund-rebalance-5",
+        "volume-fund-5x",
     ] {
         hold_reconciliation_lock(id, MutationOwnerV1::VolumeOperation);
         assert!(
@@ -75,6 +79,26 @@ fn route_owned_locks_are_never_recoverable_even_with_a_fund_looking_id() {
 
     assert!(state::release_failed_volume_fund_lock("volume-fund-7").is_err());
     assert!(state::get_mutation_lock().is_some());
+}
+
+#[test]
+fn no_other_owner_is_recoverable_even_with_a_fund_looking_id() {
+    for owner in [
+        MutationOwnerV1::GenericWithdrawal,
+        MutationOwnerV1::RetiredVenueRecovery,
+        MutationOwnerV1::LegacyMigration,
+    ] {
+        hold_reconciliation_lock("volume-fund-7", owner);
+        assert!(state::release_failed_volume_fund_lock("volume-fund-7").is_err(), "{owner:?}");
+        assert!(state::get_mutation_lock().is_some(), "{owner:?}");
+    }
+}
+
+#[test]
+fn a_second_release_is_an_error() {
+    hold_reconciliation_lock("volume-fund-11", MutationOwnerV1::VolumeOperation);
+    state::release_failed_volume_fund_lock("volume-fund-11").unwrap();
+    assert!(state::release_failed_volume_fund_lock("volume-fund-11").is_err());
 }
 
 #[test]

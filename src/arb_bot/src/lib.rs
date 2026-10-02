@@ -1349,7 +1349,7 @@ async fn setup_approvals() -> String {
     "retired: setup_approvals is retired under Stage-1 — active-pool allowances now require a separately named, spender-specific admin action (see docs/superpowers/specs/2026-09-04-six-asset-route-arbitrage-policy-design.md); no approval was granted".to_string()
 }
 
-#[update]
+#[update(manual_reply = true)]
 async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     require_admin();
 
@@ -1378,19 +1378,41 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
     state::acquire_mutation_lock(
         &operation_id, route_arb::MutationOwnerV1::GenericWithdrawal, ic_cdk::api::time(),
     ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
+    // The lock is now committed. A trap from here on would discard a release
+    // made in the same callback and leave the lock held with nothing able to
+    // clear it, halting every volume cycle and route execution. Failures are
+    // therefore reported with an explicit reject, which keeps state changes.
+    match withdraw_under_lock(&operation_id, active_asset, token_ledger, to, amount).await {
+        Ok(()) => ic_cdk::api::call::reply(()),
+        Err(message) => ic_cdk::api::call::reject(&message),
+    }
+}
+
+async fn withdraw_under_lock(
+    operation_id: &str,
+    active_asset: Option<route_arb::Asset>,
+    token_ledger: Principal,
+    to: Principal,
+    amount: u64,
+) -> Result<(), String> {
     if let Some(asset) = active_asset {
         let balance = match swaps::icrc1_balance_of_default(token_ledger).await {
             Ok(balance) => balance,
             Err(error) => {
-                let _ = state::release_mutation_lock(&operation_id);
-                ic_cdk::trap(&format!("withdraw balance check failed: {error}"));
+                let _ = state::release_mutation_lock(operation_id);
+                return Err(format!("withdraw balance check failed: {error}"));
             }
         };
-        let available = state::spendable_native(asset, balance)
-            .unwrap_or_else(|error| ic_cdk::trap(&error));
+        let available = match state::spendable_native(asset, balance) {
+            Ok(available) => available,
+            Err(error) => {
+                let _ = state::release_mutation_lock(operation_id);
+                return Err(error);
+            }
+        };
         if amount > available {
-            let _ = state::release_mutation_lock(&operation_id);
-            ic_cdk::trap("withdraw rejected: amount would consume reserved inventory");
+            let _ = state::release_mutation_lock(operation_id);
+            return Err("withdraw rejected: amount would consume reserved inventory".to_string());
         }
     }
 
@@ -1403,28 +1425,32 @@ async fn withdraw(token_ledger: Principal, to: Principal, amount: u64) {
         created_at_time: None,
     };
 
-    let result: Result<(Result<Nat, icrc_ledger_types::icrc1::transfer::TransferError>,), _> =
-        ic_cdk::call(token_ledger, "icrc1_transfer", (transfer_args,)).await;
-
-    match result {
-        Ok((Ok(_),)) => {
-            let _ = state::release_mutation_lock(&operation_id);
+    match swaps::icrc1_transfer(token_ledger, transfer_args).await {
+        Ok(_) => {
+            let _ = state::release_mutation_lock(operation_id);
             state::log_activity("withdraw", &format!(
                 "Withdrew {} from ledger {} to {} by {}",
                 amount, token_ledger, to, ic_cdk::api::caller()
             ));
+            Ok(())
         }
-        Ok((Err(e),)) => {
-            let _ = state::release_mutation_lock(&operation_id);
-            let msg = format!("Withdraw failed: {:?} (ledger={}, to={}, amount={})", e, token_ledger, to, amount);
-            state::log_activity("withdraw", &msg);
-            ic_cdk::trap(&format!("Transfer failed: {:?}", e));
+        // The ledger refused, or the call never left the canister: nothing
+        // moved, so the lock is simply released.
+        Err(error) if error.is_certain_no_op() => {
+            let _ = state::release_mutation_lock(operation_id);
+            state::log_activity("withdraw", &format!(
+                "Withdraw failed: {} (ledger={}, to={}, amount={})", error, token_ledger, to, amount
+            ));
+            Err(format!("Transfer failed: {}", error))
         }
-        Err((code, msg)) => {
-            let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
-            let detail = format!("Withdraw call failed: {:?} {} (ledger={}, to={}, amount={})", code, msg, token_ledger, to, amount);
-            state::log_activity("withdraw", &detail);
-            ic_cdk::trap(&format!("Transfer call failed: {:?} {}", code, msg));
+        // The transfer was sent and its outcome is unknown.
+        Err(error) => {
+            let _ = state::mark_mutation_lock_reconciliation_required(operation_id);
+            state::log_activity("withdraw", &format!(
+                "Withdraw call failed: {} (ledger={}, to={}, amount={}); lock {} held for reconciliation",
+                error, token_ledger, to, amount, operation_id
+            ));
+            Err(format!("Transfer call failed: {}", error))
         }
     }
 }
@@ -1567,7 +1593,7 @@ const VOL_ICUSD_FEE: u64 = 100_000;
 /// Swap ICP ↔ icUSD using the volume subaccount.
 /// Handles the full multi-hop route: ICP ↔ 3USD (Rumi AMM) ↔ icUSD (3pool).
 /// direction: "icp_to_icusd" or "icusd_to_icp"
-#[update]
+#[update(manual_reply = true)]
 async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     require_admin();
     state::read_state(validate_volume_registry)
@@ -1575,16 +1601,65 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
     if let Some(reason) = state::read_state(|s| state::legacy_route_freeze_reason(s, state::LegacyFreezeAsset::Icp)) {
         ic_cdk::trap(&reason);
     }
+    // The input pays one ledger fee to leave the subaccount and one to enter
+    // the venue. Refuse dust here, before the lock exists, rather than strand
+    // it mid-swap.
+    let input_fee = if icp_to_icusd { ICP_FEE } else { VOL_ICUSD_FEE };
+    if amount <= input_fee.saturating_mul(2) {
+        ic_cdk::trap("Volume swap: amount too small to cover ledger fees");
+    }
+    let operation_id = format!("volume-swap-{}", ic_cdk::api::time());
+    state::acquire_mutation_lock(
+        &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
+    ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
+    // As in `withdraw`: once the lock is committed a trap would leave it held
+    // for good, so every failure is a reject that keeps its state changes.
+    match volume_swap_under_lock(&operation_id, icp_to_icusd, amount, min_out).await {
+        Ok(()) => ic_cdk::api::call::reply(()),
+        Err(message) => ic_cdk::api::call::reject(&message),
+    }
+}
+
+/// The swap's first step, moving the input out of the volume subaccount,
+/// failed. A certain no-op moved nothing and frees the lock; any other
+/// failure leaves the outcome unknown and keeps it for reconciliation.
+fn volume_swap_source_transfer_failed(operation_id: &str, asset: &str, error: swaps::SwapError) -> String {
+    let held = if error.is_certain_no_op() {
+        let _ = state::release_mutation_lock(operation_id);
+        ""
+    } else {
+        let _ = state::mark_mutation_lock_reconciliation_required(operation_id);
+        "; lock held for reconciliation"
+    };
+    let message = format!("Volume swap: {asset} transfer from subaccount failed: {error:?}{held}");
+    state::log_activity("volume_swap", &message);
+    message
+}
+
+/// A later step failed after the input had left the volume subaccount. Where
+/// the value now sits cannot be proved from here: the venue may have taken
+/// the input even though it reported an error, and a refund is then paid out
+/// of route-owned inventory in the shared default account. The lock is kept
+/// for reconciliation in every such case.
+fn volume_swap_step_failed(operation_id: &str, detail: String) -> String {
+    let _ = state::mark_mutation_lock_reconciliation_required(operation_id);
+    let message = format!("{detail}; lock held for reconciliation");
+    state::log_activity("volume_swap", &message);
+    message
+}
+
+async fn volume_swap_under_lock(
+    operation_id: &str,
+    icp_to_icusd: bool,
+    amount: u64,
+    min_out: u64,
+) -> Result<(), String> {
     let (rumi_amm, icp_ledger, three_usd_ledger, icusd_ledger, rumi_3pool) = state::read_state(|s| {
         (s.config.rumi_amm, s.config.icp_ledger, s.config.three_usd_ledger,
          Principal::from_text("t6bor-paaaa-aaaap-qrd5q-cai").unwrap(),
          s.config.rumi_3pool)
     });
     let caller = ic_cdk::api::caller();
-    let operation_id = format!("volume-swap-{}", ic_cdk::api::time());
-    state::acquire_mutation_lock(
-        &operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time(),
-    ).unwrap_or_else(|reason| ic_cdk::trap(&reason));
     let mut settlement_ambiguous = false;
 
     if icp_to_icusd {
@@ -1592,7 +1667,7 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
 
         // Step 1: Transfer ICP from volume subaccount to main
         if let Err(e) = swaps::transfer_from_subaccount(icp_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
-            ic_cdk::trap(&format!("Volume swap: ICP transfer from subaccount failed: {:?}", e));
+            return Err(volume_swap_source_transfer_failed(operation_id, "ICP", e));
         }
 
         // Step 2: Swap ICP → 3USD on Rumi
@@ -1601,8 +1676,14 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
             Ok(out) => out,
             Err(e) => {
                 let recovery = swap_input.saturating_sub(ICP_FEE);
-                if recovery > 0 { let _ = swaps::transfer_to_subaccount(icp_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await; }
-                ic_cdk::trap(&format!("Volume swap: Rumi ICP→3USD failed: {:?}", e));
+                let refund = if recovery > 0 {
+                    swaps::transfer_to_subaccount(icp_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await.map(|_| ())
+                } else {
+                    Ok(())
+                };
+                return Err(volume_swap_step_failed(
+                    operation_id, format!("Volume swap: Rumi ICP→3USD failed: {:?} (refund of {} to subaccount: {:?})", e, recovery, refund),
+                ));
             }
         };
 
@@ -1611,7 +1692,9 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
             Ok(out) => out,
             Err(e) => {
                 // 3USD stays in default account (no subaccount support)
-                ic_cdk::trap(&format!("Volume swap: 3pool redeem failed: {}", e));
+                return Err(volume_swap_step_failed(
+                    operation_id, format!("Volume swap: 3pool redeem failed: {}", e),
+                ));
             }
         };
 
@@ -1630,7 +1713,7 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
 
         // Step 1: Transfer icUSD from volume subaccount to main
         if let Err(e) = swaps::transfer_from_subaccount(icusd_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
-            ic_cdk::trap(&format!("Volume swap: icUSD transfer from subaccount failed: {:?}", e));
+            return Err(volume_swap_source_transfer_failed(operation_id, "icUSD", e));
         }
 
         // Step 2: Deposit icUSD → 3USD via 3pool (coin_index 0 = icUSD)
@@ -1641,8 +1724,14 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
             Ok(lp) => lp,
             Err(e) => {
                 let recovery = deposit_amount.saturating_sub(VOL_ICUSD_FEE);
-                if recovery > 0 { let _ = swaps::transfer_to_subaccount(icusd_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await; }
-                ic_cdk::trap(&format!("Volume swap: 3pool deposit failed: {}", e));
+                let refund = if recovery > 0 {
+                    swaps::transfer_to_subaccount(icusd_ledger, recovery, swaps::VOLUME_SUBACCOUNT).await.map(|_| ())
+                } else {
+                    Ok(())
+                };
+                return Err(volume_swap_step_failed(
+                    operation_id, format!("Volume swap: 3pool deposit failed: {} (refund of {} to subaccount: {:?})", e, recovery, refund),
+                ));
             }
         };
 
@@ -1651,7 +1740,9 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
             Ok(out) => out,
             Err(e) => {
                 // 3USD stays in default account (no subaccount support)
-                ic_cdk::trap(&format!("Volume swap: Rumi 3USD→ICP failed: {:?}", e));
+                return Err(volume_swap_step_failed(
+                    operation_id, format!("Volume swap: Rumi 3USD→ICP failed: {:?}", e),
+                ));
             }
         };
 
@@ -1667,10 +1758,16 @@ async fn volume_swap(icp_to_icusd: bool, amount: u64, min_out: u64) {
         ));
     }
     if settlement_ambiguous {
-        let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
-    } else {
-        let _ = state::release_mutation_lock(&operation_id);
+        // The swap itself went through but its output is still in the shared
+        // default account. Reporting success here would hide a halted bot.
+        let _ = state::mark_mutation_lock_reconciliation_required(operation_id);
+        return Err(
+            "Volume swap: swapped, but the output could not be returned to the volume subaccount; lock held for reconciliation"
+                .to_string(),
+        );
     }
+    let _ = state::release_mutation_lock(operation_id);
+    Ok(())
 }
 
 /// One-time backfill: append historical trade legs to the log.
@@ -2202,12 +2299,26 @@ async fn fund_volume_subaccount(token_ledger: Principal, amount: u64) -> Result<
         // 3USD ledger ignores subaccounts — funds are already in default account
         return Ok(());
     }
-    let operation_id = format!("volume-fund-{}", ic_cdk::api::time());
+    let operation_id = format!("{}{}", state::VOLUME_FUND_OPERATION_PREFIX, ic_cdk::api::time());
     state::acquire_mutation_lock(&operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time())?;
     match swaps::transfer_to_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
         Ok(_) => { state::release_mutation_lock(&operation_id)?; Ok(()) }
+        // The ledger refused, or the call never left the canister: nothing
+        // moved and there is nothing to reconcile. Flagging this would halt
+        // every volume cycle and route execution over a mistyped amount or a
+        // low cycle balance.
+        Err(error) if error.is_certain_no_op() => {
+            state::release_mutation_lock(&operation_id)?;
+            state::log_activity("volume", &format!(
+                "Fund volume subaccount did not move anything on ledger {token_ledger} (amount {amount}): {error:?}"
+            ));
+            Err(format!("Failed to fund volume subaccount: {:?}", error))
+        }
         Err(error) => {
             let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+            state::log_activity("volume", &format!(
+                "Fund volume subaccount outcome unknown on ledger {token_ledger} (amount {amount}): {error:?}; lock {operation_id} held for reconciliation"
+            ));
             Err(format!("Failed to fund volume subaccount: {:?}; reconciliation required", error))
         }
     }
@@ -2242,8 +2353,19 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
     state::acquire_mutation_lock(&operation_id, route_arb::MutationOwnerV1::VolumeOperation, ic_cdk::api::time())?;
     match swaps::transfer_from_subaccount(token_ledger, amount, swaps::VOLUME_SUBACCOUNT).await {
         Ok(_) => { state::release_mutation_lock(&operation_id)?; Ok(()) }
+        // As in `fund_volume_subaccount`: a certain no-op moved nothing.
+        Err(error) if error.is_certain_no_op() => {
+            state::release_mutation_lock(&operation_id)?;
+            state::log_activity("volume", &format!(
+                "Withdraw from volume subaccount did not move anything on ledger {token_ledger} (amount {amount}): {error:?}"
+            ));
+            Err(format!("Failed to withdraw from volume subaccount: {:?}", error))
+        }
         Err(error) => {
             let _ = state::mark_mutation_lock_reconciliation_required(&operation_id);
+            state::log_activity("volume", &format!(
+                "Withdraw from volume subaccount outcome unknown on ledger {token_ledger} (amount {amount}): {error:?}; lock {operation_id} held for reconciliation"
+            ));
             Err(format!("Failed to withdraw from volume subaccount: {:?}; reconciliation required", error))
         }
     }

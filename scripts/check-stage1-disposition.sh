@@ -27,7 +27,7 @@ fi
 # Every current #[update]/#[query] fn name, one per line, sorted.
 actual_methods() {
   awk '
-    /^#\[(update|query)\]/ { want = 1; next }
+    /^#\[(update|query)(\(.*\))?\]/ { want = 1; next }
     want && /^(async )?fn [a-z_0-9]+/ {
       match($0, /^(async )?fn [a-z_0-9]+/)
       name = substr($0, RSTART, RLENGTH)

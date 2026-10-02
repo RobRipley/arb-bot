@@ -1,8 +1,8 @@
 # Volume-lock recovery and adaptive route scheduler: deployment and live readback
 
-Date: 2026-10-02 (UTC). Canister `ucjxv-nqaaa-aaaaj-qrsaq-cai`. Two upgrades, both by `rumi_identity`, both `--mode upgrade` with the canister stopped first.
+Date: 2026-10-02 (UTC). Canister `ucjxv-nqaaa-aaaaj-qrsaq-cai`. Three upgrades, all by `rumi_identity`, all `--mode upgrade` with the canister stopped first.
 
-Status: both deployed and verified live. Source is uncommitted on branch `claude/volume-bot-trading-issue-5c50c4` at the time of writing.
+Status: three upgrades deployed and verified live. Deploys 1 and 2 merged as PR #56; deploy 3 is the follow-up described at the end.
 
 ## Incident: volume bot unpaused but not trading
 
@@ -53,11 +53,38 @@ One full cycle, 16:14:50–16:24:41 UTC:
 | 16:20:30–16:21:39 | quote batch | ~0.33B |
 | 16:23:09 | watchdog tick; next eligibility over 300 s away, left to the watchdog | 20.4M |
 
-Four timer firings where the fixed interval made about sixty. Net burn 560,993,969 cycles over 593 s, **81.8B/day**, against roughly 245–320B/day before. Volume cycles are not in that window and add an estimated 10B/day.
+Four timer firings where the fixed interval made about sixty. Net burn 560,993,969 cycles over 593 s, **81.8B/day**, against roughly 245–320B/day before. That is an idle baseline with no trades in the window. Over the following 66 minutes, with two volume trades and two route executions, the measured rate was about 137B/day.
+
+## Deploy 3: failed admin transfers no longer leak the lock
+
+An independent review of deploy 1, run after the fact, judged the recovery endpoint safe but pointed out that it treated a symptom. Three admin paths could still leave the lock behind, and two of them had no recovery at all:
+
+- `withdraw` and `volume_swap` released the lock and then called `ic_cdk::trap` in the same reply callback. A trap discards that callback's state changes, the release included, while the acquisition from the earlier message stays. The lock was then held, unflagged, with nothing able to clear it. Both are reachable from the dashboard.
+- `fund_volume_subaccount` and `withdraw_volume_subaccount` flagged the lock on any transfer error, including a certain no-op.
+
+The 2026-10-01 incident itself was most likely a call that was never sent: the canister was at its freezing threshold, with about 37B cycles of headroom against a 42B per-call reservation, and no ledger shows the transfer.
+
+Changes (wasm SHA-256 `bfbe2b5ce03aeae1e24447b917685a2d9e94a2bf05b77c34957ee4ff181a5270`, 4,511,800 bytes; interface and dashboard unchanged):
+
+- Every ICRC-1 transfer goes through `swaps::icrc1_transfer`, which classifies the outcome. `LedgerRejected` (the ledger refused; `Duplicate` is excluded) and `NotSent` (the call future resolved on its first poll, which in ic-cdk 0.13.6 happens only when `ic0.call_perform` refuses the message) are certain no-ops. Anything else is an unknown outcome.
+- `fund_volume_subaccount`, `withdraw_volume_subaccount` and `withdraw` release the lock on a certain no-op and flag it only on an unknown outcome. Both are written to the activity log.
+- `withdraw` and `volume_swap` reply manually and report failure with an explicit reject, so nothing traps once the lock is held. Their candid signature is still `-> ()`.
+- `volume_swap` keeps the lock on any failure after its input has left the volume subaccount, reports an unreturned output as a failure instead of success, and refuses dust before taking the lock.
+- The recovery endpoint now requires the id to be the prefix followed by a `u64`.
+
+Two reviews before deploy. The first found a regression in the initial version (a never-sent transfer would have committed a flagged, unreleasable lock) and that a refund after a failed swap step does not prove the venue left the input alone; both were fixed. The second returned "safe to ship".
+
+Quiet window 18:18:36 UTC, stopped, upgraded, hash verified while stopped, started about 18:19. Readback: state intact (7,802 volume trades, `icusd_price_usd6=985000`, no lock, no execution), scheduler ticking. Canary at 18:19:51: `fund_volume_subaccount` for 10,000,000 ICP returned `LedgerRejected("Transfer: InsufficientFunds { balance: Nat(1496331758) }")`, the lock read back `null`, and the refusal is in the activity log. Before this deploy the same call left the bot wedged.
+
+Remaining limits, by design:
+
+- A flagged `withdraw-*`, `volume-swap-*` or `volume-withdraw-*` lock still needs a code upgrade to clear. That now requires a transfer that was sent and never answered clearly, or a `volume_swap` that failed after its first step.
+- A trap from the system itself inside a reply callback (instruction limit, out of memory) can still strand an unflagged lock.
+- The `NotSent` path has not been exercised live; it rests on reading the ic-cdk source and must be re-checked on any ic-cdk upgrade.
 
 ## Not verified live
 
-- No route execution has run under the new scheduler yet, so execution servicing at the 10 s cadence is covered by tests and review only.
+- Route executions have since run under the new scheduler: `route-execution-12-56` completed both legs (prepare to submit 9 to 10 s, as before) and `route-execution-12-55` aborted on a venue slippage rejection with the same 9 s gap.
 - The trap paths (aborted tick, lost one-shot) are covered by source-level tests, not behavioural ones.
 
 ## Open items for the operator
