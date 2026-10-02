@@ -1677,22 +1677,24 @@ pub const VOLUME_FUND_OPERATION_PREFIX: &str = "volume-fund-";
 
 /// Recovers from a failed admin `fund_volume_subaccount` call.
 ///
-/// A failed fund transfer leaves the durable lock marked
+/// A fund transfer whose outcome is unknown leaves the durable lock marked
 /// `reconciliation_required`, which `release_mutation_lock` refuses to clear.
 /// Every volume cycle and route execution must acquire that same lock, so
 /// without this path a single failed fund call wedges the bot permanently.
 ///
-/// Releasing is safe for this operation class whatever the transfer's real
-/// outcome: it is one ICRC-1 transfer from the canister's default account to
-/// the canister's own volume subaccount, so value either stayed put or moved
-/// into an account route arbitrage never spends. It cannot strand or
-/// mis-attribute route-owned inventory, which is the hazard the
-/// reconciliation flag exists for. Other volume operations (withdraw, cycle,
-/// rebalance) move value *into* the shared default account and stay
-/// unreleasable here.
+/// Releasing adds no state that was not already reachable. The fund operation
+/// is one ICRC-1 transfer from the canister's default account to its own
+/// volume subaccount, and on success it does nothing but release the lock.
+/// After a release here the canister is therefore in one of two states, "the
+/// fund never happened" or "the fund succeeded", and both are ordinary
+/// outcomes of that endpoint. Operations that move value *into* the shared
+/// default account (withdraw, cycle, rebalance, swap) do not have that
+/// property and stay unreleasable.
 ///
 /// The caller must name the exact held operation id, so a stale call cannot
-/// release a different lock that was taken after the one it inspected.
+/// release a different lock that was taken after the one it inspected. Check
+/// the volume subaccount balance before re-funding: if the transfer did
+/// happen, funding again moves the amount twice.
 pub fn release_failed_volume_fund_lock(operation_id: &str) -> Result<(), String> {
     ROUTE_MUTATION_LOCK.with(|cell| {
         let mut cell = cell.borrow_mut();
@@ -1704,9 +1706,14 @@ pub fn release_failed_volume_fund_lock(operation_id: &str) -> Result<(), String>
                 lock.operation_id
             ));
         }
-        if lock.owner != crate::route_arb::MutationOwnerV1::VolumeOperation
-            || !lock.operation_id.starts_with(VOLUME_FUND_OPERATION_PREFIX)
-        {
+        // A fund id is the prefix followed by its acquisition time; requiring
+        // exactly that shape keeps any other id that merely starts the same
+        // way out of this path.
+        let is_fund_id = lock
+            .operation_id
+            .strip_prefix(VOLUME_FUND_OPERATION_PREFIX)
+            .is_some_and(|suffix| suffix.parse::<u64>().is_ok());
+        if lock.owner != crate::route_arb::MutationOwnerV1::VolumeOperation || !is_fund_id {
             return Err(
                 "only a failed volume fund lock is recoverable; this lock is not one".to_string(),
             );

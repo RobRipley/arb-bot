@@ -276,8 +276,11 @@ fn scheduler_runs_on_a_repeating_watchdog_plus_one_shot_wakeups() {
 fn update_endpoints(source: &str) -> Vec<(String, &str)> {
     let mut found = Vec::new();
     let mut rest = source;
-    while let Some(at) = rest.find("\n#[update]\n") {
-        let after = &rest[at + "\n#[update]\n".len()..];
+    // Matches `#[update]` and attribute forms such as
+    // `#[update(manual_reply = true)]`.
+    while let Some(at) = rest.find("\n#[update") {
+        let attribute = &rest[at + 1..];
+        let after = &attribute[attribute.find("]\n").expect("unterminated #[update attribute") + 2..];
         let end = after.find("\n}\n").map(|n| n + 2).unwrap_or(after.len());
         let body = &after[..end];
         let name = body
@@ -308,6 +311,9 @@ fn every_endpoint_that_can_create_scheduler_work_wakes_it() {
     ];
     let endpoints = update_endpoints(source);
     assert!(endpoints.len() > 40, "endpoint scan found only {}", endpoints.len());
+    for name in ["withdraw", "volume_swap"] {
+        assert!(endpoints.iter().any(|(n, _)| n == name), "endpoint scan must see {name} despite its attribute form");
+    }
     let mut guarded = Vec::new();
     for (name, body) in &endpoints {
         let touches = SCHEDULER_INPUTS.iter().any(|needle| body.contains(needle));

@@ -18,6 +18,23 @@ pub enum SwapError {
     QuoteFailed(String),
     SwapFailed(String),
     ApproveFailed(String),
+    /// The ledger executed the request and refused it (`InsufficientFunds`,
+    /// `BadFee`, …). Unlike a failed call, the outcome is certain: nothing
+    /// moved.
+    LedgerRejected(String),
+    /// The call was never sent: the system refused to enqueue it (too few
+    /// cycles to reserve for the reply, a full output queue). Nothing left
+    /// the canister, so nothing moved.
+    NotSent(String),
+}
+
+impl SwapError {
+    /// True when it is certain that no value moved, so there is nothing to
+    /// reconcile: the ledger refused the request, or the request never left
+    /// the canister. Every other failure leaves the outcome unknown.
+    pub fn is_certain_no_op(&self) -> bool {
+        matches!(self, SwapError::LedgerRejected(_) | SwapError::NotSent(_))
+    }
 }
 
 impl std::fmt::Display for SwapError {
@@ -26,6 +43,8 @@ impl std::fmt::Display for SwapError {
             SwapError::QuoteFailed(msg) => write!(f, "Quote failed: {}", msg),
             SwapError::SwapFailed(msg) => write!(f, "Swap failed: {}", msg),
             SwapError::ApproveFailed(msg) => write!(f, "Approve failed: {}", msg),
+            SwapError::LedgerRejected(msg) => write!(f, "Ledger rejected: {}", msg),
+            SwapError::NotSent(msg) => write!(f, "Not sent: {}", msg),
         }
     }
 }
@@ -264,6 +283,43 @@ fn nat_to_u64_saturating(n: &Nat) -> u64 {
     n.0.to_string().parse::<u64>().unwrap_or(u64::MAX)
 }
 
+/// What a ledger's reply to `icrc1_transfer` means for the value involved.
+pub fn transfer_result_from_ledger(reply: Result<Nat, TransferError>) -> Result<u64, SwapError> {
+    match reply {
+        Ok(block) => Ok(nat_to_u64(&block)),
+        // `Duplicate` says an earlier identical transfer already moved the
+        // value, so unlike every other refusal it is not proof that nothing
+        // moved. Unreachable while `created_at_time` is unset; kept ambiguous
+        // so enabling deduplication later cannot turn it into a release.
+        Err(e @ TransferError::Duplicate { .. }) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
+        Err(e) => Err(SwapError::LedgerRejected(format!("Transfer: {:?}", e))),
+    }
+}
+
+/// Sends an ICRC-1 transfer and classifies how it ended, so callers holding
+/// the account-mutation lock can tell a certain no-op from an unknown outcome
+/// (see `SwapError::is_certain_no_op`).
+pub async fn icrc1_transfer(ledger: Principal, args: TransferArg) -> Result<u64, SwapError> {
+    let mut call = Box::pin(ic_cdk::call::<_, (Result<Nat, TransferError>,)>(
+        ledger, "icrc1_transfer", (args,),
+    ));
+    // An ic-cdk call future resolves on its very first poll only when
+    // `ic0.call_perform` refused to enqueue the message; a call that was sent
+    // is always pending until its reply arrives. Checking the first poll is
+    // therefore what proves the transfer never left the canister.
+    let reply = match futures::poll!(call.as_mut()) {
+        std::task::Poll::Ready(Err((code, msg))) => {
+            return Err(SwapError::NotSent(format!("Transfer call ({:?}): {}", code, msg)));
+        }
+        std::task::Poll::Ready(reply) => reply,
+        std::task::Poll::Pending => call.await,
+    };
+    match reply {
+        Ok((ledger_reply,)) => transfer_result_from_ledger(ledger_reply),
+        Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
+    }
+}
+
 /// Transfer tokens from the volume subaccount to the default account
 pub async fn transfer_from_subaccount(
     token_ledger: Principal,
@@ -279,14 +335,7 @@ pub async fn transfer_from_subaccount(
         memo: None,
         amount: Nat::from(amount),
     };
-    let result: Result<(Result<Nat, TransferError>,), _> = ic_cdk::call(
-        token_ledger, "icrc1_transfer", (args,),
-    ).await;
-    match result {
-        Ok((Ok(block),)) => Ok(nat_to_u64(&block)),
-        Ok((Err(e),)) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
-        Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
-    }
+    icrc1_transfer(token_ledger, args).await
 }
 
 /// Transfer tokens from the default account to the volume subaccount
@@ -304,14 +353,7 @@ pub async fn transfer_to_subaccount(
         memo: None,
         amount: Nat::from(amount),
     };
-    let result: Result<(Result<Nat, TransferError>,), _> = ic_cdk::call(
-        token_ledger, "icrc1_transfer", (args,),
-    ).await;
-    match result {
-        Ok((Ok(block),)) => Ok(nat_to_u64(&block)),
-        Ok((Err(e),)) => Err(SwapError::SwapFailed(format!("Transfer: {:?}", e))),
-        Err((code, msg)) => Err(SwapError::SwapFailed(format!("Transfer call ({:?}): {}", code, msg))),
-    }
+    icrc1_transfer(token_ledger, args).await
 }
 
 /// Query ICRC-1 balance for the default (no subaccount) account
@@ -346,5 +388,39 @@ pub async fn icrc1_balance_of_subaccount(
     match result {
         Ok((balance,)) => Ok(nat_to_u64(&balance)),
         Err((code, msg)) => Err(format!("Balance call ({:?}): {}", code, msg)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_a_refusal_or_an_unsent_call_is_a_certain_no_op() {
+        assert!(SwapError::LedgerRejected("Transfer: InsufficientFunds".into()).is_certain_no_op());
+        assert!(SwapError::NotSent("Transfer call (SysTransient): Couldn't send message".into()).is_certain_no_op());
+        assert!(!SwapError::SwapFailed("Transfer call (SysTransient): timeout".into()).is_certain_no_op());
+        assert!(!SwapError::QuoteFailed(String::new()).is_certain_no_op());
+        assert!(!SwapError::ApproveFailed(String::new()).is_certain_no_op());
+    }
+
+    #[test]
+    fn ledger_replies_are_classified_by_whether_value_can_have_moved() {
+        assert_eq!(transfer_result_from_ledger(Ok(Nat::from(42u64))).unwrap(), 42);
+        for refusal in [
+            TransferError::InsufficientFunds { balance: Nat::from(1u64) },
+            TransferError::BadFee { expected_fee: Nat::from(10_000u64) },
+            TransferError::BadBurn { min_burn_amount: Nat::from(1u64) },
+            TransferError::TooOld,
+            TransferError::CreatedInFuture { ledger_time: 1 },
+            TransferError::TemporarilyUnavailable,
+            TransferError::GenericError { error_code: Nat::from(1u64), message: "x".into() },
+        ] {
+            let label = format!("{refusal:?}");
+            assert!(transfer_result_from_ledger(Err(refusal)).unwrap_err().is_certain_no_op(), "{label}");
+        }
+        // An earlier identical transfer did move the value.
+        let duplicate = TransferError::Duplicate { duplicate_of: Nat::from(7u64) };
+        assert!(!transfer_result_from_ledger(Err(duplicate)).unwrap_err().is_certain_no_op());
     }
 }
