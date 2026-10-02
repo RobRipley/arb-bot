@@ -25,6 +25,30 @@ fn scheduler_scans_whole_universe_before_selecting_and_restarts_no_winner_scan()
     assert_eq!(next_action(&s,true,Some(&o)),TickAction::ServiceExecution);
 }
 
+/// One completed scan per book lane the runtime rotates over, each with a
+/// winner in that lane only.
+fn single_book_winners() -> [(&'static str, ObservationAccumulatorV1); 4] {
+    let mut done = observation();
+    done.scan_complete = true;
+    let (mut stable, mut icp, mut ckbtc, mut cketh) = (done.clone(), done.clone(), done.clone(), done);
+    stable.best_stable_candidate = Some(RouteCandidateReportV1::fixture("stable-route", CandidateClass::StablePar, 10, true));
+    icp.best_icp_candidate = Some(RouteCandidateReportV1::fixture("icp-route", CandidateClass::IcpReturning, 10, true));
+    ckbtc.best_ckbtc_candidate = Some(RouteCandidateReportV1::fixture("ckbtc-route", CandidateClass::CkBtcReturning, 10, true));
+    cketh.best_cketh_candidate = Some(RouteCandidateReportV1::fixture("cketh-route", CandidateClass::CkEthReturning, 10, true));
+    [("stable", stable), ("icp", icp), ("ckbtc", ckbtc), ("cketh", cketh)]
+}
+
+#[test]
+fn a_winner_in_any_single_book_is_handed_to_selection() {
+    // A scan whose only winner is in the ckBTC or ckETH book must not be
+    // treated as "no winner": that restarts the observation and overwrites
+    // the winner before the runtime's four-lane rotation ever sees it.
+    for (book, o) in single_book_winners() {
+        assert_eq!(next_action(&status(), false, Some(&o)), TickAction::SelectRoute, "{book} winner");
+        assert_eq!(next_action(&status(), true, Some(&o)), TickAction::ServiceExecution, "{book} winner");
+    }
+}
+
 #[test]
 fn startup_ignores_legacy_observations_until_profile_is_explicitly_selected() {
     let mut stale = observation();
@@ -106,6 +130,25 @@ fn an_unfinished_scan_and_a_pending_selection_tick_at_the_fast_cadence() {
 }
 
 #[test]
+fn a_winner_in_any_single_book_is_selected_at_the_fast_cadence_before_the_gate() {
+    // Well inside the 600 s cadence window: the winner is selected now, not
+    // slept on until the next observation replaces it.
+    let now = T0 + 95 * SECOND;
+    for (book, o) in single_book_winners() {
+        assert_eq!(
+            next_action_for_profile(&status(), false, Some(&o), true, Some(T0), now),
+            TickAction::SelectRoute,
+            "{book} winner"
+        );
+        assert_eq!(
+            next_tick_delay_ns(&status(), false, Some(&o), true, Some(T0), now),
+            ACTIVE_TICK_NS,
+            "{book} winner"
+        );
+    }
+}
+
+#[test]
 fn a_finished_scan_with_no_winner_sleeps_until_the_cadence_gate_opens() {
     let mut o = observation();
     o.scan_complete = true;
@@ -180,11 +223,12 @@ fn planned_delay_never_skips_work_the_tick_would_do() {
     done.scan_complete = true;
     let mut won = done.clone();
     won.best_icp_candidate = Some(winner());
-    // A winner only in a ckBTC/ckETH book: `next_action` does not select
-    // these, so the tick treats the scan as having no winner.
+    // A winner only in a ckBTC/ckETH book is selected like any other lane.
     let mut won_btc = done.clone();
     won_btc.best_ckbtc_candidate = Some(winner());
-    let observations = [None, Some(&scanning), Some(&done), Some(&won), Some(&won_btc)];
+    let mut won_eth = done.clone();
+    won_eth.best_cketh_candidate = Some(winner());
+    let observations = [None, Some(&scanning), Some(&done), Some(&won), Some(&won_btc), Some(&won_eth)];
     let statuses = [
         status(),
         RuntimeStatus { live_authorized: false, ..status() },

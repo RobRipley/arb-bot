@@ -64,5 +64,5 @@ Four timer firings where the fixed interval made about sixty. Net burn 560,993,9
 
 - The observation is now the largest cost (~60B/day). It is set by routes × ladder sizes × the 600 s cadence, which is trading policy and was not changed.
 - The 2026-09-28 snapshot costs about 6.5B/day and predates both upgrades.
-- `next_action` selects only stable and ICP winners (`route_scheduler.rs`), so a winner that exists only in the ckBTC or ckETH book is never auto-selected. This predates these changes.
+- `next_action` selected only stable and ICP winners (`route_scheduler.rs`), so a winner that existed only in the ckBTC or ckETH book was never auto-selected. Fixed in source after these deployments (not deployed): the scheduler now asks the runtime's own four-lane rotation whether any book has a winner. It has no live effect: the active icUSD peg-trades profile rejects a config with the ICP, ckBTC, or ckETH book enabled and restricts the scan to its four stable routes, and no observation can start without that profile, so those books still need a policy change before they can trade.
 - `get_bot_health` is retired and traps; diagnosis uses the query endpoints.

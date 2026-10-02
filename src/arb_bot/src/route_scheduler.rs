@@ -15,7 +15,7 @@ pub fn next_action(status: &RuntimeStatus, has_current: bool, observation: Optio
     match observation {
         None => TickAction::StartObservation,
         Some(o) if !o.scan_complete => TickAction::QuoteBatch(o.next_cursor),
-        Some(o) if o.best_stable_candidate.is_some() || o.best_icp_candidate.is_some() => TickAction::SelectRoute,
+        Some(o) if route_runtime::has_candidate_in_any_book(o) => TickAction::SelectRoute,
         Some(_) => TickAction::StartObservation,
     }
 }
