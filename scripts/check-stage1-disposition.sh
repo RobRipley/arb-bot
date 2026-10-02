@@ -143,6 +143,7 @@ set_volume_config
 set_volume_global
 pause_volume
 resume_volume
+release_failed_volume_fund_lock
 '
 
 # Fixed peg-profile selection is an explicit admin policy choice. It never

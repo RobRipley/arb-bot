@@ -21,6 +21,7 @@ use state::{BotConfig, BotConfigInput, TradeRecord, TradeLeg, ErrorRecord, Activ
 thread_local! {
     static ARB_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
     static ROUTE_RUNTIME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
+    static ROUTE_WAKE_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
     static VOLUME_TIMER_ID: RefCell<Option<TimerId>> = const { RefCell::new(None) };
 }
 
@@ -98,14 +99,118 @@ fn setup_timer() {
     });
 }
 
+/// Arms the route scheduler: a slow repeating watchdog plus an immediate
+/// one-shot wake-up. See `route_scheduler` ("Adaptive tick cadence") for why
+/// it no longer polls on a fixed ten-second interval.
 fn setup_route_runtime_timer() {
     ROUTE_RUNTIME_TIMER_ID.with(|slot| {
         if let Some(id) = slot.borrow_mut().take() { ic_cdk_timers::clear_timer(id); }
-        let id = ic_cdk_timers::set_timer_interval(std::time::Duration::from_secs(10), || {
-            ic_cdk::spawn(async { let _ = route_scheduler::tick().await; });
-        });
+        let id = ic_cdk_timers::set_timer_interval(
+            std::time::Duration::from_nanos(route_scheduler::WATCHDOG_INTERVAL_NS),
+            || {
+                route_scheduler::note_watchdog_armed(ic_cdk::api::time());
+                run_route_scheduler_tick();
+            },
+        );
         *slot.borrow_mut() = Some(id);
     });
+    route_scheduler::note_watchdog_armed(ic_cdk::api::time());
+    arm_route_wake(route_scheduler::ACTIVE_TICK_NS);
+}
+
+fn clear_route_wake() {
+    ROUTE_WAKE_TIMER_ID.with(|slot| {
+        if let Some(id) = slot.borrow_mut().take() { ic_cdk_timers::clear_timer(id); }
+    });
+    route_scheduler::set_wake_due_ns(None);
+}
+
+/// Schedules the next scheduler tick `delay_ns` from now, replacing any
+/// pending wake-up so at most one is ever outstanding.
+fn arm_route_wake(delay_ns: u64) {
+    clear_route_wake();
+    let id = ic_cdk_timers::set_timer(std::time::Duration::from_nanos(delay_ns), || {
+        ROUTE_WAKE_TIMER_ID.with(|slot| { slot.borrow_mut().take(); });
+        route_scheduler::set_wake_due_ns(None);
+        run_route_scheduler_tick();
+    });
+    ROUTE_WAKE_TIMER_ID.with(|slot| *slot.borrow_mut() = Some(id));
+    route_scheduler::set_wake_due_ns(Some(ic_cdk::api::time().saturating_add(delay_ns)));
+}
+
+fn run_route_scheduler_tick() {
+    ic_cdk::spawn(async {
+        // A tick still awaiting its calls plans the next wake-up itself when
+        // it finishes; re-arming here would only poll it.
+        if route_scheduler::in_flight_since_ns().is_some() {
+            return;
+        }
+        let started_ns = ic_cdk::api::time();
+        let mut abort = RearmOnAbort { armed: true };
+        let _ = route_scheduler::tick().await;
+        abort.armed = false;
+        rearm_route_scheduler(started_ns);
+    });
+}
+
+/// Covers a tick whose future is dropped without finishing — a trap in one
+/// of its reply callbacks. Without this the re-arm below would be skipped and
+/// an execution in flight would wait for the watchdog; with it the tick is
+/// retried at the fast cadence, exactly as the fixed interval retried it.
+/// The drop runs inside a cleanup callback, so it only arms a timer and
+/// deliberately reads no state: a trap here would roll back the cleanup and
+/// leave the scheduler's busy flag set.
+struct RearmOnAbort {
+    armed: bool,
+}
+
+impl Drop for RearmOnAbort {
+    fn drop(&mut self) {
+        if self.armed {
+            arm_route_wake(route_scheduler::ACTIVE_TICK_NS);
+        }
+    }
+}
+
+/// After a tick, sleep until a tick could next do something. Sleeps at least
+/// as long as the watchdog period are left to the watchdog, and so is a state
+/// read failure — never a tight retry loop.
+fn rearm_route_scheduler(tick_started_ns: u64) {
+    let now_ns = ic_cdk::api::time();
+    match route_scheduler::planned_delay_ns(now_ns) {
+        Ok(planned_ns) => {
+            let delay_ns = route_scheduler::delay_after_tick_ns(
+                planned_ns, now_ns.saturating_sub(tick_started_ns),
+            );
+            if delay_ns < route_scheduler::WATCHDOG_INTERVAL_NS {
+                arm_route_wake(delay_ns);
+            } else {
+                clear_route_wake();
+            }
+        }
+        Err(_) => clear_route_wake(),
+    }
+}
+
+/// Brings the next tick forward to the fast cadence. Called after operator
+/// actions that can create scheduler work while it is asleep.
+fn wake_route_scheduler() {
+    let now_ns = ic_cdk::api::time();
+    let target_ns = now_ns.saturating_add(route_scheduler::ACTIVE_TICK_NS);
+    if route_scheduler::wake_is_pending(route_scheduler::wake_due_ns(), now_ns, target_ns) {
+        return;
+    }
+    arm_route_wake(route_scheduler::ACTIVE_TICK_NS);
+}
+
+/// Wakes the route scheduler when dropped, i.e. on every exit path of the
+/// endpoint that holds it, including early `?` returns and async completion.
+struct RouteSchedulerWake;
+
+impl Drop for RouteSchedulerWake {
+    fn drop(&mut self) {
+        wake_route_scheduler();
+    }
 }
 
 fn setup_volume_timer() {
@@ -366,6 +471,7 @@ fn get_route_arb_config_v1() -> route_arb::RouteArbConfigV1 {
 #[update]
 fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     let route_execution_active = route_runtime::has_current()?;
     state::mutate_state(|s| store_route_arb_config(s, config, route_execution_active))?;
     Ok(())
@@ -374,6 +480,7 @@ fn set_route_arb_config_v1(config: route_arb::RouteArbConfigV1) -> Result<(), St
 #[update]
 fn set_icusd_price_usd6_v1(price_usd6: u64) -> Result<route_arb::RouteArbConfigV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     let route_execution_active = route_runtime::has_current()?;
     state::mutate_state(|s| store_icusd_price_config(s, price_usd6, route_execution_active))
 }
@@ -383,6 +490,7 @@ fn set_wrapped_stable_to_icusd_allowed_v1(
     allowed: bool,
 ) -> Result<route_arb::RouteArbConfigV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     state::mutate_state(|s| {
         let mut next = s.route_arb.clone();
         next.allow_wrapped_stable_to_icusd = Some(allowed);
@@ -401,6 +509,7 @@ fn set_wrapped_stable_to_icusd_allowed_v1(
 #[update]
 fn set_icusd_peg_trades_profile_v1(active: bool) -> Result<route_arb::RouteArbConfigV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     state::mutate_state(|s| {
         let mut next = if active {
             route_arb::icusd_peg_trades_profile_config(s.route_arb.clone())
@@ -447,6 +556,7 @@ async fn get_route_wallet_balances_v1() -> Vec<route_arb::WalletAssetBalanceV1> 
 #[update]
 fn start_route_observation_v1() -> Result<route_arb::ObservationStartV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     start_route_observation_internal()
 }
 
@@ -582,6 +692,7 @@ mod route_observation_batch_admission_tests {
 #[update]
 async fn quote_route_observation_batch_v1(cursor: u64, limit: u16) -> Result<route_arb::ObservationBatchResultV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     quote_route_observation_batch_internal(cursor, limit).await
 }
 
@@ -1015,24 +1126,28 @@ fn get_route_runtime_status_v1() -> Result<route_runtime::RuntimeStatus, String>
 #[update]
 fn set_route_runtime_authorized_v1(authorized: bool) -> Result<route_runtime::RuntimeStatus, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     route_runtime::set_authorized(authorized)
 }
 
 #[update]
 async fn prepare_route_execution_v1(route_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     route_runtime::prepare(&route_id).await
 }
 
 #[update]
 async fn advance_route_execution_v1(execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     route_runtime::advance(&execution_id).await
 }
 
 #[update]
 async fn reconcile_route_execution_v1(execution_id: String) -> Result<route_arb::ExecutionRecordV1, String> {
     require_admin();
+    let _wake = RouteSchedulerWake;
     route_runtime::reconcile(&execution_id).await
 }
 
@@ -2132,6 +2247,22 @@ async fn withdraw_volume_subaccount(token_ledger: Principal, amount: u64) -> Res
             Err(format!("Failed to withdraw from volume subaccount: {:?}; reconciliation required", error))
         }
     }
+}
+
+/// Admin recovery for a failed `fund_volume_subaccount`: clears the durable
+/// account-mutation lock it left marked reconciliation-required. The caller
+/// must pass the exact held operation id (visible via
+/// `get_route_mutation_lock_v1`). Only `volume-fund-*` locks qualify — see
+/// `state::release_failed_volume_fund_lock` for why that class is safe.
+#[update]
+fn release_failed_volume_fund_lock(operation_id: String) -> Result<(), String> {
+    require_admin();
+    let _wake = RouteSchedulerWake;
+    state::release_failed_volume_fund_lock(&operation_id)?;
+    state::log_activity("admin", &format!(
+        "Released failed volume fund lock {} (by {})", operation_id, ic_cdk::api::caller()
+    ));
+    Ok(())
 }
 
 #[update]

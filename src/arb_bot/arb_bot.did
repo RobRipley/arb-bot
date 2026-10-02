@@ -793,6 +793,10 @@ type RuntimeStatus = record {
   last_realized_profit : opt int;
   // Start time of the currently executing scheduler callback, when any.
   scheduler_in_flight_since_ns : opt nat64;
+  // When the scheduler will next tick. It sleeps between observations by
+  // design (a slow watchdog bounds the sleep), so a stale `last_tick_ns` is
+  // healthy until this time has passed.
+  scheduler_next_tick_due_ns : opt nat64;
   enabled : bool;
   dry_run : bool;
   last_tick_ns : nat64;
@@ -1066,6 +1070,13 @@ service : (InitArgs) -> {
   recover_partydex_balance : (principal) -> (Result_9);
   // Remove an admin principal (owner only)
   remove_admin : (principal) -> ();
+  // Recovery for a failed `fund_volume_subaccount`: clears the durable
+  // account-mutation lock it left marked reconciliation-required, which
+  // otherwise blocks every volume cycle and route execution. The argument must
+  // be the exact held operation id (see `get_route_mutation_lock_v1`). Only
+  // `volume-fund-*` locks qualify; withdraw/cycle/rebalance and route locks
+  // are rejected. Admin only; recorded in the activity log.
+  release_failed_volume_fund_lock : (text) -> (Result_1);
   resume : () -> ();
   resume_volume : () -> ();
   // Execute a Rumi AMM swap (ICP ↔ 3USD). token_in is the ledger of the token being sold.
