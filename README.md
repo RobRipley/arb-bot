@@ -6,10 +6,11 @@ assets are icUSD, ckUSDT, ckUSDC, ICP, ckBTC, and ckETH; active route venues
 are the code-pinned Rumi 3pool and ICPSwap pools. Legacy A-S/T arbitrage,
 Rumi AMM arbitrage, PartyDEX arbitrage, and BOB arbitrage are retired.
 
-The route engine is intentionally quote-only in this release. Its public
-execution entrypoints fail closed, and no configuration field or method can
-authorize a live route. Deployment, funding, approvals, activation, and live
-trades are separate operator decisions.
+The route engine supports quote observation and executes only routes admitted
+by the fixed icUSD peg-trades profile. Execution requires separate
+administrator authorization and enabled, non-dry-run controls. This describes
+implemented capability, not current deployment or live activity; deployment,
+funding, approvals, and activation remain separate operator decisions.
 
 ## Build
 
